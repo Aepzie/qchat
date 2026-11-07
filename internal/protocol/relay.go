@@ -249,3 +249,52 @@ func checkBounded(field string, b []byte, limit int) error {
 	}
 	return nil
 }
+
+// Limits of the [SendMulti] body.
+const (
+	// MaxMultiRecipients is the largest number of recipients a [SendMulti]
+	// may name.
+	MaxMultiRecipients = 256
+	// MaxMultiPayloadSize is the largest ciphertext, in bytes, a
+	// [SendMulti] may carry. It is smaller than MaxPayloadSize by the space
+	// MaxMultiRecipients IDs take, so a maximal SendMulti always fits in a
+	// frame. Each copy the relay delivers is an ordinary [Deliver].
+	MaxMultiPayloadSize = MaxPayloadSize - 8<<10
+)
+
+// SendMulti asks the relay to route the identical Payload to every identity
+// in To, for example a group message encrypted once for all members. The
+// relay stores one copy per recipient, each with its own queue ID, and
+// pushes each copy as an ordinary [Deliver]. It answers with a [SendResult]
+// of status SendAccepted once every copy is stored, or with an
+// [ErrorBody]; on error no copy is stored. The relay learns the recipient
+// list and the payload size but nothing about any group.
+type SendMulti struct {
+	// To lists between 1 and MaxMultiRecipients distinct recipient
+	// identities, each exactly IDSize bytes. It must not contain the
+	// sender.
+	To [][]byte `cbor:"1,keyasint"`
+	// Payload is end-to-end encrypted ciphertext, between 1 and
+	// MaxMultiPayloadSize bytes. It is opaque to the relay.
+	Payload []byte `cbor:"2,keyasint"`
+}
+
+func (SendMulti) frameType() FrameType { return TypeSendMulti }
+
+func (s SendMulti) validate() error {
+	if len(s.To) == 0 || len(s.To) > MaxMultiRecipients {
+		return fmt.Errorf("%w: %d recipients, want 1 to %d", ErrMalformed, len(s.To), MaxMultiRecipients)
+	}
+	seen := make(map[[IDSize]byte]struct{}, len(s.To))
+	for _, to := range s.To {
+		if err := checkFixed("recipient ID", to, IDSize); err != nil {
+			return err
+		}
+		id := [IDSize]byte(to)
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("%w: duplicate recipient ID", ErrMalformed)
+		}
+		seen[id] = struct{}{}
+	}
+	return checkBounded("payload", s.Payload, MaxMultiPayloadSize)
+}

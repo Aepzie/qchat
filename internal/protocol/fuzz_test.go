@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -100,6 +101,8 @@ func relaySeedFrames(f *testing.F) []Frame {
 		mustFrame(f, TypePrekeyResponse, 9, PrekeyResponse{Bundle: []byte("b"), SignedPrekey: []byte("s")}),
 		mustFrame(f, TypePrekeyResponse, 9, PrekeyResponse{Bundle: []byte("b"), SignedPrekey: []byte("s"), OneTimePrekey: []byte("o")}),
 		mustFrame(f, TypeAck, 0, Ack{QueueID: 1 << 40}),
+		mustFrame(f, TypeSendMulti, 10, SendMulti{To: [][]byte{id}, Payload: []byte("group")}),
+		mustFrame(f, TypeSendMulti, 10, SendMulti{To: [][]byte{id, bytes.Repeat([]byte{0x33}, IDSize)}, Payload: []byte{1}}),
 	}
 }
 
@@ -131,10 +134,13 @@ func FuzzDecodeBody(f *testing.F) {
 	f.Add(uint8(TypePrekeyUpload), mustHex(f, "a1 02 80"))
 	f.Add(uint8(TypePrekeyUpload), mustHex(f, "a1 02 81 40"))
 	f.Add(uint8(TypeAck), mustHex(f, "a1 01 00"))
+	f.Add(uint8(TypeSendMulti), mustHex(f, "a2 01 80 02 41 01"))
+	f.Add(uint8(TypeSendMulti), mustHex(f, "a2 01 82 58 20"+strings.Repeat("11", IDSize)+" 58 20"+strings.Repeat("11", IDSize)+" 02 41 01"))
+	f.Add(uint8(TypeSendMulti), mustHex(f, "a2 01 81 41 01 02 41 01"))
 	f.Add(uint8(0), mustFrame(f, TypePing, 0, Ping{Nonce: 7}).Body)
 
 	f.Fuzz(func(t *testing.T, sel uint8, body []byte) {
-		switch FrameType(sel % 22) {
+		switch FrameType(sel % 23) {
 		case TypeHello:
 			checkBodyRoundTrip[Hello](t, TypeHello, body)
 		case TypeWelcome:
@@ -193,6 +199,12 @@ func FuzzDecodeBody(f *testing.F) {
 		case TypeAck:
 			checkBodyRoundTrip[Ack](t, TypeAck, body)
 			checkBodyRoundTrip[*Ack](t, TypeAck, body)
+		case TypeSendMulti:
+			checkBodyRoundTrip[SendMulti](t, TypeSendMulti, body)
+			checkBodyRoundTrip[*SendMulti](t, TypeSendMulti, body)
+			if _, err := DecodeBody[Send](rawFrame(TypeSendMulti, body), TypeSendMulti); err == nil {
+				t.Fatal("Send body accepted for SendMulti frame")
+			}
 		default:
 			if _, err := DecodeBody[Pong](rawFrame(TypePing, body), TypePing); err == nil {
 				t.Fatal("Pong body accepted for Ping frame")
