@@ -12,8 +12,10 @@ IDs, relay authentication and the encrypted client database are unchanged.
 
 - **Forward secrecy:** stealing a device's current keys must not reveal
   messages whose keys were already deleted.
-- **Post-compromise security:** after a state compromise, the session heals as
-  soon as each side has performed one fresh key-encapsulation step.
+- **Post-compromise security:** after a state compromise, each direction heals
+  once the peer has encapsulated to an own key generated after the compromise
+  (a side announces a fresh own key on its first send after every receive, so
+  this takes one round trip).
 - **Post-quantum:** every key agreement uses the hybrid KEM MLKEM768-X25519, so
   confidentiality holds while either ML-KEM-768 or X25519 holds.
 - **Asynchronous start and offline delivery:** a user can start a session with
@@ -49,8 +51,9 @@ parsed identity bundle and checks Owner == bundle.ID. Key IDs are random
 non-zero uint32 chosen by the owner.
 
 Client policy: one active signed prekey, rotated every 7 days, lifetime
-(`Expires`) 21 days, private key kept until 14 days after rotation and then
-deleted. A pool of 50 one-time prekeys; replenish when the relay reports fewer
+`Expires = Created + 9 days`; the private key is kept until `Expires + 7 days`
+(the relay's `undelivered_ttl`, so a queued first message can still be read)
+and then deleted, 16 days after creation. A pool of 50 one-time prekeys; replenish when the relay reports fewer
 than 20. A one-time private key is deleted as soon as the first message that
 used it has been decrypted.
 
@@ -66,17 +69,25 @@ Alice starts a session with Bob from a relay-provided prekey bundle
    signed prekey (`enc_spk, ss_spk`) and, if present, the one-time prekey
    (`enc_opk, ss_opk`).
 4. `SK = HKDF-SHA256(salt = 32 zero bytes, ikm = ss_ik || ss_spk || ss_opk,
-   info = T || SHA-256(enc_ik || enc_spk || enc_opk))`, 32 bytes.
-5. Init header, sent with every message until Alice has received a message on
-   this session:
-   ```
-   Init { 1: Version=1, 2: SenderBundle bytes, 3: SPKID uint32, 4: OPKID uint32 (0 = none),
-          5: EncIK, 6: EncSPK, 7: EncOPK (absent if none), 8: Sig }
-   ```
-   `Sig` = Alice's hybridsig, ctx `qchat/v1/session-init`, over CBOR of fields
-   1..7 plus Bob's ID. Bob verifies: SenderBundle parses, its ID equals the
-   relay-reported sender, signature valid, prekeys known (unknown or deleted
-   one-time prekey → reject), then derives the same SK.
+   info = T || SHA-256(enc_ik || enc_spk || enc_opk) || SHA-256(sender bundle)
+   || SHA-256(SPK) || SHA-256(OPK or empty))`, 32 bytes.
+5. Init header (version 2), sent with every message until Alice has received a
+   message on this session. It carries the sender bundle, the prekey IDs, the
+   three encapsulations, a `Created` timestamp and Alice's hybridsig (ctx
+   `qchat/v1/session-init`) over all other fields plus Bob's ID. Bob verifies:
+   SenderBundle parses, its ID equals the relay-reported sender, signature
+   valid, `Created` is at most 16 days old (the signed prekey retention) and not
+   in the future, the Init was not seen before (replay set keyed by a hash of
+   the encapsulations, kept per signed prekey until that key is deleted),
+   prekeys known (unknown or deleted one-time prekey → reject), then derives
+   the same SK. A sender bundle with a lower serial than the pinned contact
+   bundle is never stored.
+
+KEM decapsulation uses implicit rejection, so a wrong SK is only detected when
+the first ratchet message fails to decrypt; no state is committed and no
+prekey is deleted before that succeeds. Envelopes that need an `Accept` are
+rate limited per sender. An Init never replaces a session that has already
+received messages in both directions.
 
 Simultaneous starts: if both sides start a session before receiving anything,
 the session initiated by the lexicographically smaller ID wins; the other side
@@ -97,20 +108,22 @@ sending never makes the two sides diverge:
   `KDF_RK(rk, ss) = HKDF-SHA256(salt = rk, ikm = ss, info = "qchat/v1/rk")` → 64 bytes split.
   For the initiator's first epoch the target is Bob's signed prekey.
 - Message keys: `MK = HMAC-SHA256(CK, 0x01)`, `CK = HMAC-SHA256(CK, 0x02)`;
-  `key||nonce = HKDF-SHA256(MK, info "qchat/v1/message-key")` → 32 + 12 bytes,
-  AEAD ChaCha20-Poly1305, AD = CBOR(header) || sender ID || recipient ID.
-- Header (every message carries the epoch's KEM ciphertext so any single
-  message of an epoch can start it):
-  ```
-  Header { 1: Version=1, 2: Epoch uint32, 3: RatchetPub(1216) (sender's current),
-           4: Target [32] (SHA-256 of the recipient public key encapsulated to),
-           5: KEMCT(1120), 6: PN uint32 (messages in sender's previous epoch), 7: N uint32 }
-  ```
-- Receiver keeps the private keys of its own announced public keys until a
-  message of an epoch targeting them has been decrypted (at most 4 unconsumed);
-  then deletes them. Skipped message keys are stored for out-of-order delivery,
-  at most 1000 per session and 1000 skipped per epoch step; older ones are
-  deleted (messages that late are lost).
+  `key||nonce = HKDF-SHA256(salt = header Salt, ikm = MK, info "qchat/v1/message-key")`
+  → 32 + 12 bytes, AEAD ChaCha20-Poly1305, AD = CBOR(header) || sender ID ||
+  recipient ID. The fresh random salt per message means that even a sender
+  whose state was rolled back (backup restore, lost write) never reuses a
+  key/nonce pair.
+- Header (version 2; every message carries the epoch's KEM ciphertext so any
+  single message of an epoch can start it): epoch, sender's current ratchet
+  public key, target (SHA-256 of the recipient key encapsulated to), KEM
+  ciphertext, PN, N and a 16-byte random Salt.
+- A side announces a fresh own ratchet key on its first send after any
+  receive and keeps the private keys of up to 4 announced, unconsumed keys;
+  a key is deleted once a message of an epoch targeting it has been
+  decrypted. Skipped message keys are stored for out-of-order delivery, at
+  most 1000 per session and 1000 per step, and are deleted once they are more
+  than 2 epochs old (messages that late are lost), so a withheld message
+  cannot keep its key alive indefinitely.
 - Every decryption is all-or-nothing: state changes are committed only after
   the AEAD tag verifies.
 - State is serialised as versioned canonical CBOR and stored encrypted in the
