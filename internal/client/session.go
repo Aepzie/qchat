@@ -144,6 +144,11 @@ type Options struct {
 	// Auth, if non-nil, registers and authenticates every connection as
 	// the local identity.
 	Auth Authenticator
+	// SkipRegister authenticates without sending Register first. Profile
+	// recovery uses it to fetch the bundle the relay already holds: a newly
+	// signed bundle would be rejected as a conflict. Authentication then
+	// fails with NotFound if the relay does not know the identity.
+	SkipRegister bool
 }
 
 // Session is one logical connection to a qchat server, kept alive across

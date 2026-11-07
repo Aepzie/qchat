@@ -197,11 +197,13 @@ func (c *liveConn) handshake(ctx context.Context) (ConnectionInfo, error) {
 
 // authenticate registers the local bundle and proves possession of the
 // identity key: Register, AuthBegin and AuthProof, each answered before the
-// next is sent.
+// next is sent. Register is skipped when Options.SkipRegister is set.
 func (c *liveConn) authenticate(ctx context.Context, timer *time.Timer, auth Authenticator) error {
-	register := protocol.Register{Bundle: auth.Bundle(), Invite: auth.Invite()}
-	if _, err := c.step(ctx, timer, protocol.TypeRegister, register, protocol.TypeRegistered); err != nil {
-		return err
+	if !c.session.opts.SkipRegister {
+		register := protocol.Register{Bundle: auth.Bundle(), Invite: auth.Invite()}
+		if _, err := c.step(ctx, timer, protocol.TypeRegister, register, protocol.TypeRegistered); err != nil {
+			return err
+		}
 	}
 	id := auth.ID()
 	f, err := c.step(ctx, timer, protocol.TypeAuthBegin, protocol.AuthBegin{ID: id[:]}, protocol.TypeAuthChallenge)

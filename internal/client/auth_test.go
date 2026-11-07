@@ -62,6 +62,8 @@ type authStep struct {
 // authPlan lists the answers to Register, AuthBegin and AuthProof.
 type authPlan struct {
 	register, begin, proof authStep
+	// noRegister expects the client to start with AuthBegin (SkipRegister).
+	noRegister bool
 }
 
 // serveAuth runs the Welcome and authentication exchange, checking every
@@ -75,19 +77,21 @@ func serveAuth(ctx context.Context, t *testing.T, conn *websocket.Conn, a *fakeA
 	if err != nil {
 		return false
 	}
-	reg, err := protocol.DecodeBody[protocol.Register](f, protocol.TypeRegister)
-	if err != nil {
-		t.Errorf("expected Register: %v", err)
-		return false
-	}
-	if !bytes.Equal(reg.Bundle, a.bundle) || reg.Invite != a.invite {
-		t.Errorf("Register = %+v", reg)
-	}
-	if !answer(ctx, conn, f.ID, plan.register, protocol.TypeRegistered, protocol.Registered{}) {
-		return false
-	}
-	if f, err = readFrame(ctx, conn); err != nil {
-		return false
+	if !plan.noRegister {
+		reg, err := protocol.DecodeBody[protocol.Register](f, protocol.TypeRegister)
+		if err != nil {
+			t.Errorf("expected Register: %v", err)
+			return false
+		}
+		if !bytes.Equal(reg.Bundle, a.bundle) || reg.Invite != a.invite {
+			t.Errorf("Register = %+v", reg)
+		}
+		if !answer(ctx, conn, f.ID, plan.register, protocol.TypeRegistered, protocol.Registered{}) {
+			return false
+		}
+		if f, err = readFrame(ctx, conn); err != nil {
+			return false
+		}
 	}
 	begin, err := protocol.DecodeBody[protocol.AuthBegin](f, protocol.TypeAuthBegin)
 	if err != nil {
@@ -226,6 +230,25 @@ func TestAuthenticateFlow(t *testing.T) {
 	}
 	if _, ok := s.Info(); !ok {
 		t.Error("Info reports no connection")
+	}
+}
+
+func TestSkipRegisterStartsWithAuthBegin(t *testing.T) {
+	a := newFakeAuth()
+	fs := startFakeServer(t, func(ctx context.Context, conn *websocket.Conn, n int) {
+		if serveAuth(ctx, t, conn, a, authPlan{noRegister: true}) {
+			serveFrames(ctx, conn, keyResponder(ctx, t, conn))
+		}
+	})
+	s := newTestSession(t, Options{Addr: fs.addr, Pin: fs.pin, Auth: a, SkipRegister: true})
+	runSession(t, s)
+	waitFor(t, s, "Connected", isState(Connected))
+	bundle, err := keyRequest(requestCtx(t), s, a.id[:])
+	if err != nil {
+		t.Fatalf("KeyRequest after SkipRegister: %v", err)
+	}
+	if !bytes.Equal(bundle, a.id[:]) {
+		t.Fatalf("KeyResponse bundle = %x", bundle)
 	}
 }
 
