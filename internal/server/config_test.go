@@ -26,14 +26,17 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatalf("default config invalid: %v", err)
 	}
 	want := Config{
-		Listen:  "0.0.0.0:7443",
-		TLSCert: "server.crt",
-		TLSKey:  "server.key",
+		Listen:       "0.0.0.0:7443",
+		TLSCert:      "server.crt",
+		TLSKey:       "server.key",
+		Database:     "qchat.db",
+		Registration: "invite",
 		Limits: Limits{
 			MaxConnections:       1000,
 			MaxConnectionsPerIP:  16,
 			MaxPendingHandshakes: 64,
 			MaxFrameSize:         1048576,
+			MaxMessageSize:       262144,
 			FramesPerSecond:      20,
 			Burst:                40,
 			HandshakeTimeout:     DurationOf(10 * time.Second),
@@ -55,11 +58,14 @@ func TestLoadConfigFull(t *testing.T) {
 listen = "127.0.0.1:9000"
 tls_cert = "a.crt"
 tls_key  = "b.key"
+database = "state/q.db"
+registration = "open"
 [limits]
 max_connections = 50
 max_connections_per_ip = 4
 max_pending_handshakes = 8
 max_frame_size = 65536
+max_message_size = 4096
 frames_per_second = 2.5
 burst = 7
 handshake_timeout = "1500ms"
@@ -72,14 +78,17 @@ level = "debug"
 		t.Fatal(err)
 	}
 	want := Config{
-		Listen:  "127.0.0.1:9000",
-		TLSCert: filepath.Join(dir, "a.crt"),
-		TLSKey:  filepath.Join(dir, "b.key"),
+		Listen:       "127.0.0.1:9000",
+		TLSCert:      filepath.Join(dir, "a.crt"),
+		TLSKey:       filepath.Join(dir, "b.key"),
+		Database:     filepath.Join(dir, "state", "q.db"),
+		Registration: "open",
 		Limits: Limits{
 			MaxConnections:       50,
 			MaxConnectionsPerIP:  4,
 			MaxPendingHandshakes: 8,
 			MaxFrameSize:         65536,
+			MaxMessageSize:       4096,
 			FramesPerSecond:      2.5,
 			Burst:                7,
 			HandshakeTimeout:     DurationOf(1500 * time.Millisecond),
@@ -102,6 +111,7 @@ func TestLoadConfigPartialKeepsDefaults(t *testing.T) {
 	want.Limits.Burst = 5
 	want.TLSCert = filepath.Join(dir, DefaultTLSCert)
 	want.TLSKey = filepath.Join(dir, DefaultTLSKey)
+	want.Database = filepath.Join(dir, DefaultDatabase)
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("LoadConfig = %+v, want %+v", cfg, want)
 	}
@@ -116,7 +126,7 @@ func TestLoadConfigEmptyFile(t *testing.T) {
 func TestLoadConfigRelativePaths(t *testing.T) {
 	dir := t.TempDir()
 	absKey := filepath.Join(t.TempDir(), "elsewhere.key")
-	path := writeConfigFile(t, dir, "tls_cert = 'certs/server.crt'\ntls_key = '"+absKey+"'\n")
+	path := writeConfigFile(t, dir, "tls_cert = 'certs/server.crt'\ntls_key = '"+absKey+"'\ndatabase = 'db/qchat.db'\n")
 
 	t.Chdir(t.TempDir())
 
@@ -129,6 +139,9 @@ func TestLoadConfigRelativePaths(t *testing.T) {
 	}
 	if cfg.TLSKey != absKey {
 		t.Errorf("TLSKey = %q, want unchanged %q", cfg.TLSKey, absKey)
+	}
+	if want := filepath.Join(dir, "db", "qchat.db"); cfg.Database != want {
+		t.Errorf("Database = %q, want %q", cfg.Database, want)
 	}
 }
 
@@ -203,40 +216,49 @@ func TestLoadConfigMissingFile(t *testing.T) {
 
 func TestValidateRejects(t *testing.T) {
 	cases := map[string]func(*Config){
-		"empty listen":           func(c *Config) { c.Listen = "" },
-		"listen without port":    func(c *Config) { c.Listen = "0.0.0.0" },
-		"listen bad port":        func(c *Config) { c.Listen = "0.0.0.0:http" },
-		"listen port too large":  func(c *Config) { c.Listen = "0.0.0.0:70000" },
-		"empty cert":             func(c *Config) { c.TLSCert = "" },
-		"empty key":              func(c *Config) { c.TLSKey = "" },
-		"zero connections":       func(c *Config) { c.Limits.MaxConnections = 0 },
-		"huge connections":       func(c *Config) { c.Limits.MaxConnections = 2_000_000 },
-		"zero per ip":            func(c *Config) { c.Limits.MaxConnectionsPerIP = 0 },
-		"per ip above total":     func(c *Config) { c.Limits.MaxConnectionsPerIP = 1001 },
-		"tiny frames":            func(c *Config) { c.Limits.MaxFrameSize = 10 },
-		"frames above protocol":  func(c *Config) { c.Limits.MaxFrameSize = 1<<20 + 1 },
-		"zero rate":              func(c *Config) { c.Limits.FramesPerSecond = 0 },
-		"negative rate":          func(c *Config) { c.Limits.FramesPerSecond = -1 },
-		"NaN rate":               func(c *Config) { c.Limits.FramesPerSecond = math.NaN() },
-		"infinite rate":          func(c *Config) { c.Limits.FramesPerSecond = math.Inf(1) },
-		"zero burst":             func(c *Config) { c.Limits.Burst = 0 },
-		"zero handshake":         func(c *Config) { c.Limits.HandshakeTimeout = Duration{} },
-		"negative handshake":     func(c *Config) { c.Limits.HandshakeTimeout = DurationOf(-time.Second) },
-		"long handshake":         func(c *Config) { c.Limits.HandshakeTimeout = DurationOf(time.Hour) },
-		"ping too short":         func(c *Config) { c.Limits.PingInterval = DurationOf(500 * time.Millisecond) },
-		"ping too long":          func(c *Config) { c.Limits.PingInterval = DurationOf(3601 * time.Second) },
-		"ping fractional":        func(c *Config) { c.Limits.PingInterval = DurationOf(1500 * time.Millisecond) },
-		"unknown log level":      func(c *Config) { c.Log.Level = "verbose" },
-		"log level wrong case":   func(c *Config) { c.Log.Level = "INFO" },
-		"empty log level":        func(c *Config) { c.Log.Level = "" },
-		"negative frame size":    func(c *Config) { c.Limits.MaxFrameSize = -1 },
-		"negative max per ip":    func(c *Config) { c.Limits.MaxConnectionsPerIP = -5 },
-		"negative max conns":     func(c *Config) { c.Limits.MaxConnections = -5 },
-		"zero pending":           func(c *Config) { c.Limits.MaxPendingHandshakes = 0 },
-		"negative pending":       func(c *Config) { c.Limits.MaxPendingHandshakes = -1 },
-		"huge pending":           func(c *Config) { c.Limits.MaxPendingHandshakes = maxConnectionsLimit + 1 },
-		"burst above the limit":  func(c *Config) { c.Limits.Burst = maxBurst + 1 },
-		"rate above the maximum": func(c *Config) { c.Limits.FramesPerSecond = maxFramesPerSecond + 1 },
+		"empty listen":            func(c *Config) { c.Listen = "" },
+		"listen without port":     func(c *Config) { c.Listen = "0.0.0.0" },
+		"listen bad port":         func(c *Config) { c.Listen = "0.0.0.0:http" },
+		"listen port too large":   func(c *Config) { c.Listen = "0.0.0.0:70000" },
+		"empty cert":              func(c *Config) { c.TLSCert = "" },
+		"empty key":               func(c *Config) { c.TLSKey = "" },
+		"zero connections":        func(c *Config) { c.Limits.MaxConnections = 0 },
+		"huge connections":        func(c *Config) { c.Limits.MaxConnections = 2_000_000 },
+		"zero per ip":             func(c *Config) { c.Limits.MaxConnectionsPerIP = 0 },
+		"per ip above total":      func(c *Config) { c.Limits.MaxConnectionsPerIP = 1001 },
+		"tiny frames":             func(c *Config) { c.Limits.MaxFrameSize = 10 },
+		"frames above protocol":   func(c *Config) { c.Limits.MaxFrameSize = 1<<20 + 1 },
+		"zero rate":               func(c *Config) { c.Limits.FramesPerSecond = 0 },
+		"negative rate":           func(c *Config) { c.Limits.FramesPerSecond = -1 },
+		"NaN rate":                func(c *Config) { c.Limits.FramesPerSecond = math.NaN() },
+		"infinite rate":           func(c *Config) { c.Limits.FramesPerSecond = math.Inf(1) },
+		"zero burst":              func(c *Config) { c.Limits.Burst = 0 },
+		"zero handshake":          func(c *Config) { c.Limits.HandshakeTimeout = Duration{} },
+		"negative handshake":      func(c *Config) { c.Limits.HandshakeTimeout = DurationOf(-time.Second) },
+		"long handshake":          func(c *Config) { c.Limits.HandshakeTimeout = DurationOf(time.Hour) },
+		"ping too short":          func(c *Config) { c.Limits.PingInterval = DurationOf(500 * time.Millisecond) },
+		"ping too long":           func(c *Config) { c.Limits.PingInterval = DurationOf(3601 * time.Second) },
+		"ping fractional":         func(c *Config) { c.Limits.PingInterval = DurationOf(1500 * time.Millisecond) },
+		"unknown log level":       func(c *Config) { c.Log.Level = "verbose" },
+		"log level wrong case":    func(c *Config) { c.Log.Level = "INFO" },
+		"empty log level":         func(c *Config) { c.Log.Level = "" },
+		"negative frame size":     func(c *Config) { c.Limits.MaxFrameSize = -1 },
+		"negative max per ip":     func(c *Config) { c.Limits.MaxConnectionsPerIP = -5 },
+		"negative max conns":      func(c *Config) { c.Limits.MaxConnections = -5 },
+		"zero pending":            func(c *Config) { c.Limits.MaxPendingHandshakes = 0 },
+		"negative pending":        func(c *Config) { c.Limits.MaxPendingHandshakes = -1 },
+		"huge pending":            func(c *Config) { c.Limits.MaxPendingHandshakes = maxConnectionsLimit + 1 },
+		"burst above the limit":   func(c *Config) { c.Limits.Burst = maxBurst + 1 },
+		"rate above the maximum":  func(c *Config) { c.Limits.FramesPerSecond = maxFramesPerSecond + 1 },
+		"empty database":          func(c *Config) { c.Database = "" },
+		"database with query":     func(c *Config) { c.Database = "q.db?mode=ro" },
+		"database with fragment":  func(c *Config) { c.Database = "q.db#x" },
+		"empty registration":      func(c *Config) { c.Registration = "" },
+		"unknown registration":    func(c *Config) { c.Registration = "closed" },
+		"registration wrong case": func(c *Config) { c.Registration = "Invite" },
+		"tiny messages":           func(c *Config) { c.Limits.MaxMessageSize = MinMessageSize - 1 },
+		"zero message size":       func(c *Config) { c.Limits.MaxMessageSize = 0 },
+		"messages fill the frame": func(c *Config) { c.Limits.MaxMessageSize = MaxMessageSize + 1 },
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -249,15 +271,19 @@ func TestValidateRejects(t *testing.T) {
 
 func TestValidateAccepts(t *testing.T) {
 	cases := map[string]func(*Config){
-		"empty host":          func(c *Config) { c.Listen = ":7443" },
-		"ipv6 host":           func(c *Config) { c.Listen = "[::]:7443" },
-		"port zero":           func(c *Config) { c.Listen = "127.0.0.1:0" },
-		"minimum ping":        func(c *Config) { c.Limits.PingInterval = DurationOf(time.Second) },
-		"maximum ping":        func(c *Config) { c.Limits.PingInterval = DurationOf(time.Hour) },
-		"per ip equals total": func(c *Config) { c.Limits.MaxConnectionsPerIP = c.Limits.MaxConnections },
-		"fractional rate":     func(c *Config) { c.Limits.FramesPerSecond = 0.1 },
-		"each log level":      func(c *Config) { c.Log.Level = "warn" },
-		"pending above total": func(c *Config) { c.Limits.MaxPendingHandshakes = c.Limits.MaxConnections + 1 },
+		"empty host":           func(c *Config) { c.Listen = ":7443" },
+		"ipv6 host":            func(c *Config) { c.Listen = "[::]:7443" },
+		"port zero":            func(c *Config) { c.Listen = "127.0.0.1:0" },
+		"minimum ping":         func(c *Config) { c.Limits.PingInterval = DurationOf(time.Second) },
+		"maximum ping":         func(c *Config) { c.Limits.PingInterval = DurationOf(time.Hour) },
+		"per ip equals total":  func(c *Config) { c.Limits.MaxConnectionsPerIP = c.Limits.MaxConnections },
+		"fractional rate":      func(c *Config) { c.Limits.FramesPerSecond = 0.1 },
+		"each log level":       func(c *Config) { c.Log.Level = "warn" },
+		"pending above total":  func(c *Config) { c.Limits.MaxPendingHandshakes = c.Limits.MaxConnections + 1 },
+		"open registration":    func(c *Config) { c.Registration = RegistrationOpen },
+		"minimum message size": func(c *Config) { c.Limits.MaxMessageSize = MinMessageSize },
+		"maximum message size": func(c *Config) { c.Limits.MaxMessageSize = MaxMessageSize },
+		"absolute database":    func(c *Config) { c.Database = filepath.Join(os.TempDir(), "q.db") },
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -293,7 +319,7 @@ func TestWriteTOMLRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := buf.String()
-	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS"} {
+	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS", "database = 'qchat.db'", "registration = 'invite'", "max_message_size = 262144", "never messages", "invite create"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("WriteTOML output lacks %q:\n%s", want, text)
 		}

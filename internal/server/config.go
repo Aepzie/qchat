@@ -24,15 +24,34 @@ const (
 	DefaultListen               = "0.0.0.0:7443"
 	DefaultTLSCert              = "server.crt"
 	DefaultTLSKey               = "server.key"
+	DefaultDatabase             = "qchat.db"
+	DefaultRegistration         = RegistrationInvite
 	DefaultMaxConnections       = 1000
 	DefaultMaxConnectionsPerIP  = 16
 	DefaultMaxPendingHandshakes = 64
 	DefaultMaxFrameSize         = protocol.MaxFrameSize
+	DefaultMaxMessageSize       = 256 << 10
 	DefaultFramesPerSecond      = 20.0
 	DefaultBurst                = 40
 	DefaultHandshakeTimeout     = 10 * time.Second
 	DefaultPingInterval         = 30 * time.Second
 	DefaultLogLevel             = "info"
+)
+
+// Values of Config.Registration.
+const (
+	// RegistrationInvite requires an unused invite code to register a new
+	// identity. Known identities may update their bundle without one.
+	RegistrationInvite = "invite"
+	// RegistrationOpen lets anyone register a new identity.
+	RegistrationOpen = "open"
+)
+
+// Bounds of Limits.MaxMessageSize. The upper bound leaves room for the
+// frame header and the CBOR envelope of a Send or Deliver frame.
+const (
+	MinMessageSize = 1 << 10
+	MaxMessageSize = protocol.MaxFrameSize - 1<<10
 )
 
 // Bounds enforced by Config.Validate.
@@ -90,6 +109,12 @@ type Config struct {
 	TLSCert string `toml:"tls_cert" comment:"PEM certificate; relative paths resolve against this file's directory."`
 	// TLSKey is the path of the PEM private key, resolved like TLSCert.
 	TLSKey string `toml:"tls_key" comment:"PEM private key (keep it secret, mode 0600)."`
+	// Database is the path of the SQLite database holding registered
+	// identity bundles and invite code hashes, resolved like TLSCert. The
+	// server account needs write access to the file and its directory.
+	Database string `toml:"database" comment:"SQLite database of identity bundles and invite code hashes (never messages).\nRelative paths resolve against this file's directory; the server needs write access."`
+	// Registration is RegistrationInvite or RegistrationOpen.
+	Registration string `toml:"registration" comment:"Who may register a new identity: \"invite\" (requires a code from\n\"qchat-server invite create\") or \"open\" (anyone who can connect)."`
 	// Limits bounds the resources a client can consume.
 	Limits Limits `toml:"limits"`
 	// Log configures logging.
@@ -113,6 +138,10 @@ type Limits struct {
 	// MaxFrameSize is the largest accepted WebSocket message in bytes. It
 	// must not exceed protocol.MaxFrameSize.
 	MaxFrameSize int `toml:"max_frame_size" comment:"Largest accepted frame in bytes (at most 1048576)."`
+	// MaxMessageSize is the largest end-to-end message payload in bytes,
+	// between MinMessageSize and MaxMessageSize. A payload must also fit
+	// into a frame of MaxFrameSize, so the smaller limit applies.
+	MaxMessageSize int `toml:"max_message_size" comment:"Largest end-to-end message payload in bytes (1024 to 1047552).\nA payload must also fit into max_frame_size."`
 	// FramesPerSecond is the sustained per-session frame rate.
 	FramesPerSecond float64 `toml:"frames_per_second" comment:"Sustained frames per second per session."`
 	// Burst is the per-session token bucket size.
@@ -135,14 +164,17 @@ type LogConfig struct {
 // configuration file leaves out.
 func DefaultConfig() Config {
 	return Config{
-		Listen:  DefaultListen,
-		TLSCert: DefaultTLSCert,
-		TLSKey:  DefaultTLSKey,
+		Listen:       DefaultListen,
+		TLSCert:      DefaultTLSCert,
+		TLSKey:       DefaultTLSKey,
+		Database:     DefaultDatabase,
+		Registration: DefaultRegistration,
 		Limits: Limits{
 			MaxConnections:       DefaultMaxConnections,
 			MaxConnectionsPerIP:  DefaultMaxConnectionsPerIP,
 			MaxPendingHandshakes: DefaultMaxPendingHandshakes,
 			MaxFrameSize:         DefaultMaxFrameSize,
+			MaxMessageSize:       DefaultMaxMessageSize,
 			FramesPerSecond:      DefaultFramesPerSecond,
 			Burst:                DefaultBurst,
 			HandshakeTimeout:     DurationOf(DefaultHandshakeTimeout),
@@ -153,7 +185,8 @@ func DefaultConfig() Config {
 }
 
 // LoadConfig reads the TOML file at path on top of DefaultConfig, resolves
-// relative TLS paths against the file's directory and validates the result.
+// relative TLS and database paths against the file's directory and
+// validates the result.
 // Unknown keys are rejected so that typos do not silently fall back to
 // defaults.
 func LoadConfig(path string) (Config, error) {
@@ -206,12 +239,14 @@ func describeTOMLError(err error) error {
 	return fmt.Errorf("parse config: %w", err)
 }
 
-// resolvePaths makes relative TLS file paths relative to baseDir. This keeps
-// a data directory self-contained regardless of the working directory the
-// server is started from (a Windows service starts in System32).
+// resolvePaths makes relative TLS and database paths relative to baseDir.
+// This keeps a data directory self-contained regardless of the working
+// directory the server is started from (a Windows service starts in
+// System32).
 func (c *Config) resolvePaths(baseDir string) {
 	c.TLSCert = resolveAgainst(baseDir, c.TLSCert)
 	c.TLSKey = resolveAgainst(baseDir, c.TLSKey)
+	c.Database = resolveAgainst(baseDir, c.Database)
 }
 
 func resolveAgainst(baseDir, path string) string {
@@ -232,11 +267,29 @@ func (c Config) Validate() error {
 	if c.TLSKey == "" {
 		return errors.New("config: tls_key must not be empty")
 	}
+	if err := validateDatabase(c.Database); err != nil {
+		return err
+	}
+	if c.Registration != RegistrationInvite && c.Registration != RegistrationOpen {
+		return fmt.Errorf("config: registration must be %q or %q", RegistrationInvite, RegistrationOpen)
+	}
 	if err := c.Limits.validate(); err != nil {
 		return err
 	}
 	if _, err := c.Log.SlogLevel(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateDatabase rejects an empty path and the characters that the
+// SQLite driver would read as the start of connection options.
+func validateDatabase(path string) error {
+	if path == "" {
+		return errors.New("config: database must not be empty")
+	}
+	if strings.ContainsAny(path, "?#") {
+		return errors.New("config: database path must not contain '?' or '#'")
 	}
 	return nil
 }
@@ -262,6 +315,8 @@ func (l Limits) validate() error {
 		return fmt.Errorf("config: limits.max_pending_handshakes must be between 1 and %d", maxConnectionsLimit)
 	case l.MaxFrameSize < minFrameSize || l.MaxFrameSize > protocol.MaxFrameSize:
 		return fmt.Errorf("config: limits.max_frame_size must be between %d and %d", minFrameSize, protocol.MaxFrameSize)
+	case l.MaxMessageSize < MinMessageSize || l.MaxMessageSize > MaxMessageSize:
+		return fmt.Errorf("config: limits.max_message_size must be between %d and %d", MinMessageSize, MaxMessageSize)
 	case math.IsNaN(l.FramesPerSecond) || l.FramesPerSecond <= 0 || l.FramesPerSecond > maxFramesPerSecond:
 		return fmt.Errorf("config: limits.frames_per_second must be greater than 0 and at most %d", maxFramesPerSecond)
 	case l.Burst < 1 || l.Burst > maxBurst:

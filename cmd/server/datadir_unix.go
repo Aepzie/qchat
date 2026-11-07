@@ -103,3 +103,16 @@ func keyFileExposure(path string) (string, error) {
 	}
 	return "", nil
 }
+
+// createIfMissing creates an empty file at path that only the current user
+// can read and write, and leaves an existing file unchanged.
+func (*fileProtection) createIfMissing(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, dataFileMode)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}

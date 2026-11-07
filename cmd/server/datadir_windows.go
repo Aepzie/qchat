@@ -325,3 +325,21 @@ func keyFileExposure(path string) (string, error) {
 	}
 	return "access control list grants " + strings.Join(exposed, ", "), nil
 }
+
+// createIfMissing creates an empty file at path with the protected ACL,
+// atomically at creation, and leaves an existing file unchanged.
+func (p *fileProtection) createIfMissing(path string) error {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, p.attributes,
+		windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if errors.Is(err, windows.ERROR_FILE_EXISTS) {
+		return nil
+	}
+	if err != nil {
+		return &fs.PathError{Op: "create", Path: path, Err: err}
+	}
+	return windows.CloseHandle(handle)
+}

@@ -5,13 +5,19 @@
 //	qchat-server init --data-dir DIR [--host NAME]... [--listen ADDR] [--service-account NAME] [--force]
 //	qchat-server run --config FILE
 //	qchat-server fingerprint (--config FILE | --data-dir DIR)
+//	qchat-server invite create [--config FILE] [--uses N] [--ttl DURATION]
+//	qchat-server invite list [--config FILE]
+//	qchat-server invite prune [--config FILE]
 //	qchat-server version
 //
 // "init" creates a data directory holding a fresh server identity
-// (server.key, server.crt) and a configuration file (server.toml). "run"
+// (server.key, server.crt), a configuration file (server.toml) and the
+// database of registered identities and invites (qchat.db). "run"
 // starts the server; on Windows it also runs as a service (see
 // deploy/windows/README.md). "fingerprint" prints the public key
-// fingerprint that clients pin.
+// fingerprint that clients pin. "invite" creates, lists and prunes the
+// invite codes that registering a new identity requires when
+// registration = "invite".
 package main
 
 import (
@@ -37,14 +43,14 @@ var errUsage = errors.New("usage error")
 const usageText = `Usage: qchat-server <command> [flags]
 
 Commands:
-  init          create a data directory with a new server identity and config
+  init          create a data directory with a new server identity, config and database
   run           run the server
   fingerprint   print the server public key fingerprint that clients pin
+  invite        create, list or prune invite codes for new users
   version       print the version
   help          show this help
 
 Planned (not available yet):
-  invite        create invitations for new users
   build-client  build a client with this server's address and fingerprint embedded
 
 Run "qchat-server <command> -h" for the flags of a command.
@@ -69,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdRun(rest, stderr)
 	case "fingerprint":
 		err = cmdFingerprint(rest, stdout, stderr)
+	case "invite":
+		err = cmdInvite(rest, stdout, stderr)
 	case "version":
 		err = cmdVersion(rest, stdout, stderr)
 	case "help", "-h", "-help", "--help":

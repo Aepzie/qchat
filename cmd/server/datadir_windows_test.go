@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/craguS/qchat/internal/server"
 )
 
 // readSecurity returns the owner and DACL of path.
@@ -58,7 +60,7 @@ func allowedACEs(t *testing.T, path string) []*windows.ACCESS_ALLOWED_ACE {
 
 func TestInitAppliesProtectedACL(t *testing.T) {
 	dir, _ := initDataDir(t)
-	for _, path := range []string{dir, filepath.Join(dir, keyFileName), filepath.Join(dir, certFileName), filepath.Join(dir, configFileName)} {
+	for _, path := range []string{dir, filepath.Join(dir, keyFileName), filepath.Join(dir, certFileName), filepath.Join(dir, configFileName), filepath.Join(dir, server.DefaultDatabase)} {
 		for _, ace := range allowedACEs(t, path) {
 			if label := broadSIDLabel(aceSID(ace)); label != "" {
 				t.Errorf("%s: ACE grants %#x to %s", path, ace.Mask, label)
