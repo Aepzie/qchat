@@ -55,10 +55,26 @@ func serveConfig(ctx context.Context, configPath string, logOutput io.Writer) er
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(logOutput, &slog.HandlerOptions{Level: level}))
+	warnIfKeyIsExposed(logger, cfg.TLSKey)
 	srv, err := server.New(cfg, cert, logger)
 	if err != nil {
 		return err
 	}
 	logger.Info("server identity", "version", version, "fingerprint", pin.String())
 	return srv.ListenAndServe(ctx)
+}
+
+// warnIfKeyIsExposed logs a warning if other users may read or write the
+// private key file. It does not stop the server: the operator may have
+// reasons for the setup, and refusing to start would turn a permission
+// mistake into an outage.
+func warnIfKeyIsExposed(logger *slog.Logger, keyPath string) {
+	exposure, err := keyFileExposure(keyPath)
+	if err != nil {
+		logger.Warn("cannot check private key permissions", "path", keyPath, "err", err)
+		return
+	}
+	if exposure != "" {
+		logger.Warn("private key is accessible to other users; restrict its permissions", "path", keyPath, "problem", exposure)
+	}
 }

@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	qchat-server init --data-dir DIR [--host NAME]... [--listen ADDR] [--force]
+//	qchat-server init --data-dir DIR [--host NAME]... [--listen ADDR] [--service-account NAME] [--force]
 //	qchat-server run --config FILE
 //	qchat-server fingerprint (--config FILE | --data-dir DIR)
 //	qchat-server version

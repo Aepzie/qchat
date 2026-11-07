@@ -23,26 +23,11 @@ New-Item -ItemType Directory -Force "C:\Program Files\qchat"
 Copy-Item .\qchat-server.exe "C:\Program Files\qchat\qchat-server.exe"
 ```
 
-## 2. Create the data directory
+## 2. Register the service
 
-```powershell
-& "C:\Program Files\qchat\qchat-server.exe" init --data-dir C:\ProgramData\qchat --host chat.example.org
-```
-
-This writes `server.key` (the private key), `server.crt` and `server.toml`,
-and prints the fingerprint users must pin. Keep the data directory outside
-any user profile. Running `init` again refuses to overwrite the identity;
-`--force` creates a new key, which changes the fingerprint and locks out
-every client pinned to the old one.
-
-Before installing the service, run the server once in the foreground to
-check the configuration (stop it with Ctrl+C):
-
-```powershell
-& "C:\Program Files\qchat\qchat-server.exe" run --config C:\ProgramData\qchat\server.toml
-```
-
-## 3. Register the service
+Register the service before creating the data directory: `init` grants the
+service account read access, and that account exists only once the service
+is registered. Do not start the service yet.
 
 Run the service under its own virtual service account
 (`NT SERVICE\qchat-server`). Windows manages this account automatically: it
@@ -70,22 +55,77 @@ Notes on the `create` line:
 with an error (for example because the port is in use), not only when the
 process crashes.
 
-## 4. Restrict access to the data directory
-
-The private key must be readable by the service and administrators only.
-Replace the inherited permissions of the data directory (the virtual account
-exists only after step 3):
+## 3. Create the data directory
 
 ```powershell
-icacls C:\ProgramData\qchat /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "NT SERVICE\qchat-server:(OI)(CI)RX"
-icacls C:\ProgramData\qchat
+& "C:\Program Files\qchat\qchat-server.exe" init --data-dir C:\ProgramData\qchat --host chat.example.org --service-account "NT SERVICE\qchat-server"
 ```
 
-`S-1-5-18` is SYSTEM and `S-1-5-32-544` is the Administrators group; the
-SIDs work on every Windows language. The service needs read access only, so
-a compromised server process cannot alter its key or configuration. On
-Windows, the Unix file modes requested by `init` (0700/0600) are
-best-effort, and these ACLs are what actually protects the key.
+This writes `server.key` (the private key), `server.crt` and `server.toml`,
+and prints the fingerprint users must pin. Keep the data directory outside
+any user profile. Running `init` again refuses to overwrite the identity;
+`--force` creates a new key, which changes the fingerprint and locks out
+every client pinned to the old one.
+
+`init` creates the directory and every file in it with an explicit access
+control list that does not inherit from `C:\ProgramData` (which lets every
+local user read new subdirectories):
+
+- SYSTEM, the Administrators group and the owner of each object (the
+  Administrators group when `init` runs elevated) have full control;
+- `NT SERVICE\qchat-server` may read, but not change, the key and
+  configuration, so a compromised server process cannot alter them;
+- nobody else has access.
+
+The files are created with this ACL, so at no point can other users read the
+key. `--service-account` also accepts a SID (`S-1-5-...`), which avoids
+localized account names on non-English Windows. On Windows, the Unix file
+modes 0700/0600 are meaningless; the ACL is what protects the key.
+
+`init` refuses to use a data directory that already exists unless it is owned
+by SYSTEM, Administrators or the account running `init`, and grants no access
+to Everyone, Authenticated Users, INTERACTIVE or Users. Any local user can
+create a directory under `C:\ProgramData`; if such a pre-created directory
+were used, its owner could change its permissions later and read or replace
+the key. If `init` refuses, delete the directory (after checking who created
+it and why) and run `init` again. Junctions and symbolic links are refused
+as well.
+
+## 4. Verify the permissions and test the configuration
+
+Check that the ACL looks as described above:
+
+```powershell
+icacls C:\ProgramData\qchat
+icacls C:\ProgramData\qchat\server.key
+```
+
+Expect entries for SYSTEM (`S-1-5-18`), Administrators (`S-1-5-32-544`),
+OWNER RIGHTS (`S-1-3-4`) with `(F)` and `NT SERVICE\qchat-server` with `(RX)`
+only; names are localized, for example `VORDEFINIERT\Administratoren` on
+German Windows. There must be no entry for `Users`, `Authenticated Users` or
+`Everyone`, and none marked `(I)` (inherited).
+
+If you created the data directory with an older version of `init` or without
+`--service-account`, either recreate it (which changes the fingerprint), or
+fix the ACL by hand with these SIDs, which work on every Windows language:
+
+```powershell
+icacls C:\ProgramData\qchat /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "NT SERVICE\qchat-server:(OI)(CI)RX" /T
+```
+
+`/inheritance:r` removes the entries inherited from `C:\ProgramData`, and
+`/T` applies the change to the files already in the directory.
+
+Then run the server once in the foreground to check the configuration (stop
+it with Ctrl+C):
+
+```powershell
+& "C:\Program Files\qchat\qchat-server.exe" run --config C:\ProgramData\qchat\server.toml
+```
+
+At startup, `run` logs a warning if the ACL of the private key grants access
+to Everyone, Authenticated Users, INTERACTIVE or Users.
 
 ## 5. Open the firewall and start
 
@@ -105,7 +145,7 @@ Print the fingerprint again at any time:
 
 A service has no console, and the server currently writes its log to
 standard error only, so log output is discarded while it runs as a service.
-Use a foreground run (step 2) to troubleshoot. The log never contains client
+Use a foreground run (step 4) to troubleshoot. The log never contains client
 IP addresses or message data in either case.
 
 ## Updating and removing
