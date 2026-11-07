@@ -27,50 +27,58 @@ func (d *DB) AppendMessage(ctx context.Context, m Message) error {
 	}
 	defer d.mu.RUnlock()
 
+	return d.withTx(ctx, func(tx *sql.Tx) error {
+		return d.appendMessageTx(ctx, tx, m)
+	})
+}
+
+// appendMessageTx is the body of AppendMessage inside the caller's
+// transaction. It returns ErrDuplicate before writing anything if the message
+// was already appended. m must have been validated.
+func (d *DB) appendMessageTx(ctx context.Context, tx *sql.Tx, m Message) error {
 	peer := d.keys.contactLookup(m.Peer)
 	lookup := d.keys.messageLookup(m.Peer, m.MsgID)
 	plain, err := encode(m.record())
 	if err != nil {
 		return err
 	}
-	return d.withTx(ctx, func(tx *sql.Tx) error {
-		var exists int
-		err := tx.QueryRowContext(ctx,
-			`SELECT 1 FROM seen WHERE lookup = ? UNION ALL SELECT 1 FROM messages WHERE lookup = ? LIMIT 1`,
-			lookup, lookup).Scan(&exists)
-		if err == nil {
-			return ErrDuplicate
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("clientdb: append message: %w", err)
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO seen (lookup) VALUES (?)`, lookup)
-		if isUniqueViolation(err) {
-			return ErrDuplicate
-		}
-		if err != nil {
-			return fmt.Errorf("clientdb: append message: %w", err)
-		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO messages (peer, lookup, value) VALUES (?, ?, x'')`, peer, lookup)
-		if isUniqueViolation(err) {
-			return ErrDuplicate
-		}
-		if err != nil {
-			return fmt.Errorf("clientdb: append message: %w", err)
-		}
-		seq, err := res.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("clientdb: append message: %w", err)
-		}
-		sealed, err := d.keys.seal(plain, rowAAD(tableMessages, lookup, seq))
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE messages SET value = ? WHERE seq = ?`, sealed, seq); err != nil {
-			return fmt.Errorf("clientdb: append message: %w", err)
-		}
-		return nil
-	})
+	defer clear(plain)
+	var exists int
+	err = tx.QueryRowContext(ctx,
+		`SELECT 1 FROM seen WHERE lookup = ? UNION ALL SELECT 1 FROM messages WHERE lookup = ? LIMIT 1`,
+		lookup, lookup).Scan(&exists)
+	if err == nil {
+		return ErrDuplicate
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("clientdb: append message: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO seen (lookup) VALUES (?)`, lookup)
+	if isUniqueViolation(err) {
+		return ErrDuplicate
+	}
+	if err != nil {
+		return fmt.Errorf("clientdb: append message: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO messages (peer, lookup, value) VALUES (?, ?, x'')`, peer, lookup)
+	if isUniqueViolation(err) {
+		return ErrDuplicate
+	}
+	if err != nil {
+		return fmt.Errorf("clientdb: append message: %w", err)
+	}
+	seq, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("clientdb: append message: %w", err)
+	}
+	sealed, err := d.keys.seal(plain, rowAAD(tableMessages, lookup, seq))
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE messages SET value = ? WHERE seq = ?`, sealed, seq); err != nil {
+		return fmt.Errorf("clientdb: append message: %w", err)
+	}
+	return nil
 }
 
 // HasMessage reports whether a message with (peer, msgID) was ever appended:

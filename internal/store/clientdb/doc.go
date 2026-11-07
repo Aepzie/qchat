@@ -34,8 +34,8 @@
 //
 // Someone holding qchat.db but not the database key can see:
 //
-//   - the number of contacts, messages and settings, and the size of every
-//     stored value;
+//   - the number of contacts, messages, settings, ratchet sessions and own
+//     prekey secrets, and the size of every stored value;
 //   - which messages belong to the same conversation, because the peer column
 //     is the same HMAC for every message of one contact;
 //   - the local, monotonically increasing sequence number of each message,
@@ -46,7 +46,8 @@
 //   - the schema version.
 //
 // The file does not reveal contact IDs, display names, identity bundles,
-// message IDs, message bodies, timestamps, statuses or setting values.
+// message IDs, message bodies, timestamps, statuses, setting values, which
+// peers have a session, ratchet states, or prekey kinds, IDs and keys.
 //
 // # What is not detected
 //
@@ -61,7 +62,9 @@
 //     row, not to a version, so an earlier value of the same row still
 //     authenticates. An attacker can thereby revert, for example, a
 //     contact's Verified flag or KeyChangedAt, a pinned bundle and its
-//     serial, a message status, or the own bundle serial setting.
+//     serial, a message status, or the own bundle serial setting. Rolling
+//     back a session row restores an earlier ratchet state, and putting back
+//     a copy of a deleted prekey row restores that prekey secret.
 //
 // Callers must therefore not rely on values stored here, such as bundle
 // serials, for protection against an attacker who can write the file; the
@@ -70,6 +73,24 @@
 // secure_delete overwrites freed pages with zeros. In WAL mode, old page
 // images may remain in the -wal file until the next checkpoint; Close runs a
 // truncating checkpoint to shrink that window.
+//
+// # Deleting secrets
+//
+// Forward secrecy needs deleted prekey private keys and ratchet states to be
+// gone from the files, not just unreachable: someone who later learns the
+// database key could otherwise decrypt an old copy of the row. Therefore
+// DeletePrekeySecret, PruneRetiredPrekeys, DeleteSession and a CommitReceive
+// that consumes a one-time prekey run PRAGMA wal_checkpoint(TRUNCATE) after
+// committing. It copies every WAL frame into the main file, syncs it and
+// truncates the -wal file to zero bytes, which removes the old page images;
+// the main file then holds only the zeroed pages written by secure_delete.
+// This costs a few extra writes and syncs per call (typically milliseconds
+// on a small client database), which is why it is not done after ordinary
+// writes. Superseded session states written by PutSession, CommitSend and
+// CommitReceive therefore stay in the -wal file until the next checkpoint
+// (SQLite's automatic one or Close). Data already copied by the operating
+// system or the storage device below the file level, such as SSD remapping
+// or backups, is out of reach of any of this.
 //
 // # File permissions
 //
