@@ -153,7 +153,7 @@ func TestStatusBarConnectionStates(t *testing.T) {
 	m := newTestModel(t, 120, 30)
 	top := func() string { return strings.SplitN(screen(m), "\n", 2)[0] }
 
-	if !strings.Contains(top(), "E2E: not yet") {
+	if !strings.Contains(top(), "E2E: off") {
 		t.Errorf("E2E badge missing: %q", top())
 	}
 	m = update(t, m, event(client.StateChanged{State: client.Connecting, Attempt: 1}))
@@ -163,7 +163,7 @@ func TestStatusBarConnectionStates(t *testing.T) {
 
 	m = connected(t, m)
 	s := top()
-	for _, want := range []string{"qchat", "● connected", "🔒 TLS 1.3 · PQ-hybrid", "pin " + shortFingerprint(testPin()), "Tor: off", "23 ms", "E2E: not yet"} {
+	for _, want := range []string{"qchat", "● connected", "🔒 TLS 1.3 · PQ-hybrid", "pin " + shortFingerprint(testPin()), "Tor: off", "23 ms", "E2E: off"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status bar %q lacks %q", s, want)
 		}
@@ -171,7 +171,7 @@ func TestStatusBarConnectionStates(t *testing.T) {
 	if m.State() != client.Connected {
 		t.Errorf("State() = %v", m.State())
 	}
-	if !strings.HasSuffix(strings.TrimRight(s, " "), "E2E: not yet") {
+	if !strings.HasSuffix(strings.TrimRight(s, " "), "E2E: off") {
 		t.Errorf("E2E badge not right-aligned: %q", s)
 	}
 
@@ -187,7 +187,7 @@ func TestStatusBarConnectionStates(t *testing.T) {
 func TestStatusBarDropsSegmentsWhenNarrow(t *testing.T) {
 	m := connected(t, newTestModel(t, 40, 12))
 	top := strings.SplitN(screen(m), "\n", 2)[0]
-	for _, want := range []string{"qchat", "● connected", "E2E: not yet"} {
+	for _, want := range []string{"qchat", "● connected", "E2E: off"} {
 		if !strings.Contains(top, want) {
 			t.Errorf("narrow status bar %q lacks %q", top, want)
 		}
@@ -198,7 +198,7 @@ func TestStatusBarDropsSegmentsWhenNarrow(t *testing.T) {
 func TestSidebarVisibility(t *testing.T) {
 	wide := newTestModel(t, 70, 20)
 	s := screen(wide)
-	for _, want := range []string{"CONVERSATIONS", "System", "Contacts arrive", "v0.2"} {
+	for _, want := range []string{"CONVERSATIONS", "System", "No identity", "messaging is off"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("sidebar at width 70 lacks %q", want)
 		}
@@ -211,7 +211,7 @@ func TestSidebarVisibility(t *testing.T) {
 
 func TestUnreadCounter(t *testing.T) {
 	m := newTestModel(t, 100, 20)
-	m.conversations[0].unread = 3
+	m.convs[0].unread = 3
 	if !strings.Contains(screen(m), "System") || !strings.Contains(screen(m), " 3 ") {
 		t.Errorf("unread counter not rendered:\n%s", screen(m))
 	}
@@ -324,7 +324,7 @@ func TestNotesStayLocal(t *testing.T) {
 		t.Errorf("input not cleared: %q", m.input.Value())
 	}
 	m, _ = submit(t, m, "   ")
-	if got := len(m.entries); got != 2 {
+	if got := len(m.convs[0].entries); got != 2 {
 		t.Errorf("blank input created an entry; %d entries", got)
 	}
 }
@@ -333,7 +333,7 @@ func TestNoteIsSanitized(t *testing.T) {
 	m := newTestModel(t, 90, 24)
 	m = update(t, m, tea.PasteMsg{Content: "evil \x1b]0;pwned\x07\x1b[2J text \u202e"})
 	m, _ = updateCmd(t, m, keyEnter)
-	last := m.entries[len(m.entries)-1]
+	last := m.convs[0].entries[len(m.convs[0].entries)-1]
 	if strings.ContainsAny(last.text, "\x1b\x07\u202e") {
 		t.Fatalf("note kept control characters: %q", last.text)
 	}
@@ -351,7 +351,7 @@ func TestCommands(t *testing.T) {
 
 	m, _ = submit(t, m, "/status")
 	s := screen(m)
-	for _, want := range []string{"status", "connected since 14:02:00", "chat.example.org:8443", "TLS 1.3 · X25519MLKEM768", "23 ms", "not yet"} {
+	for _, want := range []string{"status", "connected since 14:02:00", "chat.example.org:8443", "TLS 1.3 · X25519MLKEM768", "23 ms", "no identity loaded"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("/status lacks %q:\n%s", want, s)
 		}
@@ -363,7 +363,7 @@ func TestCommands(t *testing.T) {
 	}
 	m = update(t, m, tea.WindowSizeMsg{Width: 60, Height: 40})
 	m, _ = submit(t, m, "/clear")
-	if len(m.entries) != 0 || strings.Contains(screen(m), "/fingerprint") {
+	if len(m.convs[0].entries) != 0 || strings.Contains(screen(m), "/fingerprint") {
 		t.Fatal("/clear did not clear the history")
 	}
 
@@ -391,7 +391,7 @@ func TestCommandPalette(t *testing.T) {
 	m := newTestModel(t, 80, 24)
 	m = typeText(t, m, "/")
 	s := screen(m)
-	for _, c := range commands {
+	for _, c := range commands[:maxPaletteRows] {
 		if !strings.Contains(s, c.name) {
 			t.Errorf("palette lacks %s", c.name)
 		}
@@ -403,7 +403,7 @@ func TestCommandPalette(t *testing.T) {
 		t.Fatalf("first tab: %q", m.input.Value())
 	}
 	m = update(t, m, keyTab)
-	if m.input.Value() != "/status" {
+	if m.input.Value() != "/add" {
 		t.Fatalf("second tab: %q", m.input.Value())
 	}
 	m.input.Reset()
@@ -418,16 +418,18 @@ func TestCommandPalette(t *testing.T) {
 
 	m = typeText(t, m, "/st")
 	m, _ = updateCmd(t, m, keyEnter)
-	last := m.entries[len(m.entries)-1]
+	last := m.convs[0].entries[len(m.convs[0].entries)-1]
 	if last.kind != entryOutput || last.title != "status" {
 		t.Fatalf("enter on /st ran %+v", last)
 	}
 
 	m = typeText(t, m, "/")
 	m = update(t, m, press(tea.KeyDown, "", 0))
-	m = update(t, m, press(tea.KeyDown, "", 0))
+	for i := 0; i < 6; i++ {
+		m = update(t, m, press(tea.KeyDown, "", 0))
+	}
 	m, _ = updateCmd(t, m, keyEnter)
-	last = m.entries[len(m.entries)-1]
+	last = m.convs[0].entries[len(m.convs[0].entries)-1]
 	if last.title != "fingerprint" {
 		t.Fatalf("palette selection ran %q", last.title)
 	}

@@ -39,6 +39,11 @@ type Theme struct {
 	Warning color.Color
 	// Danger marks failures and security alerts.
 	Danger color.Color
+
+	// CodeLight and CodeDark are the light and dark modules of QR codes.
+	// They default to white and black for the best scanning contrast.
+	CodeLight color.Color
+	CodeDark  color.Color
 }
 
 // DefaultTheme returns "dusk", a low-contrast dark theme with a soft blue
@@ -57,6 +62,8 @@ func DefaultTheme() Theme {
 		Success:   lipgloss.Color("#A6D189"),
 		Warning:   lipgloss.Color("#E5C890"),
 		Danger:    lipgloss.Color("#E78284"),
+		CodeLight: lipgloss.Color("#FFFFFF"),
+		CodeDark:  lipgloss.Color("#000000"),
 	}
 }
 
@@ -83,6 +90,8 @@ func (t Theme) complete() Theme {
 	fill(&t.Success, d.Success)
 	fill(&t.Warning, d.Warning)
 	fill(&t.Danger, d.Danger)
+	fill(&t.CodeLight, d.CodeLight)
+	fill(&t.CodeDark, d.CodeDark)
 	return t
 }
 
@@ -117,6 +126,10 @@ type styles struct {
 	alertTitle lipgloss.Style
 	palette    lipgloss.Style
 	paletteSel lipgloss.Style
+
+	overlayBox lipgloss.Style
+	qr         lipgloss.Style
+	card       lipgloss.Style
 }
 
 func newStyles(t Theme) styles {
@@ -155,5 +168,15 @@ func newStyles(t Theme) styles {
 		alertTitle: base.Foreground(t.Danger).Bold(true),
 		palette:    base.Foreground(t.Muted),
 		paletteSel: base.Background(t.Highlight).Foreground(t.Text),
+
+		overlayBox: base.
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(t.Accent).
+			Padding(0, 1),
+		qr: base.Foreground(t.CodeLight).Background(t.CodeDark),
+		card: base.
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(t.Border).
+			Padding(1, 2),
 	}
 }

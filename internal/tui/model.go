@@ -2,14 +2,20 @@
 // Bubble Tea.
 //
 // The Model is a pure state machine: it reacts to window sizes, keys, mouse
-// wheel events and client.Session events, and renders a View. All network
-// activity happens in package client; the model only listens to the event
-// channel through a tea.Cmd. Tests can therefore drive it entirely by
-// feeding messages to Update and inspecting View.
+// wheel events, client.Session events and ChatEvents from the application
+// layer, and renders a View. Everything that may block, network and disk
+// alike, happens behind the Backend interface, which the model only calls
+// from tea.Cmds. Tests can therefore drive it entirely by feeding messages to
+// Update and inspecting View.
 //
-// Nothing typed into the interface leaves the machine in this version:
-// notes are shown locally, labelled as such, and the status bar says plainly
-// that end-to-end encryption is not available yet.
+// The interface is honest about what Phase 2 protects: messages to contacts
+// are end-to-end encrypted and signed, but there is no forward secrecy yet,
+// the relay sees who talks to whom and when, and nothing is delivered to
+// recipients who are offline. Notes typed in the System conversation never
+// leave the device.
+//
+// CreateProfileModel and UnlockModel are separate small models for the
+// steps before the chat starts.
 package tui
 
 import (
@@ -59,6 +65,12 @@ type Config struct {
 	// Events is the session's event channel. It may be nil, for example in
 	// tests that inject events directly.
 	Events <-chan client.Event
+	// Backend provides contacts and messaging. Nil means no identity is
+	// loaded: the interface then works as a connection monitor with local
+	// notes, and messaging commands explain that they are unavailable.
+	Backend Backend
+	// ChatEvents carries events from the application layer. It may be nil.
+	ChatEvents <-chan ChatEvent
 	// Tor reports whether connections go through Tor.
 	Tor bool
 	// Version is the client version shown in the footer and welcome text.
@@ -67,12 +79,6 @@ type Config struct {
 	Theme Theme
 	// Now returns the current time, for timestamps. Nil means time.Now.
 	Now func() time.Time
-}
-
-// conversation is one entry of the sidebar.
-type conversation struct {
-	name   string
-	unread int
 }
 
 // connStatus is what the interface knows about the connection.
@@ -90,6 +96,12 @@ type sessionEventMsg struct{ event client.Event }
 // sessionClosedMsg reports that the session's event channel was closed.
 type sessionClosedMsg struct{}
 
+// chatEventMsg carries one event from the application layer.
+type chatEventMsg struct{ event ChatEvent }
+
+// chatClosedMsg reports that the ChatEvents channel was closed.
+type chatClosedMsg struct{}
+
 // Model is the Bubble Tea model of the client. Create it with New.
 type Model struct {
 	cfg Config
@@ -98,20 +110,29 @@ type Model struct {
 	width, height int
 	mode          Mode
 
-	conn     connStatus
-	awaitRTT bool
-	ended    bool
+	conn      connStatus
+	awaitRTT  bool
+	ended     bool
+	chatEnded bool
 
-	entries       []entry
+	self    SelfInfo
+	hasSelf bool
+
+	convs []conversation
+	// open is the key of the conversation shown; cursor the key of the
+	// sidebar row selected with J/K in normal mode.
+	open, cursor string
+
 	renderedLines []string
 	renderedWidth int
 
 	history viewport.Model
 	input   inputLine
 
-	conversations []conversation
-	selected      int
+	overlay overlay
+	confirm confirmation
 
+	nextLocalID    int
 	paletteSel     int
 	completionBase string
 	quitting       bool
@@ -123,10 +144,12 @@ func New(cfg Config) Model {
 		cfg.Now = time.Now
 	}
 	m := Model{
-		cfg:           cfg,
-		st:            newStyles(cfg.Theme),
-		mode:          ModeInsert,
-		conversations: []conversation{{name: "System"}},
+		cfg:    cfg,
+		st:     newStyles(cfg.Theme),
+		mode:   ModeInsert,
+		convs:  []conversation{{key: systemKey, kind: convSystem, loaded: true}},
+		open:   systemKey,
+		cursor: systemKey,
 	}
 
 	m.history = viewport.New()
@@ -140,7 +163,13 @@ func New(cfg Config) Model {
 	if version == "" {
 		version = "dev"
 	}
-	m.log(entrySystem, fmt.Sprintf("qchat %s · connection preview. Notes you type stay on this device; end-to-end encrypted messaging is not available yet.", sanitizeText(version)))
+	if cfg.Backend == nil {
+		m.log(entrySystem, fmt.Sprintf("qchat %s · connection preview. No identity is loaded, so messaging is off; notes you type stay on this device.", sanitizeText(version)))
+		return m
+	}
+	m.log(entrySystem, fmt.Sprintf("qchat %s · messages to contacts are end-to-end encrypted and signed. "+
+		"There is no forward secrecy yet, the relay sees who talks to whom and when, and messages to offline contacts are not delivered. "+
+		"Notes typed here in System stay on this device.", sanitizeText(version)))
 	return m
 }
 
@@ -154,9 +183,9 @@ func (m Model) State() client.State { return m.conn.state }
 // Quitting reports whether the user asked to quit.
 func (m Model) Quitting() bool { return m.quitting }
 
-// Init starts listening for session events.
+// Init starts listening for events and loads the identity and contacts.
 func (m Model) Init() tea.Cmd {
-	return m.listen()
+	return tea.Batch(m.listen(), m.listenChat(), m.loadSelf(), m.loadContacts())
 }
 
 // listen waits for the next session event.
@@ -174,6 +203,21 @@ func (m Model) listen() tea.Cmd {
 	}
 }
 
+// listenChat waits for the next event from the application layer.
+func (m Model) listenChat() tea.Cmd {
+	ch := m.cfg.ChatEvents
+	if ch == nil || m.chatEnded {
+		return nil
+	}
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return chatClosedMsg{}
+		}
+		return chatEventMsg{event: ev}
+	}
+}
+
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -183,33 +227,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case sessionEventMsg:
 		m.handleEvent(msg.event)
+		m.layout()
 		return m, m.listen()
 	case sessionClosedMsg:
 		m.ended = true
+		return m, nil
+	case chatEventMsg:
+		cmd := m.handleChatEvent(msg.event)
+		m.layout()
+		return m, tea.Batch(cmd, m.listenChat())
+	case chatClosedMsg:
+		m.chatEnded = true
 		return m, nil
 	case tea.KeyPressMsg:
 		cmd := m.handleKey(msg)
 		m.layout()
 		return m, cmd
 	case tea.MouseWheelMsg:
+		if m.overlay.kind != overlayNone {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.history, cmd = m.history.Update(msg)
 		return m, cmd
 	case tea.PasteMsg:
-		if m.mode == ModeInsert && m.input.Update(msg) {
+		if m.overlay.kind == overlayNone && !m.confirm.active && m.mode == ModeInsert && m.input.Update(msg) {
 			m.resetPalette()
 		}
 		m.layout()
 		return m, nil
 	}
+	if cmd, ok := m.handleResult(msg); ok {
+		m.layout()
+		return m, cmd
+	}
 	return m, nil
 }
 
-// handleKey dispatches a key press according to the mode.
+// handleKey dispatches a key press according to what has focus.
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "ctrl+c" {
 		m.quitting = true
 		return tea.Quit
+	}
+	if m.overlay.kind != overlayNone {
+		return m.handleOverlayKey(msg)
+	}
+	if m.confirm.active {
+		return m.handleConfirmKey(msg)
+	}
+	switch msg.String() {
+	case "ctrl+n":
+		return m.step(1)
+	case "ctrl+p":
+		return m.step(-1)
 	}
 	if m.mode == ModeNormal {
 		return m.handleNormalKey(msg)
@@ -254,11 +325,19 @@ func (m *Model) handleNormalKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "q":
 		m.quitting = true
 		return tea.Quit
-	case "i", "a", "enter":
+	case "enter":
+		cmd := m.openConversation(m.cursor)
+		m.setMode(ModeInsert)
+		return cmd
+	case "i", "a":
 		m.setMode(ModeInsert)
 	case ":", "/":
 		m.setMode(ModeInsert)
 		m.input.SetValue("/")
+	case "J", "shift+j":
+		m.moveCursor(1)
+	case "K", "shift+k":
+		m.moveCursor(-1)
 	case "j", "down":
 		m.history.ScrollDown(1)
 	case "k", "up":
@@ -280,17 +359,20 @@ func (m *Model) handleNormalKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // setMode switches modes, moving focus between the input and the history.
+// Entering normal mode puts the sidebar cursor on the open conversation.
 func (m *Model) setMode(mode Mode) {
 	m.mode = mode
 	m.resetPalette()
 	if mode == ModeNormal {
+		m.cursor = m.open
 		m.input.Blur()
 		return
 	}
 	m.input.Focus()
 }
 
-// submit handles enter in insert mode: run a command or record a note.
+// submit handles enter in insert mode: run a command, send a message to the
+// open contact, or record a local note.
 func (m *Model) submit() tea.Cmd {
 	raw := strings.TrimSpace(m.input.Value())
 	m.input.Reset()
@@ -301,14 +383,26 @@ func (m *Model) submit() tea.Cmd {
 	if strings.HasPrefix(raw, "/") {
 		return m.runCommand(raw)
 	}
+	c := m.openConv()
+	switch c.kind {
+	case convContact:
+		return m.sendMessage(c, raw)
+	case convRequests:
+		m.log(entryWarn, "Message requests cannot be answered. Add the sender with /add <qc1-id> [name] first.")
+		return nil
+	}
 	m.add(entry{kind: entryNote, text: sanitizeText(raw)})
 	m.history.GotoBottom()
 	return nil
 }
 
-// complete performs tab completion of command names. Repeated presses cycle
-// through the commands matching what was typed before the first press.
+// complete performs tab completion. A command name is completed, cycling
+// through the matches on repeated presses; "/add " is completed with the ID
+// of a pending message request.
 func (m *Model) complete() {
+	if m.completeAddArgument() {
+		return
+	}
 	if m.completionBase == "" {
 		q, ok := paletteQuery(m.input.Value())
 		if !ok {
@@ -328,10 +422,31 @@ func (m *Model) complete() {
 	m.paletteSel = idx
 }
 
+// completeAddArgument completes "/add " with the next unknown sender's ID.
+func (m *Model) completeAddArgument() bool {
+	value := m.input.Value()
+	fields := strings.Fields(value)
+	if len(fields) == 0 || strings.ToLower(fields[0]) != "/add" || !strings.Contains(value, " ") || len(fields) > 2 {
+		return false
+	}
+	req := m.conv(requestsKey)
+	if req == nil || len(req.senders) == 0 {
+		return true
+	}
+	next := req.senders[0]
+	if len(fields) == 2 {
+		if i := slices.Index(req.senders, fields[1]); i >= 0 {
+			next = req.senders[(i+1)%len(req.senders)]
+		}
+	}
+	m.input.SetValue("/add " + next + " ")
+	return true
+}
+
 // paletteMatches returns the commands matching the input, and false when
 // the palette is not open.
 func (m *Model) paletteMatches() ([]command, bool) {
-	if m.mode != ModeInsert {
+	if m.mode != ModeInsert || m.confirm.active || m.overlay.kind != overlayNone {
 		return nil, false
 	}
 	if m.completionBase != "" {
@@ -350,7 +465,7 @@ func (m *Model) resetPalette() {
 	m.completionBase = ""
 }
 
-// handleEvent records a session event in the status and history.
+// handleEvent records a session event in the status and the System log.
 func (m *Model) handleEvent(ev client.Event) {
 	switch e := ev.(type) {
 	case client.StateChanged:
@@ -359,18 +474,20 @@ func (m *Model) handleEvent(ev client.Event) {
 		m.conn.rtt, m.conn.hasRTT = e.Duration, true
 		if m.awaitRTT {
 			m.awaitRTT = false
-			m.log(entrySystem, "Round-trip time "+formatRTT(e.Duration)+".")
+			m.sysLog(entrySystem, "Round-trip time "+formatRTT(e.Duration)+".")
 		}
 	case client.ServerError:
 		text := "Server error " + e.Code.String()
 		if e.Message != "" {
 			text += ": " + client.SanitizeASCII(e.Message, 256)
 		}
-		m.log(entryError, text+".")
+		m.sysLog(entryError, text+".")
 	case client.SecurityAlert:
 		m.conn.blocked = true
-		m.add(entry{kind: entryAlert, alert: e, addr: sanitizeText(m.cfg.Addr)})
-		m.history.GotoBottom()
+		m.addTo(systemKey, entry{kind: entryAlert, alert: e, addr: sanitizeText(m.cfg.Addr)})
+		if m.open == systemKey {
+			m.history.GotoBottom()
+		}
 	}
 }
 
@@ -381,41 +498,46 @@ func (m *Model) handleState(e client.StateChanged) {
 	case client.Connecting:
 		m.conn.hasRTT = false
 		if e.Attempt > 1 {
-			m.log(entrySystem, fmt.Sprintf("Reconnecting to %s (attempt %d)…", addr, e.Attempt))
+			m.sysLog(entrySystem, fmt.Sprintf("Reconnecting to %s (attempt %d)…", addr, e.Attempt))
 			return
 		}
-		m.log(entrySystem, "Connecting to "+addr+"…")
+		m.sysLog(entrySystem, "Connecting to "+addr+"…")
 	case client.Connected:
 		m.conn.info = e.Info
 		m.awaitRTT = true
-		m.log(entryGood, "Connected to "+addr+".")
-		m.log(entrySystem, fmt.Sprintf("%s · protocol v%d · keepalive %s",
+		m.sysLog(entryGood, "Connected to "+addr+".")
+		m.sysLog(entrySystem, fmt.Sprintf("%s · protocol v%d · keepalive %s",
 			sanitizeText(e.Info.Transport), e.Info.ProtocolVersion, e.Info.PingInterval))
-		m.log(entrySystem, "Server key matches pin "+shortFingerprint(m.cfg.Pin)+"…")
+		m.sysLog(entrySystem, "Server key matches pin "+shortFingerprint(m.cfg.Pin)+"…")
 	case client.Disconnected:
 		m.conn.hasRTT = false
 		if e.Err == nil {
-			m.log(entrySystem, "Disconnected.")
+			m.sysLog(entrySystem, "Disconnected.")
 			return
 		}
 		text := "Connection lost: " + describeError(e.Err) + "."
 		if e.RetryIn > 0 {
 			text += " Retrying in " + formatDelay(e.RetryIn) + "."
 		}
-		m.log(entryWarn, text)
+		m.sysLog(entryWarn, text)
 	case client.Failed:
 		m.conn.hasRTT = false
 		if m.conn.blocked {
-			m.log(entryError, "Connection blocked. qchat will not reconnect on its own.")
+			m.sysLog(entryError, "Connection blocked. qchat will not reconnect on its own.")
 			return
 		}
-		m.log(entryError, "Stopped: "+describeError(e.Err)+". qchat will not reconnect on its own.")
+		m.sysLog(entryError, "Stopped: "+describeError(e.Err)+". qchat will not reconnect on its own.")
 	}
 }
 
-// log appends a one-line message.
+// log appends a one-line message to the open conversation.
 func (m *Model) log(kind entryKind, text string) {
 	m.add(entry{kind: kind, text: sanitizeText(text)})
+}
+
+// sysLog appends a one-line message to the System conversation.
+func (m *Model) sysLog(kind entryKind, text string) {
+	m.addTo(systemKey, entry{kind: kind, text: sanitizeText(text)})
 }
 
 // addOutput appends command output and scrolls to it.
@@ -427,24 +549,47 @@ func (m *Model) addOutput(title string, rows []row, note string) {
 	m.history.GotoBottom()
 }
 
-// add appends an entry, keeping the view pinned to the bottom if it was.
+// add appends an entry to the open conversation, keeping the view pinned to
+// the bottom if it was.
 func (m *Model) add(e entry) {
-	e.at = m.cfg.Now()
-	m.entries = append(m.entries, e)
-	if len(m.entries) > maxEntries {
-		m.entries = append([]entry(nil), m.entries[len(m.entries)-maxEntries:]...)
+	m.addTo(m.open, e)
+}
+
+// addTo appends an entry to a conversation. Warnings and errors in a
+// conversation that is not open count as unread.
+func (m *Model) addTo(key string, e entry) {
+	c := m.conv(key)
+	if c == nil {
+		return
+	}
+	if e.at.IsZero() {
+		e.at = m.cfg.Now()
+	}
+	c.entries = append(c.entries, e)
+	trimmed := len(c.entries) > maxEntries
+	if trimmed {
+		c.entries = append([]entry(nil), c.entries[len(c.entries)-maxEntries:]...)
+	}
+	if key != m.open {
+		if e.kind == entryWarn || e.kind == entryError || e.kind == entryAlert {
+			c.unread++
+		}
+		return
+	}
+	if trimmed {
 		m.renderedWidth = 0
 	}
 	if m.renderedWidth > 0 {
-		if len(m.entries) > 1 && (e.standsAlone() || m.entries[len(m.entries)-2].standsAlone()) {
-			m.renderedLines = append(m.renderedLines, "")
+		if n := len(c.entries); n > 1 {
+			m.renderedLines = append(m.renderedLines, separator(c.entries[n-2], e, m.renderedWidth, m.st)...)
 		}
 		m.renderedLines = append(m.renderedLines, renderEntry(e, m.renderedWidth, m.st)...)
 	}
 	m.syncHistory()
 }
 
-// refreshHistory re-renders every entry, after a width change or /clear.
+// refreshHistory re-renders every entry of the open conversation, after a
+// width change, a switch of conversation or a change to an entry.
 func (m *Model) refreshHistory() {
 	m.renderedWidth = 0
 	m.syncHistory()
@@ -458,7 +603,7 @@ func (m *Model) syncHistory() {
 		return
 	}
 	if m.renderedWidth != width {
-		m.renderedLines = renderEntries(m.entries, width, m.st)
+		m.renderedLines = renderEntries(m.openConv().entries, width, m.st)
 		m.renderedWidth = width
 	}
 	atBottom := m.history.AtBottom()
@@ -496,6 +641,19 @@ func describeError(err error) string {
 		return "the connection dropped"
 	}
 	return "cannot reach the server (" + truncate(rootCause(err), 120) + ")"
+}
+
+// describeBackendError renders an error returned by the Backend as one
+// sanitised line.
+func describeBackendError(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	msg := strings.TrimSuffix(cleanLine(err.Error(), 300), ".")
+	if msg == "" {
+		return "unknown error"
+	}
+	return msg
 }
 
 // rootCause returns the message of the innermost wrapped error, which for
