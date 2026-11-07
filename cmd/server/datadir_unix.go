@@ -104,9 +104,26 @@ func keyFileExposure(path string) (string, error) {
 	return "", nil
 }
 
-// createIfMissing creates an empty file at path that only the current user
-// can read and write, and leaves an existing file unchanged.
-func (*fileProtection) createIfMissing(path string) error {
+// prepareDatabaseDir creates the database directory with mode 0700, or
+// verifies an existing one like the data directory. The server account
+// needs write access to it; on Unix that is the account running init.
+func (*fileProtection) prepareDatabaseDir(dir string, stderr io.Writer) error {
+	if err := os.MkdirAll(filepath.Dir(dir), dataDirMode); err != nil {
+		return fmt.Errorf("create database directory: %w", err)
+	}
+	err := os.Mkdir(dir, dataDirMode)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("create database directory: %w", err)
+	}
+	return checkExistingDataDir(dir, stderr)
+}
+
+// createDatabaseFile creates an empty file at path that only the current
+// user can read and write, and leaves an existing file unchanged.
+func (*fileProtection) createDatabaseFile(path string) error {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, dataFileMode)
 	if errors.Is(err, fs.ErrExist) {
 		return nil

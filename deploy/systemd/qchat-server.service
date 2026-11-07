@@ -11,7 +11,15 @@ ExecStart=/usr/local/bin/qchat-server run --config /etc/qchat/server.toml
 Restart=on-failure
 RestartSec=5
 
+# ProtectSystem=strict makes /etc read-only for the server, which is what
+# keeps a compromised server from altering its key and configuration in
+# /etc/qchat. The database must therefore live in the writable state
+# directory: server.toml needs database = "/var/lib/qchat/qchat.db", which
+# "qchat-server init --database /var/lib/qchat/qchat.db" writes (see
+# README.md next to this file). With the default db/qchat.db, below
+# /etc/qchat, the server cannot open its database and does not start.
 StateDirectory=qchat
+StateDirectoryMode=0700
 ReadWritePaths=/var/lib/qchat
 
 NoNewPrivileges=yes

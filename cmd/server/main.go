@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	qchat-server init --data-dir DIR [--host NAME]... [--listen ADDR] [--service-account NAME] [--force]
+//	qchat-server init --data-dir DIR [--host NAME]... [--listen ADDR] [--database PATH] [--service-account NAME] [--force]
 //	qchat-server run --config FILE
 //	qchat-server fingerprint (--config FILE | --data-dir DIR)
 //	qchat-server invite create [--config FILE] [--uses N] [--ttl DURATION]
@@ -12,7 +12,7 @@
 //
 // "init" creates a data directory holding a fresh server identity
 // (server.key, server.crt), a configuration file (server.toml) and the
-// database of registered identities and invites (qchat.db). "run"
+// database of registered identities and invites (db/qchat.db). "run"
 // starts the server; on Windows it also runs as a service (see
 // deploy/windows/README.md). "fingerprint" prints the public key
 // fingerprint that clients pin. "invite" creates, lists and prunes the

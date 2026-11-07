@@ -34,7 +34,11 @@ import (
 // The account that runs the service needs read access as well. A virtual
 // service account such as "NT SERVICE\qchat-server" exists only once the
 // service is registered, so init cannot add it by default; --service-account
-// adds a read-only entry for it (see deploy/windows/README.md).
+// adds a read-only entry for it (see deploy/windows/README.md). The
+// database directory (db\ by default) is created with the same protected
+// ACL, except that the service account may modify it and every file in it:
+// SQLite writes the database and creates and deletes its -wal and -shm
+// files there.
 const (
 	protectedDirSDDL  = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"
 	protectedFileSDDL = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)"
@@ -44,6 +48,13 @@ const (
 	// compromised server process cannot alter its key or configuration.
 	serviceAccountDirACE  = "(A;OICI;FRFX;;;%s)"
 	serviceAccountFileACE = "(A;;FRFX;;;%s)"
+
+	// serviceAccountDBDirACE and serviceAccountDBFileACE grant Modify
+	// (0x1301bf: read, write, execute and delete, but neither WRITE_DAC,
+	// WRITE_OWNER nor FILE_DELETE_CHILD), inherited by every file created
+	// in the database directory.
+	serviceAccountDBDirACE  = "(A;OICI;0x1301bf;;;%s)"
+	serviceAccountDBFileACE = "(A;;0x1301bf;;;%s)"
 )
 
 // fileDeleteChild is FILE_DELETE_CHILD, which golang.org/x/sys/windows does
@@ -71,9 +82,11 @@ var broadSIDs = []struct {
 }
 
 // fileProtection holds the security attributes applied to every file init
-// writes into the data directory.
+// writes into the data directory, and to the database directory and file.
 type fileProtection struct {
-	attributes *windows.SecurityAttributes
+	attributes       *windows.SecurityAttributes
+	dbDirAttributes  *windows.SecurityAttributes
+	dbFileAttributes *windows.SecurityAttributes
 }
 
 // prepareDataDir creates dir with a protected ACL, or verifies that an
@@ -82,6 +95,7 @@ type fileProtection struct {
 // and the files written into it.
 func prepareDataDir(dir, serviceAccount string, _ io.Writer) (*fileProtection, error) {
 	dirSDDL, fileSDDL := protectedDirSDDL, protectedFileSDDL
+	dbDirSDDL, dbFileSDDL := protectedDirSDDL, protectedFileSDDL
 	if serviceAccount != "" {
 		sid, err := resolveServiceAccount(serviceAccount)
 		if err != nil {
@@ -89,36 +103,60 @@ func prepareDataDir(dir, serviceAccount string, _ io.Writer) (*fileProtection, e
 		}
 		dirSDDL += fmt.Sprintf(serviceAccountDirACE, sid)
 		fileSDDL += fmt.Sprintf(serviceAccountFileACE, sid)
+		dbDirSDDL += fmt.Sprintf(serviceAccountDBDirACE, sid)
+		dbFileSDDL += fmt.Sprintf(serviceAccountDBFileACE, sid)
 	}
-	dirAttributes, err := securityAttributes(dirSDDL)
-	if err != nil {
+	var protection fileProtection
+	var dirAttributes *windows.SecurityAttributes
+	for _, entry := range []struct {
+		sddl   string
+		target **windows.SecurityAttributes
+	}{
+		{dirSDDL, &dirAttributes},
+		{fileSDDL, &protection.attributes},
+		{dbDirSDDL, &protection.dbDirAttributes},
+		{dbFileSDDL, &protection.dbFileAttributes},
+	} {
+		attributes, err := securityAttributes(entry.sddl)
+		if err != nil {
+			return nil, err
+		}
+		*entry.target = attributes
+	}
+	if err := createProtectedDir(dir, dirAttributes, "data directory"); err != nil {
 		return nil, err
 	}
-	fileAttributes, err := securityAttributes(fileSDDL)
-	if err != nil {
-		return nil, err
-	}
+	return &protection, nil
+}
 
+// prepareDatabaseDir creates the database directory with the protected ACL
+// that lets the service account modify the database, or verifies an
+// existing directory like the data directory.
+func (p *fileProtection) prepareDatabaseDir(dir string, _ io.Writer) error {
+	return createProtectedDir(dir, p.dbDirAttributes, "database directory")
+}
+
+// createProtectedDir creates the parents of dir and then dir itself with
+// attributes, or verifies that an existing dir is safe to use.
+func createProtectedDir(dir string, attributes *windows.SecurityAttributes, what string) error {
 	if parent := filepath.Dir(dir); parent != dir {
 		if err := os.MkdirAll(parent, dataDirMode); err != nil {
-			return nil, fmt.Errorf("create data directory: %w", err)
+			return fmt.Errorf("create %s: %w", what, err)
 		}
 	}
 	name, err := windows.UTF16PtrFromString(dir)
 	if err != nil {
-		return nil, fmt.Errorf("create data directory: %w", err)
+		return fmt.Errorf("create %s: %w", what, err)
 	}
-	err = windows.CreateDirectory(name, dirAttributes)
+	err = windows.CreateDirectory(name, attributes)
 	switch {
 	case err == nil:
+		return nil
 	case errors.Is(err, windows.ERROR_ALREADY_EXISTS):
-		if err := checkExistingDataDir(dir); err != nil {
-			return nil, err
-		}
+		return checkExistingDataDir(dir)
 	default:
-		return nil, fmt.Errorf("create data directory: %w", &fs.PathError{Op: "mkdir", Path: dir, Err: err})
+		return fmt.Errorf("create %s: %w", what, &fs.PathError{Op: "mkdir", Path: dir, Err: err})
 	}
-	return &fileProtection{attributes: fileAttributes}, nil
 }
 
 // resolveServiceAccount returns the SID of account, given either as a SID
@@ -326,14 +364,15 @@ func keyFileExposure(path string) (string, error) {
 	return "access control list grants " + strings.Join(exposed, ", "), nil
 }
 
-// createIfMissing creates an empty file at path with the protected ACL,
-// atomically at creation, and leaves an existing file unchanged.
-func (p *fileProtection) createIfMissing(path string) error {
+// createDatabaseFile creates an empty database file at path with the
+// protected ACL of the database directory, atomically at creation, and
+// leaves an existing file unchanged.
+func (p *fileProtection) createDatabaseFile(path string) error {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return err
 	}
-	handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, p.attributes,
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, p.dbFileAttributes,
 		windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if errors.Is(err, windows.ERROR_FILE_EXISTS) {
 		return nil

@@ -60,7 +60,7 @@ func allowedACEs(t *testing.T, path string) []*windows.ACCESS_ALLOWED_ACE {
 
 func TestInitAppliesProtectedACL(t *testing.T) {
 	dir, _ := initDataDir(t)
-	for _, path := range []string{dir, filepath.Join(dir, keyFileName), filepath.Join(dir, certFileName), filepath.Join(dir, configFileName), filepath.Join(dir, server.DefaultDatabase)} {
+	for _, path := range []string{dir, filepath.Join(dir, keyFileName), filepath.Join(dir, certFileName), filepath.Join(dir, configFileName), filepath.Join(dir, server.DefaultDatabase), filepath.Dir(filepath.Join(dir, server.DefaultDatabase))} {
 		for _, ace := range allowedACEs(t, path) {
 			if label := broadSIDLabel(aceSID(ace)); label != "" {
 				t.Errorf("%s: ACE grants %#x to %s", path, ace.Mask, label)
@@ -92,6 +92,53 @@ func TestInitServiceAccountGetsReadAccess(t *testing.T) {
 		if !found {
 			t.Errorf("%s: no ACE for the service account", path)
 		}
+	}
+}
+
+func TestInitServiceAccountGetsDatabaseWriteAccess(t *testing.T) {
+	const localService = "S-1-5-19"
+	dir, _ := initDataDir(t, "--service-account", localService)
+	dbPath := filepath.Join(dir, server.DefaultDatabase)
+	const modify = windows.FILE_READ_DATA | windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.DELETE
+	const forbidden = windows.WRITE_DAC | windows.WRITE_OWNER | fileDeleteChild | windows.GENERIC_ALL
+	for _, path := range []string{filepath.Dir(dbPath), dbPath} {
+		var found bool
+		for _, ace := range allowedACEs(t, path) {
+			if aceSID(ace).String() != localService {
+				continue
+			}
+			found = true
+			if ace.Mask&modify != modify {
+				t.Errorf("%s: service account lacks modify access (mask %#x)", path, ace.Mask)
+			}
+			if ace.Mask&forbidden != 0 {
+				t.Errorf("%s: service account may change permissions (mask %#x)", path, ace.Mask)
+			}
+			if path != dbPath && ace.Header.AceFlags&(windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE) == 0 {
+				t.Errorf("%s: service account entry is not inheritable", path)
+			}
+		}
+		if !found {
+			t.Errorf("%s: no ACE for the service account", path)
+		}
+	}
+	for _, path := range []string{dir, filepath.Join(dir, configFileName), filepath.Join(dir, certFileName)} {
+		for _, ace := range allowedACEs(t, path) {
+			if aceSID(ace).String() == localService && ace.Mask&broadWriteRights != 0 {
+				t.Errorf("%s: service account has write access (mask %#x)", path, ace.Mask)
+			}
+		}
+	}
+}
+
+func TestInitRefusesServiceAccountDatabaseInDataDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	code, _, stderr := runCLI(t, "init", "--data-dir", dir, "--service-account", "S-1-5-19", "--database", "qchat.db")
+	if code != 2 || !strings.Contains(stderr, "--database") {
+		t.Fatalf("init with database in data dir: exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Error("data directory created although init failed")
 	}
 }
 

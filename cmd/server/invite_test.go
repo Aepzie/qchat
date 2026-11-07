@@ -43,6 +43,44 @@ func TestInitCreatesDatabase(t *testing.T) {
 	}
 }
 
+func TestInitDatabaseFlag(t *testing.T) {
+	elsewhere := filepath.Join(t.TempDir(), "state", "qchat.db")
+	cases := []struct {
+		name, flag string
+		want       func(dir string) string
+	}{
+		{"absolute", elsewhere, func(string) string { return elsewhere }},
+		{"relative", "store/relay.db", func(dir string) string { return filepath.Join(dir, "store", "relay.db") }},
+		{"data directory", "qchat.db", func(dir string) string { return filepath.Join(dir, "qchat.db") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, _ := initDataDir(t, "--database", tc.flag)
+			cfg, err := server.LoadConfig(filepath.Join(dir, configFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := tc.want(dir); cfg.Database != want {
+				t.Fatalf("configured database %q, want %q", cfg.Database, want)
+			}
+			db, err := serverdb.Open(cfg.Database)
+			if err != nil {
+				t.Fatalf("database created by init does not open: %v", err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, server.DefaultDatabase)); err == nil {
+				t.Error("default database created although --database was given")
+			}
+		})
+	}
+	code, _, stderr := runCLI(t, "init", "--data-dir", filepath.Join(t.TempDir(), "d"), "--database", "bad?.db")
+	if code != 1 || !strings.Contains(stderr, "database") {
+		t.Fatalf("invalid --database: exit %d, stderr %q", code, stderr)
+	}
+}
+
 func TestInitForceKeepsDatabase(t *testing.T) {
 	dir, _ := initDataDir(t)
 	dbPath := filepath.Join(dir, server.DefaultDatabase)
