@@ -114,6 +114,8 @@ type session struct {
 	number      uint64
 	limiter     *rate.Limiter
 	authLimiter *rate.Limiter
+	// multiLimiter counts the recipients named in SendMulti requests.
+	multiLimiter *rate.Limiter
 	// prekeyLimiter bounds PrekeyRequest and uploadLimiter PrekeyUpload.
 	prekeyLimiter *rate.Limiter
 	uploadLimiter *rate.Limiter
@@ -153,6 +155,7 @@ func newSession(srv *Server, conn *websocket.Conn, binding []byte) *session {
 		limiter:       rate.NewLimiter(rate.Limit(limits.FramesPerSecond), limits.Burst),
 		authLimiter:   rate.NewLimiter(srv.authRate, srv.authBurst),
 		prekeyLimiter: rate.NewLimiter(srv.prekeyRate, srv.prekeyBurst),
+		multiLimiter:  rate.NewLimiter(rate.Limit(float64(limits.MultiRecipientsPerMinute)/60), MultiRecipientsBurst),
 		uploadLimiter: rate.NewLimiter(srv.uploadRate, srv.uploadBurst),
 		out:           make(chan []byte, outboundQueueSize),
 		queue:         newByteBudget(limits.MaxQueueBytes),
