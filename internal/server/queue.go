@@ -18,6 +18,10 @@ const (
 	backlogWindow = 32
 	// pruneInterval is how often expired messages are deleted.
 	pruneInterval = 10 * time.Minute
+	// multiSendMaxWait bounds how long a session waits for the frame tokens
+	// a SendMulti costs beyond its own frame. The wait is also capped at half
+	// the idle timeout.
+	multiSendMaxWait = 10 * time.Second
 )
 
 // backlog tracks the stored messages a session pushes after

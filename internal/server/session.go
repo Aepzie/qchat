@@ -229,6 +229,8 @@ func (s *session) dispatch(frame protocol.Frame) bool {
 		return s.handleAck(frame)
 	case protocol.TypeSend:
 		return s.handleSend(frame)
+	case protocol.TypeSendMulti:
+		return s.handleSendMulti(frame)
 	default:
 		return s.fail(frame.ID, protocol.ErrCodeBadRequest)
 	}

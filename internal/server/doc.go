@@ -23,8 +23,8 @@
 // # Identities, authentication and routing
 //
 // A session starts unauthenticated. It may send Ping, Register and
-// AuthBegin; KeyRequest, PrekeyUpload, PrekeyRequest, Send and Ack require
-// authentication.
+// AuthBegin; KeyRequest, PrekeyUpload, PrekeyRequest, Send, SendMulti and
+// Ack require authentication.
 //
 //   - Register{Bundle, Invite} verifies the bundle's self-signature and
 //     stores it. With registration = "open" any valid bundle is accepted;
@@ -75,6 +75,18 @@
 //     has limits.max_queued_messages messages or limits.max_queued_bytes
 //     payload bytes stored, the Send fails with QueueFull and nothing is
 //     stored or pushed.
+//   - SendMulti{To, Payload} does the same for up to 256 distinct
+//     recipients at once, as group messaging needs: one copy of the payload
+//     is stored per recipient, each with its own queue ID, and pushed as an
+//     ordinary Deliver. All copies are stored in one transaction, so either
+//     every recipient gets the message or none does: an unknown recipient
+//     fails the request with NotFound and a full queue with QueueFull,
+//     neither naming the recipient. The request counts as one send per
+//     recipient: each copy counts toward its recipient's queue limits, and
+//     the request spends one token of the frame bucket per recipient. When
+//     the bucket lacks the extra tokens the session waits for them at the
+//     sustained rate for at most 10 seconds (or half the idle timeout),
+//     then answers a non-fatal RateLimited and stores nothing.
 //   - After AuthOK the session pushes the identity's stored messages in
 //     queue order, at most 32 awaiting acknowledgement at a time; each Ack
 //     lets it push the next one. Messages that arrive while the backlog is
@@ -113,19 +125,20 @@
 // Errors caused by the request's content or by relay state are answered
 // with an Error frame and the session continues:
 //
-//   - Unauthorized: KeyRequest, PrekeyUpload, PrekeyRequest, Send or Ack
-//     before authentication;
-//   - NotFound: AuthBegin, KeyRequest or Send naming an unknown ID, or
-//     PrekeyRequest for an ID without an unexpired signed prekey;
+//   - Unauthorized: KeyRequest, PrekeyUpload, PrekeyRequest, Send, SendMulti
+//     or Ack before authentication;
+//   - NotFound: AuthBegin, KeyRequest, Send or SendMulti naming an unknown
+//     ID, or PrekeyRequest for an ID without an unexpired signed prekey;
 //   - RegistrationDenied: a new ID without a valid invite code;
 //   - Conflict: a different bundle for a known ID without a higher serial;
 //   - BadRequest: a Register bundle or uploaded prekey that does not verify,
-//     or Send to the sender's own ID;
-//   - TooLarge: a Send payload above limits.max_message_size;
-//   - QueueFull: a Send to a recipient whose stored messages reached
-//     limits.max_queued_messages or limits.max_queued_bytes;
+//     or Send or SendMulti to the sender's own ID;
+//   - TooLarge: a Send or SendMulti payload above limits.max_message_size;
+//   - QueueFull: a Send or SendMulti to a recipient whose stored messages
+//     reached limits.max_queued_messages or limits.max_queued_bytes;
 //   - RateLimited: Register, AuthBegin, PrekeyUpload or PrekeyRequest over
-//     its per-session bucket;
+//     its per-session bucket, or SendMulti whose extra frame tokens do not
+//     arrive in time;
 //   - Internal: a database failure.
 //
 // Protocol violations are answered with an Error frame followed by a close
