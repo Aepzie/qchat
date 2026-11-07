@@ -165,3 +165,31 @@ func TestCloseLeavesNoWAL(t *testing.T) {
 		t.Fatalf("-wal file has %d bytes after Close", info.Size())
 	}
 }
+
+func TestConcurrentOpenOfNewDatabase(t *testing.T) {
+	const openers = 8
+	for round := range 10 {
+		path := filepath.Join(t.TempDir(), "qchat.db")
+		start := make(chan struct{})
+		results := make(chan error, openers)
+		for range openers {
+			go func() {
+				<-start
+				db, err := Open(path)
+				if err == nil {
+					err = db.Close()
+				}
+				results <- err
+			}()
+		}
+		close(start)
+		for range openers {
+			if err := <-results; err != nil {
+				t.Fatalf("round %d: concurrent Open: %v", round, err)
+			}
+		}
+		if n := countMigrations(t, path); n != len(migrations) {
+			t.Fatalf("round %d: %d migrations recorded, want %d", round, n, len(migrations))
+		}
+	}
+}

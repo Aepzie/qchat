@@ -34,6 +34,25 @@ var (
 // connection before failing with SQLITE_BUSY.
 const busyTimeout = 5 * time.Second
 
+// Retry policy for switching a new database to WAL mode. SQLite reports
+// SQLITE_BUSY at once, without consulting the busy timeout, when another
+// connection holds a lock it cannot wait for, which happens when several
+// processes open a brand-new database at the same time. The first attempt
+// waits journalRetryBase, every further one twice as long up to
+// journalRetryMax, for at most journalAttempts attempts (about 3 seconds).
+const (
+	journalAttempts  = 12
+	journalRetryBase = 5 * time.Millisecond
+	journalRetryMax  = 500 * time.Millisecond
+)
+
+// sqliteCodeBusy and sqliteCodeLocked are the primary SQLite result codes
+// SQLITE_BUSY and SQLITE_LOCKED.
+const (
+	sqliteCodeBusy   = 5
+	sqliteCodeLocked = 6
+)
+
 // DB is an open relay database. It is safe for concurrent use.
 type DB struct {
 	sql *sql.DB
@@ -56,7 +75,7 @@ func Open(path string) (*DB, error) {
 	db := &DB{sql: conn, now: time.Now}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*busyTimeout)
 	defer cancel()
-	if err := db.checkJournalMode(ctx); err != nil {
+	if err := db.checkJournalModeWithRetry(ctx); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -98,6 +117,39 @@ func prepareFile(path string) error {
 		return errors.New("not a regular file")
 	}
 	return restrictFile(path)
+}
+
+// checkJournalModeWithRetry runs checkJournalMode, retrying with
+// exponential backoff while the database is busy or locked. A connection
+// whose setup failed is discarded by the pool, so each attempt opens a
+// fresh one and applies every pragma again.
+func (db *DB) checkJournalModeWithRetry(ctx context.Context) error {
+	delay := journalRetryBase
+	for attempt := 1; ; attempt++ {
+		err := db.checkJournalMode(ctx)
+		if err == nil || attempt == journalAttempts || !isBusy(err) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return err
+		case <-timer.C:
+		}
+		delay = min(2*delay, journalRetryMax)
+	}
+}
+
+// isBusy reports whether err is an SQLITE_BUSY or SQLITE_LOCKED error,
+// including their extended codes.
+func isBusy(err error) bool {
+	var coded interface{ Code() int }
+	if !errors.As(err, &coded) {
+		return false
+	}
+	primary := coded.Code() & 0xff
+	return primary == sqliteCodeBusy || primary == sqliteCodeLocked
 }
 
 // checkJournalMode verifies that the database really is in WAL mode, which
