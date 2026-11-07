@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -67,6 +68,7 @@ var errorMessages = map[protocol.ErrorCode]string{
 	protocol.ErrCodeNotFound:           "not found",
 	protocol.ErrCodeRegistrationDenied: "registration denied",
 	protocol.ErrCodeConflict:           "conflict",
+	protocol.ErrCodeQueueFull:          "queue full",
 }
 
 // errorReasons maps the code of a fatal Error frame to the matching close
@@ -112,7 +114,10 @@ type session struct {
 	number      uint64
 	limiter     *rate.Limiter
 	authLimiter *rate.Limiter
-	timer       *time.Timer
+	// prekeyLimiter bounds PrekeyRequest and uploadLimiter PrekeyUpload.
+	prekeyLimiter *rate.Limiter
+	uploadLimiter *rate.Limiter
+	timer         *time.Timer
 
 	out        chan []byte
 	queue      *byteBudget
@@ -131,22 +136,29 @@ type session struct {
 	challenge     *challenge
 	authenticated bool
 	id            identity.ID
+	backlog       backlog
+
+	// liveFloor is the lowest queue ID pushed to this session by deliver,
+	// or 0. It is written by the senders' sessions and read by the reader.
+	liveFloor atomic.Uint64
 }
 
 func newSession(srv *Server, conn *websocket.Conn, binding []byte) *session {
 	limits := srv.cfg.Limits
 	return &session{
-		srv:         srv,
-		conn:        conn,
-		binding:     binding,
-		number:      rand.Uint64(),
-		limiter:     rate.NewLimiter(rate.Limit(limits.FramesPerSecond), limits.Burst),
-		authLimiter: rate.NewLimiter(srv.authRate, srv.authBurst),
-		out:         make(chan []byte, outboundQueueSize),
-		queue:       newByteBudget(limits.MaxQueueBytes),
-		stopping:    make(chan struct{}),
-		writerDone:  make(chan struct{}),
-		closed:      make(chan struct{}),
+		srv:           srv,
+		conn:          conn,
+		binding:       binding,
+		number:        rand.Uint64(),
+		limiter:       rate.NewLimiter(rate.Limit(limits.FramesPerSecond), limits.Burst),
+		authLimiter:   rate.NewLimiter(srv.authRate, srv.authBurst),
+		prekeyLimiter: rate.NewLimiter(srv.prekeyRate, srv.prekeyBurst),
+		uploadLimiter: rate.NewLimiter(srv.uploadRate, srv.uploadBurst),
+		out:           make(chan []byte, outboundQueueSize),
+		queue:         newByteBudget(limits.MaxQueueBytes),
+		stopping:      make(chan struct{}),
+		writerDone:    make(chan struct{}),
+		closed:        make(chan struct{}),
 	}
 }
 
@@ -209,6 +221,12 @@ func (s *session) dispatch(frame protocol.Frame) bool {
 		return s.handleAuthProof(frame)
 	case protocol.TypeKeyRequest:
 		return s.handleKeyRequest(frame)
+	case protocol.TypePrekeyUpload:
+		return s.handlePrekeyUpload(frame)
+	case protocol.TypePrekeyRequest:
+		return s.handlePrekeyRequest(frame)
+	case protocol.TypeAck:
+		return s.handleAck(frame)
 	case protocol.TypeSend:
 		return s.handleSend(frame)
 	default:

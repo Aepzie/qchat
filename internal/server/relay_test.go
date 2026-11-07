@@ -368,12 +368,18 @@ func sendMessage(t *testing.T, conn *websocket.Conn, id uint64, to []byte, paylo
 	sendFrame(t, conn, protocol.TypeSend, id, protocol.Send{To: to, Payload: payload})
 }
 
-func expectDeliver(t *testing.T, conn *websocket.Conn, from []byte, payload []byte) {
+// expectDeliver reads a Deliver frame, checks its sender and payload and
+// returns its queue ID.
+func expectDeliver(t *testing.T, conn *websocket.Conn, from []byte, payload []byte) uint64 {
 	t.Helper()
 	deliver := expectBody[protocol.Deliver](t, conn, protocol.TypeDeliver, 0)
 	if !bytes.Equal(deliver.From, from) || !bytes.Equal(deliver.Payload, payload) {
 		t.Fatalf("Deliver from %x payload %q, want %x and %q", deliver.From, deliver.Payload, from, payload)
 	}
+	if deliver.QueueID == 0 {
+		t.Fatal("Deliver without queue ID")
+	}
+	return deliver.QueueID
 }
 
 func expectSendResult(t *testing.T, conn *websocket.Conn, id uint64, want protocol.SendStatus) {
@@ -399,16 +405,16 @@ func TestSendAndDeliver(t *testing.T) {
 
 	payload := []byte("ciphertext for bob")
 	sendMessage(t, aliceConn, 60, bob.id(), payload)
-	expectSendResult(t, aliceConn, 60, protocol.SendDelivered)
+	expectSendResult(t, aliceConn, 60, protocol.SendAccepted)
 	expectDeliver(t, bobConn, alice.id(), payload)
 	expectDeliver(t, bobSecond, alice.id(), payload)
 
 	sendMessage(t, bobConn, 61, alice.id(), []byte("reply"))
-	expectSendResult(t, bobConn, 61, protocol.SendDelivered)
+	expectSendResult(t, bobConn, 61, protocol.SendAccepted)
 	expectDeliver(t, aliceConn, bob.id(), []byte("reply"))
 
 	sendMessage(t, aliceConn, 62, carol.id(), []byte("offline"))
-	expectSendResult(t, aliceConn, 62, protocol.SendRecipientOffline)
+	expectSendResult(t, aliceConn, 62, protocol.SendAccepted)
 
 	sendMessage(t, aliceConn, 63, newUser(t).id(), []byte("nobody"))
 	expectReject(t, aliceConn, 63, protocol.ErrCodeNotFound)
@@ -419,7 +425,7 @@ func TestSendAndDeliver(t *testing.T) {
 	sendMessage(t, aliceConn, 65, bob.id(), make([]byte, MinMessageSize+1))
 	expectReject(t, aliceConn, 65, protocol.ErrCodeTooLarge)
 	sendMessage(t, aliceConn, 66, bob.id(), make([]byte, MinMessageSize))
-	expectSendResult(t, aliceConn, 66, protocol.SendDelivered)
+	expectSendResult(t, aliceConn, 66, protocol.SendAccepted)
 	expectDeliver(t, bobConn, alice.id(), make([]byte, MinMessageSize))
 	expectDeliver(t, bobSecond, alice.id(), make([]byte, MinMessageSize))
 
@@ -431,7 +437,7 @@ func TestSendAndDeliver(t *testing.T) {
 		return len(ts.srv.routes) == 1
 	})
 	sendMessage(t, aliceConn, 67, bob.id(), []byte("gone"))
-	expectSendResult(t, aliceConn, 67, protocol.SendRecipientOffline)
+	expectSendResult(t, aliceConn, 67, protocol.SendAccepted)
 }
 
 // queueSession returns a routable session with a queue of frames frames and
@@ -472,10 +478,10 @@ func TestDeliveryDoesNotBlock(t *testing.T) {
 		t.Fatal("route refused a session below the per-identity limit")
 	}
 
-	if !srv.deliver(to, []byte{1}) {
+	if !srv.deliver(to, 1, []byte{1}) {
 		t.Fatal("delivery to a session with room was not accepted")
 	}
-	if srv.deliver(to, []byte{2}) {
+	if srv.deliver(to, 1, []byte{2}) {
 		t.Fatal("delivery to full and stopping sessions was accepted")
 	}
 	if got := <-full.out; !bytes.Equal(got, []byte{1}) {
@@ -499,13 +505,13 @@ func TestDeliveryBoundedBySessionBytes(t *testing.T) {
 	slow := queueSession(srv, outboundQueueSize, 100)
 	srv.route(slow, to)
 
-	if !srv.deliver(to, make([]byte, 60)) {
+	if !srv.deliver(to, 1, make([]byte, 60)) {
 		t.Fatal("first delivery was not accepted")
 	}
-	if srv.deliver(to, make([]byte, 60)) {
+	if srv.deliver(to, 1, make([]byte, 60)) {
 		t.Fatal("delivery beyond the session byte limit was accepted")
 	}
-	if !srv.deliver(to, make([]byte, 40)) {
+	if !srv.deliver(to, 1, make([]byte, 40)) {
 		t.Fatal("delivery that fits the remaining bytes was not accepted")
 	}
 	if used := srv.queueBudget.inUse(); used != 100 {
@@ -526,14 +532,14 @@ func TestDeliveryBoundedByServerBytes(t *testing.T) {
 	srv.route(hog, first)
 	srv.route(other, second)
 
-	if !srv.deliver(first, make([]byte, DefaultMaxQueueBytes)) {
+	if !srv.deliver(first, 1, make([]byte, DefaultMaxQueueBytes)) {
 		t.Fatal("delivery filling the server budget was not accepted")
 	}
-	if srv.deliver(second, []byte{1}) {
+	if srv.deliver(second, 1, []byte{1}) {
 		t.Fatal("delivery was accepted with the server budget exhausted")
 	}
 	hog.discardQueued()
-	if !srv.deliver(second, []byte{1}) {
+	if !srv.deliver(second, 1, []byte{1}) {
 		t.Fatal("delivery was refused after the server budget was released")
 	}
 }
@@ -639,7 +645,7 @@ func TestRelayLogsContainNoClientData(t *testing.T) {
 	expectBody[protocol.AuthOK](t, bobConn, protocol.TypeAuthOK, 21)
 
 	sendMessage(t, aliceConn, 2, bob.id(), payload)
-	expectSendResult(t, aliceConn, 2, protocol.SendDelivered)
+	expectSendResult(t, aliceConn, 2, protocol.SendAccepted)
 	expectDeliver(t, bobConn, alice.id(), payload)
 	sendMessage(t, aliceConn, 3, alice.id(), payload)
 	expectReject(t, aliceConn, 3, protocol.ErrCodeBadRequest)

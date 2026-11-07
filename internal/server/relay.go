@@ -98,7 +98,10 @@ func (s *session) handleAuthProof(frame protocol.Frame) bool {
 	if !s.srv.route(s, pending.bundle.ID) {
 		return s.failTooManySessions(frame.ID)
 	}
-	return respond(s, protocol.TypeAuthOK, frame.ID, protocol.AuthOK{})
+	if !respond(s, protocol.TypeAuthOK, frame.ID, protocol.AuthOK{}) {
+		return false
+	}
+	return s.pumpBacklog()
 }
 
 // failTooManySessions answers an AuthProof for an identity that already has
@@ -124,43 +127,6 @@ func (s *session) handleKeyRequest(frame protocol.Frame) bool {
 		return s.reject(frame.ID, code)
 	}
 	return respond(s, protocol.TypeKeyResponse, frame.ID, protocol.KeyResponse{Bundle: raw})
-}
-
-// handleSend routes a payload to every live connection of a registered
-// recipient. The payload is never stored.
-//
-// The SendResult is a presence oracle: any authenticated user learns from
-// it whether a registered ID currently has a live session, without knowing
-// anything else about it. This is accepted until Phase 3, when the relay
-// queues messages for offline recipients and the result no longer tells the
-// two cases apart.
-func (s *session) handleSend(frame protocol.Frame) bool {
-	req, err := protocol.DecodeBody[protocol.Send](frame, protocol.TypeSend)
-	if err != nil {
-		return s.fail(frame.ID, requestErrorCode(err))
-	}
-	if !s.authenticated {
-		return s.reject(frame.ID, protocol.ErrCodeUnauthorized)
-	}
-	if len(req.Payload) > s.srv.cfg.Limits.MaxMessageSize {
-		return s.reject(frame.ID, protocol.ErrCodeTooLarge)
-	}
-	to := identity.ID(req.To)
-	if to == s.id {
-		return s.reject(frame.ID, protocol.ErrCodeBadRequest)
-	}
-	if _, code, ok := s.srv.loadBundle(to); !ok {
-		return s.reject(frame.ID, code)
-	}
-	deliver, err := encodeFrame(protocol.TypeDeliver, 0, protocol.Deliver{From: s.id[:], Payload: req.Payload})
-	if err != nil {
-		return s.reject(frame.ID, protocol.ErrCodeInternal)
-	}
-	status := protocol.SendRecipientOffline
-	if s.srv.deliver(to, deliver) {
-		status = protocol.SendDelivered
-	}
-	return respond(s, protocol.TypeSendResult, frame.ID, protocol.SendResult{Status: status})
 }
 
 // storeIdentity stores a verified bundle according to the registration
@@ -253,20 +219,4 @@ func (s *Server) unroute(sess *session) {
 	if len(set) == 0 {
 		delete(s.routes, sess.id)
 	}
-}
-
-// deliver offers an encoded Deliver frame to every live session of to,
-// without waiting for any of them. It reports whether at least one session
-// accepted it; a session whose queue or byte budget is full, or that finds
-// the server-wide byte budget exhausted, misses the frame.
-func (s *Server) deliver(to identity.ID, encoded []byte) bool {
-	s.routesMu.Lock()
-	defer s.routesMu.Unlock()
-	delivered := false
-	for sess := range s.routes[to] {
-		if sess.offer(encoded) {
-			delivered = true
-		}
-	}
-	return delivered
 }

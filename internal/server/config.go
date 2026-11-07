@@ -21,24 +21,28 @@ import (
 
 // Default configuration values. They are also written by "qchat-server init".
 const (
-	DefaultListen               = "0.0.0.0:7443"
-	DefaultTLSCert              = "server.crt"
-	DefaultTLSKey               = "server.key"
-	DefaultDatabase             = "db/qchat.db"
-	DefaultRegistration         = RegistrationInvite
-	DefaultMaxConnections       = 1000
-	DefaultMaxConnectionsPerIP  = 16
-	DefaultMaxPendingHandshakes = 64
-	DefaultMaxFrameSize         = protocol.MaxFrameSize
-	DefaultMaxMessageSize       = 256 << 10
-	DefaultMaxQueueBytes        = 2 << 20
-	DefaultMaxTotalQueueBytes   = 256 << 20
-	DefaultMaxSessionsPerID     = 4
-	DefaultFramesPerSecond      = 20.0
-	DefaultBurst                = 40
-	DefaultHandshakeTimeout     = 10 * time.Second
-	DefaultPingInterval         = 30 * time.Second
-	DefaultLogLevel             = "info"
+	DefaultListen                = "0.0.0.0:7443"
+	DefaultTLSCert               = "server.crt"
+	DefaultTLSKey                = "server.key"
+	DefaultDatabase              = "db/qchat.db"
+	DefaultRegistration          = RegistrationInvite
+	DefaultMaxConnections        = 1000
+	DefaultMaxConnectionsPerIP   = 16
+	DefaultMaxPendingHandshakes  = 64
+	DefaultMaxFrameSize          = protocol.MaxFrameSize
+	DefaultMaxMessageSize        = 256 << 10
+	DefaultMaxQueueBytes         = 2 << 20
+	DefaultMaxTotalQueueBytes    = 256 << 20
+	DefaultMaxSessionsPerID      = 4
+	DefaultFramesPerSecond       = 20.0
+	DefaultBurst                 = 40
+	DefaultHandshakeTimeout      = 10 * time.Second
+	DefaultPingInterval          = 30 * time.Second
+	DefaultUndeliveredTTL        = 7 * 24 * time.Hour
+	DefaultMaxQueuedMessages     = 1000
+	DefaultMaxQueuedBytes        = 64 << 20
+	DefaultPrekeyRequestsPerHour = 30
+	DefaultLogLevel              = "info"
 )
 
 // Values of Config.Registration.
@@ -63,6 +67,18 @@ const (
 	MinQueueBytes      = protocol.MaxFrameSize
 	MaxQueueBytes      = 1 << 30
 	MaxTotalQueueBytes = 1 << 40
+)
+
+// Bounds of the offline delivery settings. A recipient's stored messages
+// may always hold at least one payload of the largest size the protocol
+// allows.
+const (
+	MinUndeliveredTTL        = time.Hour
+	MaxUndeliveredTTL        = 30 * 24 * time.Hour
+	MaxQueuedMessages        = 1_000_000
+	MinQueuedBytes           = protocol.MaxFrameSize
+	MaxQueuedBytes           = 1 << 40
+	MaxPrekeyRequestsPerHour = 3600
 )
 
 // Bounds enforced by Config.Validate.
@@ -122,15 +138,19 @@ type Config struct {
 	// TLSKey is the path of the PEM private key, resolved like TLSCert.
 	TLSKey string `toml:"tls_key" comment:"PEM private key (keep it secret, mode 0600)."`
 	// Database is the path of the SQLite database holding registered
-	// identity bundles and invite code hashes, resolved like TLSCert. The
+	// identity bundles, prekeys, invite code hashes and undelivered
+	// end-to-end encrypted messages, resolved like TLSCert. The
 	// server account needs write access to the file and its directory,
 	// where SQLite creates the -wal and -shm files, so the database lives
 	// in a directory of its own: the server never needs write access to
 	// the directory holding its key and configuration. The directory must
 	// exist; "qchat-server init" creates it.
-	Database string `toml:"database" comment:"SQLite database of identity bundles and invite code hashes (never messages).\nRelative paths resolve against this file's directory. The server needs write access\nto the file and its directory (SQLite creates -wal and -shm files next to it)."`
+	Database string `toml:"database" comment:"SQLite database of identity bundles, prekeys, invite code hashes and the\nend-to-end encrypted messages waiting for delivery.\nRelative paths resolve against this file's directory. The server needs write access\nto the file and its directory (SQLite creates -wal and -shm files next to it)."`
 	// Registration is RegistrationInvite or RegistrationOpen.
 	Registration string `toml:"registration" comment:"Who may register a new identity: \"invite\" (requires a code from\n\"qchat-server invite create\") or \"open\" (anyone who can connect)."`
+	// UndeliveredTTL is how long the relay keeps a message its recipient has
+	// not acknowledged, between MinUndeliveredTTL and MaxUndeliveredTTL.
+	UndeliveredTTL Duration `toml:"undelivered_ttl" comment:"How long unacknowledged messages are kept for their recipient (1h to 720h)."`
 	// Limits bounds the resources a client can consume.
 	Limits Limits `toml:"limits"`
 	// Log configures logging.
@@ -179,6 +199,18 @@ type Limits struct {
 	// seconds between 1s and protocol.MaxPingInterval seconds. A session
 	// that sends nothing for 2*PingInterval+10s is closed.
 	PingInterval Duration `toml:"ping_interval" comment:"Keepalive interval announced to clients (whole seconds, 1s to 1h).\nSessions silent for twice this plus 10s are closed."`
+	// MaxQueuedMessages is the largest number of unacknowledged messages
+	// stored for one recipient, between 1 and MaxQueuedMessages. A Send
+	// beyond it fails with QueueFull.
+	MaxQueuedMessages int `toml:"max_queued_messages" comment:"Unacknowledged messages stored per recipient (1 to 1000000).\nFurther messages are refused with QueueFull."`
+	// MaxQueuedBytes bounds the total payload size of the unacknowledged
+	// messages stored for one recipient, between MinQueuedBytes and
+	// MaxQueuedBytes.
+	MaxQueuedBytes int64 `toml:"max_queued_bytes" comment:"Payload bytes of unacknowledged messages stored per recipient\n(1048576 to 1099511627776)."`
+	// PrekeyRequestsPerHour is the number of prekey bundles one session may
+	// fetch per hour, between 1 and MaxPrekeyRequestsPerHour. It slows the
+	// draining of other users' one-time prekeys.
+	PrekeyRequestsPerHour int `toml:"prekey_requests_per_hour" comment:"Prekey bundles a session may fetch per hour (1 to 3600)."`
 }
 
 // LogConfig configures logging.
@@ -191,11 +223,12 @@ type LogConfig struct {
 // configuration file leaves out.
 func DefaultConfig() Config {
 	return Config{
-		Listen:       DefaultListen,
-		TLSCert:      DefaultTLSCert,
-		TLSKey:       DefaultTLSKey,
-		Database:     DefaultDatabase,
-		Registration: DefaultRegistration,
+		Listen:         DefaultListen,
+		TLSCert:        DefaultTLSCert,
+		TLSKey:         DefaultTLSKey,
+		Database:       DefaultDatabase,
+		Registration:   DefaultRegistration,
+		UndeliveredTTL: DurationOf(DefaultUndeliveredTTL),
 		Limits: Limits{
 			MaxConnections:         DefaultMaxConnections,
 			MaxConnectionsPerIP:    DefaultMaxConnectionsPerIP,
@@ -209,6 +242,9 @@ func DefaultConfig() Config {
 			Burst:                  DefaultBurst,
 			HandshakeTimeout:       DurationOf(DefaultHandshakeTimeout),
 			PingInterval:           DurationOf(DefaultPingInterval),
+			MaxQueuedMessages:      DefaultMaxQueuedMessages,
+			MaxQueuedBytes:         DefaultMaxQueuedBytes,
+			PrekeyRequestsPerHour:  DefaultPrekeyRequestsPerHour,
 		},
 		Log: LogConfig{Level: DefaultLogLevel},
 	}
@@ -303,6 +339,9 @@ func (c Config) Validate() error {
 	if c.Registration != RegistrationInvite && c.Registration != RegistrationOpen {
 		return fmt.Errorf("config: registration must be %q or %q", RegistrationInvite, RegistrationOpen)
 	}
+	if ttl := c.UndeliveredTTL.Std(); ttl < MinUndeliveredTTL || ttl > MaxUndeliveredTTL {
+		return fmt.Errorf("config: undelivered_ttl must be between %s and %s", MinUndeliveredTTL, MaxUndeliveredTTL)
+	}
 	if err := c.Limits.validate(); err != nil {
 		return err
 	}
@@ -359,6 +398,12 @@ func (l Limits) validate() error {
 		return fmt.Errorf("config: limits.burst must be between 1 and %d", maxBurst)
 	case l.HandshakeTimeout.Std() <= 0 || l.HandshakeTimeout.Std() > maxHandshakeTimeout:
 		return fmt.Errorf("config: limits.handshake_timeout must be greater than 0 and at most %s", maxHandshakeTimeout)
+	case l.MaxQueuedMessages < 1 || l.MaxQueuedMessages > MaxQueuedMessages:
+		return fmt.Errorf("config: limits.max_queued_messages must be between 1 and %d", MaxQueuedMessages)
+	case l.MaxQueuedBytes < MinQueuedBytes || l.MaxQueuedBytes > MaxQueuedBytes:
+		return fmt.Errorf("config: limits.max_queued_bytes must be between %d and %d", MinQueuedBytes, int64(MaxQueuedBytes))
+	case l.PrekeyRequestsPerHour < 1 || l.PrekeyRequestsPerHour > MaxPrekeyRequestsPerHour:
+		return fmt.Errorf("config: limits.prekey_requests_per_hour must be between 1 and %d", MaxPrekeyRequestsPerHour)
 	}
 	return validatePingInterval(l.PingInterval.Std())
 }

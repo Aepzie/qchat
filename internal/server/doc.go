@@ -1,6 +1,7 @@
 // Package server implements the qchat relay server: configuration loading,
 // connection limits, the per-connection session protocol, identity
-// registration, authentication and message routing.
+// registration, authentication, prekey distribution, message routing and
+// offline delivery.
 //
 // # Session protocol (wire version 1)
 //
@@ -22,7 +23,8 @@
 // # Identities, authentication and routing
 //
 // A session starts unauthenticated. It may send Ping, Register and
-// AuthBegin; KeyRequest and Send require authentication.
+// AuthBegin; KeyRequest, PrekeyUpload, PrekeyRequest, Send and Ack require
+// authentication.
 //
 //   - Register{Bundle, Invite} verifies the bundle's self-signature and
 //     stores it. With registration = "open" any valid bundle is accepted;
@@ -41,16 +43,52 @@
 //     made on one TLS connection is useless on any other. On success the
 //     session is bound to that ID for its lifetime and answered with AuthOK.
 //   - KeyRequest{ID} returns the stored bundle exactly as registered.
-//   - Send{To, Payload} pushes Deliver{From, Payload} to every live
-//     authenticated session of To, where From is the sender's authenticated
-//     ID, and answers SendResult Delivered if at least one session took the
-//     frame, RecipientOffline otherwise. Payloads are never stored.
 //
-// SendResult is a presence oracle: any authenticated user can learn whether
-// a registered ID is online right now by sending it a message and reading
-// Delivered or RecipientOffline. This is accepted until Phase 3, when the
-// relay queues messages for offline recipients and stops telling the two
-// cases apart.
+// # Prekeys
+//
+//   - PrekeyUpload{SignedPrekey, OneTimePrekeys} verifies every prekey with
+//     package prekey against the session identity's stored bundle (owner,
+//     signature and, for the signed prekey, validity period). If any prekey
+//     fails, the upload is answered with BadRequest and nothing is stored.
+//     The relay keeps one signed prekey per identity, the one expiring last,
+//     and up to 200 one-time prekeys; key IDs already stored and prekeys
+//     beyond the cap are ignored. The answer is PrekeyStatus with the number
+//     of one-time prekeys left and the signed prekey's expiry (0 if none).
+//     An empty upload only asks for the status. Uploads draw from a
+//     per-session token bucket (burst 10, then one per minute), because each
+//     can cost 101 signature verifications.
+//   - PrekeyRequest{ID} answers PrekeyResponse{Bundle, SignedPrekey,
+//     OneTimePrekey}. The oldest one-time prekey is deleted in the same
+//     transaction, so each is handed out exactly once; once none is left the
+//     field is omitted. NotFound means the ID is unknown or has no unexpired
+//     signed prekey. Requests draw from a per-session token bucket of
+//     limits.prekey_requests_per_hour (burst of the same size), which slows
+//     draining another user's one-time prekeys.
+//
+// # Messages and offline delivery
+//
+//   - Send{To, Payload} stores the payload for the registered recipient To
+//     for undelivered_ttl, then pushes Deliver{From, Payload, QueueID} to
+//     every live authenticated session of To, where From is the sender's
+//     authenticated ID. It answers SendResult Accepted whether or not To is
+//     online, so the answer reveals nothing about presence. If To already
+//     has limits.max_queued_messages messages or limits.max_queued_bytes
+//     payload bytes stored, the Send fails with QueueFull and nothing is
+//     stored or pushed.
+//   - After AuthOK the session pushes the identity's stored messages in
+//     queue order, at most 32 awaiting acknowledgement at a time; each Ack
+//     lets it push the next one. Messages that arrive while the backlog is
+//     being pushed are delivered live and not pushed again by the backlog.
+//   - Ack{QueueID} deletes the message if it was stored for the session's
+//     identity; acknowledging anything else does nothing. Ack has no
+//     response. A message that is not acknowledged is pushed again after the
+//     identity's next authentication, so clients must tolerate duplicates.
+//   - Every 10 minutes, and when the server starts, expired messages are
+//     deleted. Expired messages are never delivered, even before that.
+//
+// Stored messages are ciphertext the relay cannot read. The sender ID is
+// stored alongside, because the recipient needs it; hiding it from the
+// relay (sealed sender) is left to a later phase.
 //
 // An identity may hold at most limits.max_sessions_per_identity
 // authenticated sessions at once. An AuthProof beyond that is answered with
@@ -66,22 +104,28 @@
 // when a frame has been written or its session has ended. Responses to the
 // session's own requests are never dropped: they wait for room in the
 // queue and in both byte budgets. A Deliver pushed by another session never
-// waits: if it does not fit, that delivery is dropped and, if no other
-// session of the recipient took it, reported as RecipientOffline.
+// waits: if it does not fit, that delivery is dropped; the message stays
+// stored and is pushed again after the recipient's next authentication.
+// Stored messages pushed after authentication are queued like responses.
 //
 // # Fatal and non-fatal errors
 //
 // Errors caused by the request's content or by relay state are answered
 // with an Error frame and the session continues:
 //
-//   - Unauthorized: KeyRequest or Send before authentication;
-//   - NotFound: AuthBegin, KeyRequest or Send naming an unknown ID;
+//   - Unauthorized: KeyRequest, PrekeyUpload, PrekeyRequest, Send or Ack
+//     before authentication;
+//   - NotFound: AuthBegin, KeyRequest or Send naming an unknown ID, or
+//     PrekeyRequest for an ID without an unexpired signed prekey;
 //   - RegistrationDenied: a new ID without a valid invite code;
 //   - Conflict: a different bundle for a known ID without a higher serial;
-//   - BadRequest: a Register bundle that does not verify, or Send to the
-//     sender's own ID;
+//   - BadRequest: a Register bundle or uploaded prekey that does not verify,
+//     or Send to the sender's own ID;
 //   - TooLarge: a Send payload above limits.max_message_size;
-//   - RateLimited: Register or AuthBegin over the per-session bucket;
+//   - QueueFull: a Send to a recipient whose stored messages reached
+//     limits.max_queued_messages or limits.max_queued_bytes;
+//   - RateLimited: Register, AuthBegin, PrekeyUpload or PrekeyRequest over
+//     its per-session bucket;
 //   - Internal: a database failure.
 //
 // Protocol violations are answered with an Error frame followed by a close
@@ -118,8 +162,10 @@
 // frame bodies or any other client-controlled string to its log. Addresses
 // are kept in memory only while a connection is open, to enforce the per-IP
 // connection limit; IDs of authenticated sessions only while they are
-// connected, to route messages. The database holds identity bundles and
-// invite code hashes, never messages.
+// connected, to route messages. The database holds identity bundles,
+// prekeys, invite code hashes and, until they are acknowledged or expire,
+// end-to-end encrypted messages with their sender and recipient IDs; it
+// holds no addresses and no delivery or read times.
 // Session events are logged at debug level with a random session number
 // that is meaningless outside the running process.
 package server
