@@ -119,6 +119,12 @@ only, except on `db` and the files in it, where `NT SERVICE\qchat-server` has
 German Windows. There must be no entry for `Users`, `Authenticated Users` or
 `Everyone`, and none marked `(I)` (inherited).
 
+Running `init --force --service-account "NT SERVICE\qchat-server"` again on
+an existing data directory keeps the database and adds the service
+account's `(M)` entry to `db` and `db\qchat.db` if it is missing; running it
+more than once changes nothing further. It replaces the key, though, so
+prefer the `icacls` commands below when clients are already pinned.
+
 If you created the data directory with an older version of `init` or without
 `--service-account`, either recreate it (which changes the fingerprint), or
 fix the ACL by hand with these SIDs, which work on every Windows language:

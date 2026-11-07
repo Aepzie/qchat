@@ -39,6 +39,12 @@ import (
 // ACL, except that the service account may modify it and every file in it:
 // SQLite writes the database and creates and deletes its -wal and -shm
 // files there.
+//
+// Running init again with --service-account on an existing database
+// directory and file adds the service account's Modify entry to them, once
+// they have passed the same checks as an existing data directory, so an
+// installation first set up without --service-account can be fixed by
+// re-running init --force.
 const (
 	protectedDirSDDL  = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"
 	protectedFileSDDL = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)"
@@ -55,6 +61,10 @@ const (
 	// in the database directory.
 	serviceAccountDBDirACE  = "(A;OICI;0x1301bf;;;%s)"
 	serviceAccountDBFileACE = "(A;;0x1301bf;;;%s)"
+
+	// serviceAccountModify is the access mask of serviceAccountDBDirACE
+	// and serviceAccountDBFileACE.
+	serviceAccountModify windows.ACCESS_MASK = 0x1301bf
 )
 
 // fileDeleteChild is FILE_DELETE_CHILD, which golang.org/x/sys/windows does
@@ -87,6 +97,7 @@ type fileProtection struct {
 	attributes       *windows.SecurityAttributes
 	dbDirAttributes  *windows.SecurityAttributes
 	dbFileAttributes *windows.SecurityAttributes
+	serviceAccount   *windows.SID
 }
 
 // prepareDataDir creates dir with a protected ACL, or verifies that an
@@ -96,17 +107,18 @@ type fileProtection struct {
 func prepareDataDir(dir, serviceAccount string, _ io.Writer) (*fileProtection, error) {
 	dirSDDL, fileSDDL := protectedDirSDDL, protectedFileSDDL
 	dbDirSDDL, dbFileSDDL := protectedDirSDDL, protectedFileSDDL
+	var protection fileProtection
 	if serviceAccount != "" {
 		sid, err := resolveServiceAccount(serviceAccount)
 		if err != nil {
 			return nil, err
 		}
+		protection.serviceAccount = sid
 		dirSDDL += fmt.Sprintf(serviceAccountDirACE, sid)
 		fileSDDL += fmt.Sprintf(serviceAccountFileACE, sid)
 		dbDirSDDL += fmt.Sprintf(serviceAccountDBDirACE, sid)
 		dbFileSDDL += fmt.Sprintf(serviceAccountDBFileACE, sid)
 	}
-	var protection fileProtection
 	var dirAttributes *windows.SecurityAttributes
 	for _, entry := range []struct {
 		sddl   string
@@ -123,7 +135,7 @@ func prepareDataDir(dir, serviceAccount string, _ io.Writer) (*fileProtection, e
 		}
 		*entry.target = attributes
 	}
-	if err := createProtectedDir(dir, dirAttributes, "data directory"); err != nil {
+	if _, err := createProtectedDir(dir, dirAttributes, "data directory"); err != nil {
 		return nil, err
 	}
 	return &protection, nil
@@ -131,32 +143,79 @@ func prepareDataDir(dir, serviceAccount string, _ io.Writer) (*fileProtection, e
 
 // prepareDatabaseDir creates the database directory with the protected ACL
 // that lets the service account modify the database, or verifies an
-// existing directory like the data directory.
+// existing directory like the data directory and grants the service
+// account, if any, Modify access to it and to the files created in it.
 func (p *fileProtection) prepareDatabaseDir(dir string, _ io.Writer) error {
-	return createProtectedDir(dir, p.dbDirAttributes, "database directory")
+	existed, err := createProtectedDir(dir, p.dbDirAttributes, "database directory")
+	if err != nil || !existed || p.serviceAccount == nil {
+		return err
+	}
+	if err := grantModify(dir, p.serviceAccount, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT); err != nil {
+		return fmt.Errorf("grant the service account access to database directory %s: %w", dir, err)
+	}
+	return nil
 }
 
 // createProtectedDir creates the parents of dir and then dir itself with
-// attributes, or verifies that an existing dir is safe to use.
-func createProtectedDir(dir string, attributes *windows.SecurityAttributes, what string) error {
+// attributes, or verifies that an existing dir is safe to use. It reports
+// whether dir already existed.
+func createProtectedDir(dir string, attributes *windows.SecurityAttributes, what string) (bool, error) {
 	if parent := filepath.Dir(dir); parent != dir {
 		if err := os.MkdirAll(parent, dataDirMode); err != nil {
-			return fmt.Errorf("create %s: %w", what, err)
+			return false, fmt.Errorf("create %s: %w", what, err)
 		}
 	}
 	name, err := windows.UTF16PtrFromString(dir)
 	if err != nil {
-		return fmt.Errorf("create %s: %w", what, err)
+		return false, fmt.Errorf("create %s: %w", what, err)
 	}
 	err = windows.CreateDirectory(name, attributes)
 	switch {
 	case err == nil:
-		return nil
+		return false, nil
 	case errors.Is(err, windows.ERROR_ALREADY_EXISTS):
-		return checkExistingDataDir(dir)
+		return true, checkExistingDataDir(dir)
 	default:
-		return fmt.Errorf("create %s: %w", what, &fs.PathError{Op: "mkdir", Path: dir, Err: err})
+		return false, fmt.Errorf("create %s: %w", what, &fs.PathError{Op: "mkdir", Path: dir, Err: err})
 	}
+}
+
+// grantModify merges an entry granting sid serviceAccountModify into the
+// DACL of path, with the given inheritance. Running it again changes
+// nothing. The DACL keeps its protection against inheritance from the
+// parent, and new inheritable entries propagate to existing children that
+// inherit from path.
+func grantModify(path string, sid *windows.SID, inheritance uint32) error {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	control, _, err := sd.Control()
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	merged, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: serviceAccountModify,
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       inheritance,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_UNKNOWN,
+			TrusteeValue: windows.TrusteeValueFromSID(sid),
+		},
+	}}, dacl)
+	if err != nil {
+		return err
+	}
+	info := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.UNPROTECTED_DACL_SECURITY_INFORMATION)
+	if control&windows.SE_DACL_PROTECTED != 0 {
+		info = windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION
+	}
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, info, nil, nil, merged, nil)
 }
 
 // resolveServiceAccount returns the SID of account, given either as a SID
@@ -365,8 +424,10 @@ func keyFileExposure(path string) (string, error) {
 }
 
 // createDatabaseFile creates an empty database file at path with the
-// protected ACL of the database directory, atomically at creation, and
-// leaves an existing file unchanged.
+// protected ACL of the database directory, atomically at creation. An
+// existing file keeps its content; once it has passed the checks of
+// checkExistingDatabaseFile, the service account, if any, is granted
+// Modify access to it.
 func (p *fileProtection) createDatabaseFile(path string) error {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -375,10 +436,72 @@ func (p *fileProtection) createDatabaseFile(path string) error {
 	handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, p.dbFileAttributes,
 		windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if errors.Is(err, windows.ERROR_FILE_EXISTS) {
-		return nil
+		return p.adoptDatabaseFile(path)
 	}
 	if err != nil {
 		return &fs.PathError{Op: "create", Path: path, Err: err}
 	}
 	return windows.CloseHandle(handle)
+}
+
+// adoptDatabaseFile checks an existing database file and grants the service
+// account, if any, Modify access to it.
+func (p *fileProtection) adoptDatabaseFile(path string) error {
+	if err := checkExistingDatabaseFile(path); err != nil {
+		return err
+	}
+	if p.serviceAccount == nil {
+		return nil
+	}
+	if err := grantModify(path, p.serviceAccount, windows.NO_INHERITANCE); err != nil {
+		return fmt.Errorf("grant the service account access to database %s: %w", path, err)
+	}
+	return nil
+}
+
+// checkExistingDatabaseFile refuses an existing database file that is not
+// a regular file, is a symbolic link, is owned by an untrusted account or
+// grants access to a broad group, for the same reasons as
+// checkExistingDataDir.
+func checkExistingDatabaseFile(path string) error {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	attrs, err := windows.GetFileAttributes(name)
+	if err != nil {
+		return &fs.PathError{Op: "stat", Path: path, Err: err}
+	}
+	if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("database %s is a symbolic link; pass the real file instead", path)
+	}
+	if attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+		return fmt.Errorf("database %s exists and is a directory", path)
+	}
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("read permissions of database %s: %w", path, err)
+	}
+	if sd == nil {
+		return fmt.Errorf("database %s has no security descriptor; choose a file on an NTFS volume", path)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("read owner of database %s: %w", path, err)
+	}
+	trusted, err := isTrustedOwner(owner)
+	if err != nil {
+		return err
+	}
+	if !trusted {
+		return fmt.Errorf("database %s is owned by %s, not by SYSTEM, Administrators or the current user; take ownership first (takeown /F %s /A)", path, describeSID(owner), path)
+	}
+	exposed, err := broadAccessGrants(sd, broadReadRights|broadWriteRights)
+	if err != nil {
+		return fmt.Errorf("read permissions of database %s: %w", path, err)
+	}
+	if len(exposed) > 0 {
+		return fmt.Errorf("database %s grants access to %s; remove those entries (\"icacls %s\" lists them, including inherited ones)", path, strings.Join(exposed, ", "), path)
+	}
+	return nil
 }
