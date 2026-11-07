@@ -36,9 +36,10 @@ const recoveredNotice = "qchat: created a new, empty database for your identity.
 // relay's copy of the own bundle, and whether the client package supports
 // such a session. It must authenticate without registering: registering
 // first would send a newly signed bundle, which the relay rejects as a
-// conflict when it already holds one with that serial.
+// conflict when it already holds one with that serial. Like every other
+// connection it goes through the proxy, if one is configured.
 func lookupOptions(t target, auth client.Authenticator) (client.Options, bool) {
-	return client.Options{Addr: t.addr, Pin: t.pin, Auth: auth, SkipRegister: true}, true
+	return client.Options{Addr: t.addr, Pin: t.pin, Dialer: t.dialer(), Auth: auth, SkipRegister: true}, true
 }
 
 // recoverProfile creates a new, empty database for the profile in dir after

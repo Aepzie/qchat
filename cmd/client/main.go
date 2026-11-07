@@ -2,8 +2,17 @@
 //
 // Usage:
 //
-//	qchat --server host:port --pin sha256:<64 hex digits> [--profile DIR] [--invite CODE] [--recover]
+//	qchat --server host:port --pin sha256:<64 hex digits> [--tor | --socks5 HOST:PORT] [--profile DIR] [--invite CODE] [--recover]
 //	qchat --version
+//
+// --tor connects through the Tor SOCKS port at 127.0.0.1:9050; --socks5
+// names another SOCKS5 proxy, for example Tor Browser's at 127.0.0.1:9150,
+// and takes precedence over --tor's default address. With either flag every
+// connection goes through the proxy, the server name is resolved by the
+// proxy and never locally, and qchat never falls back to a direct
+// connection: if the proxy is unreachable, qchat does not connect. Each run
+// uses a fresh random SOCKS user name, so Tor keeps qchat's traffic on
+// circuits of its own. .onion servers are reachable only this way.
 //
 // On first start qchat creates a profile (identity keys and an encrypted
 // local database) in DIR, by default the per-user directory reported by
@@ -31,10 +40,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"time"
 
@@ -70,7 +82,17 @@ type options struct {
 	profileDir        string
 	invite            string
 	recoverDB         bool
+	tor               bool
+	socks5            string
+	// proxy is the canonical address of the SOCKS5 proxy all connections
+	// go through, empty for direct connections. It is derived from --tor
+	// and --socks5.
+	proxy string
 }
+
+// defaultTorProxy is the address of Tor's SOCKS port in the default
+// configuration of the tor daemon.
+const defaultTorProxy = "127.0.0.1:9050"
 
 // parseFlags parses the command line. Flags may be written with one or two
 // dashes.
@@ -84,8 +106,10 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.profileDir, "profile", "", "profile directory (default: the per-user qchat directory)")
 	fs.StringVar(&o.invite, "invite", "", "invite code for registering with the server")
 	fs.BoolVar(&o.recoverDB, "recover", false, "if the local database is missing, create a new, empty one (contacts and history are lost)")
+	fs.BoolVar(&o.tor, "tor", false, "connect through Tor at "+defaultTorProxy+"; never connect directly")
+	fs.StringVar(&o.socks5, "socks5", "", "connect through the SOCKS5 proxy at HOST:PORT, e.g. Tor; never connect directly")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: qchat --server host:port --pin sha256:<fingerprint> [--profile DIR] [--invite CODE] [--recover]")
+		fmt.Fprintln(stderr, "usage: qchat --server host:port --pin sha256:<fingerprint> [--tor | --socks5 HOST:PORT] [--profile DIR] [--invite CODE] [--recover]")
 		fmt.Fprintln(stderr, "       qchat --version")
 		fs.PrintDefaults()
 	}
@@ -98,15 +122,41 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	if err := validateInvite(o.invite); err != nil {
 		return o, err
 	}
+	socks5Set := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "server":
 			o.serverSet = true
 		case "pin":
 			o.pinSet = true
+		case "socks5":
+			socks5Set = true
 		}
 	})
+	proxy, err := proxyAddress(o.tor, socks5Set, o.socks5)
+	if err != nil {
+		return o, err
+	}
+	o.proxy = proxy
 	return o, nil
+}
+
+// proxyAddress returns the canonical address of the SOCKS5 proxy selected
+// by --tor and --socks5, or "" for direct connections. An explicitly given
+// --socks5 must be a valid host:port, even an empty one: silently falling
+// back to a direct connection would defeat its purpose.
+func proxyAddress(tor, socks5Set bool, socks5 string) (string, error) {
+	if socks5Set {
+		addr, err := transport.ValidateHostPort(socks5)
+		if err != nil {
+			return "", fmt.Errorf("--socks5: %w", err)
+		}
+		return addr, nil
+	}
+	if tor {
+		return defaultTorProxy, nil
+	}
+	return "", nil
 }
 
 // validateInvite applies the protocol's limits for invite codes, so that a
@@ -128,6 +178,31 @@ type target struct {
 	addr   string
 	pin    transport.Fingerprint
 	locked bool
+	// proxy is the SOCKS5 proxy every connection goes through, empty for
+	// direct connections.
+	proxy string
+	// isolation is the SOCKS user name that keeps this run's connections
+	// on Tor circuits of their own. It is set together with proxy.
+	isolation string
+}
+
+// dialer returns the dial function for the client's sessions: nil for
+// direct connections, otherwise one that only ever connects through the
+// proxy.
+func (t target) dialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	if t.proxy == "" {
+		return nil
+	}
+	return transport.SOCKS5Dialer(t.proxy, t.isolation)
+}
+
+// newIsolationToken returns a random SOCKS user name for one run of the
+// client, so that Tor does not share circuits between runs or with other
+// applications (IsolateSOCKSAuth).
+func newIsolationToken() string {
+	var token [16]byte
+	rand.Read(token[:])
+	return hex.EncodeToString(token[:])
 }
 
 // embedded is the result of buildcfg.Embedded.
@@ -140,8 +215,22 @@ type embedded struct {
 
 // resolveTarget combines the embedded configuration with the flags. An
 // embedded server always wins: flags that name a different server or pin
-// are an error, never an override.
+// are an error, never an override. The proxy flags apply to every server,
+// embedded or not.
 func resolveTarget(emb embedded, o options) (target, error) {
+	t, err := resolveServer(emb, o)
+	if err != nil {
+		return target{}, err
+	}
+	if o.proxy != "" {
+		t.proxy = o.proxy
+		t.isolation = newIsolationToken()
+	}
+	return t, nil
+}
+
+// resolveServer determines the server address and pin for resolveTarget.
+func resolveServer(emb embedded, o options) (target, error) {
 	if emb.err != nil {
 		return target{}, fmt.Errorf("this build is misconfigured: %w", emb.err)
 	}
@@ -360,7 +449,7 @@ func runInterface(t target, p *profile.Profile, invite string, stderr io.Writer)
 		fmt.Fprintln(stderr, "qchat:", err)
 		return 1
 	}
-	sess, err := client.New(client.Options{Addr: t.addr, Pin: t.pin, Auth: backend.Authenticator()})
+	sess, err := client.New(client.Options{Addr: t.addr, Pin: t.pin, Dialer: t.dialer(), Auth: backend.Authenticator()})
 	if err != nil {
 		fmt.Fprintln(stderr, "qchat:", err)
 		return 2
@@ -382,6 +471,7 @@ func runInterface(t target, p *profile.Profile, invite string, stderr io.Writer)
 		Events:     backend.TUIEvents(),
 		Backend:    backend,
 		ChatEvents: backend.ChatEvents(),
+		Tor:        t.proxy != "",
 		Version:    version,
 	})
 	_, uiErr := tea.NewProgram(model).Run()
