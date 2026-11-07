@@ -88,12 +88,13 @@ const (
 	StatusNone MessageStatus = iota
 	// StatusSending means the message has not been answered by the relay yet.
 	StatusSending
-	// StatusSent means the relay accepted the message and forwarded it to a
-	// connected device of the recipient.
+	// StatusSent means the relay accepted the message. It stores the
+	// message until the recipient fetches it, whether or not the recipient
+	// is connected right now.
 	StatusSent
-	// StatusRecipientOffline means the relay accepted the message but the
-	// recipient was not connected. Phase 2 relays do not store messages, so
-	// it was not delivered and will not be.
+	// StatusRecipientOffline marks messages sent through a Phase 2 relay,
+	// which accepted them while the recipient was not connected and did not
+	// store them, so they were not delivered.
 	StatusRecipientOffline
 	// StatusFailed means the message could not be sent.
 	StatusFailed

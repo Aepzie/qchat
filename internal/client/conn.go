@@ -366,10 +366,10 @@ func (c *liveConn) handleFrame(ctx context.Context, r readResult) error {
 		if err != nil {
 			return fmt.Errorf("%w: invalid Deliver: %w", ErrProtocolViolation, err)
 		}
-		c.session.emit(Delivery{From: [protocol.IDSize]byte(deliver.From), Payload: bytes.Clone(deliver.Payload)})
+		c.session.emit(Delivery{From: [protocol.IDSize]byte(deliver.From), Payload: bytes.Clone(deliver.Payload), QueueID: deliver.QueueID})
 		return nil
 	case protocol.TypeRegistered, protocol.TypeAuthChallenge, protocol.TypeAuthOK,
-		protocol.TypeKeyResponse, protocol.TypeSendResult:
+		protocol.TypeKeyResponse, protocol.TypeSendResult, protocol.TypePrekeyStatus, protocol.TypePrekeyResponse:
 		c.resolve(f)
 		return nil
 	case protocol.TypeError:

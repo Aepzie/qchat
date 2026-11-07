@@ -8,10 +8,10 @@
 // from tea.Cmds. Tests can therefore drive it entirely by feeding messages to
 // Update and inspecting View.
 //
-// The interface is honest about what Phase 2 protects: messages to contacts
-// are end-to-end encrypted and signed, but there is no forward secrecy yet,
-// the relay sees who talks to whom and when, and nothing is delivered to
-// recipients who are offline. Notes typed in the System conversation never
+// The interface is honest about what Phase 3 protects: messages to contacts
+// are end-to-end encrypted with forward secrecy and the relay stores them
+// until they are delivered, but the relay sees who talks to whom, when and
+// how much. Notes typed in the System conversation never
 // leave the device.
 //
 // CreateProfileModel and UnlockModel are separate small models for the
@@ -167,8 +167,8 @@ func New(cfg Config) Model {
 		m.log(entrySystem, fmt.Sprintf("qchat %s · connection preview. No identity is loaded, so messaging is off; notes you type stay on this device.", sanitizeText(version)))
 		return m
 	}
-	m.log(entrySystem, fmt.Sprintf("qchat %s · messages to contacts are end-to-end encrypted and signed. "+
-		"There is no forward secrecy yet, the relay sees who talks to whom and when, and messages to offline contacts are not delivered. "+
+	m.log(entrySystem, fmt.Sprintf("qchat %s · messages to contacts are end-to-end encrypted with forward secrecy. "+
+		"The relay stores messages until they are delivered and sees who talks to whom and when. "+
 		"Notes typed here in System stay on this device.", sanitizeText(version)))
 	return m
 }

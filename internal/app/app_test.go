@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -72,6 +73,9 @@ func startRelay(t *testing.T) relay {
 
 // user is one client: profile, App and session.
 type user struct {
+	dir    string
+	name   string
+	relay  relay
 	prof   *profile.Profile
 	app    *App
 	sess   *client.Session
@@ -81,14 +85,38 @@ type user struct {
 
 	mu         sync.Mutex
 	deliveries []client.Delivery
+	// While paused, deliveries are held back instead of reaching the App.
+	paused bool
+	held   []client.Delivery
 }
 
 func newUser(t *testing.T, r relay, name string) *user {
 	t.Helper()
-	p, err := profile.Create(t.TempDir(), []byte("correct horse battery"), name, vault.TestParams())
+	dir := t.TempDir()
+	p, err := profile.Create(dir, []byte(testPassphrase), name, vault.TestParams())
 	if err != nil {
 		t.Fatal(err)
 	}
+	return startUser(t, r, dir, name, p)
+}
+
+// restart stops u, closes its profile and starts the client again from
+// the same profile directory.
+func (u *user) restart(t *testing.T) *user {
+	t.Helper()
+	u.stop()
+	_ = u.prof.Close()
+	p, err := profile.Unlock(u.dir, []byte(testPassphrase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return startUser(t, u.relay, u.dir, u.name, p)
+}
+
+// startUser runs a client for p and waits until it is connected and has
+// maintained its prekeys once.
+func startUser(t *testing.T, r relay, dir, name string, p *profile.Profile) *user {
+	t.Helper()
 	t.Cleanup(func() { p.Close() })
 	a, err := New(p, "")
 	if err != nil {
@@ -100,7 +128,7 @@ func newUser(t *testing.T, r relay, name string) *user {
 	}
 	a.UseSession(sess)
 	ctx, cancel := context.WithCancel(context.Background())
-	u := &user{prof: p, app: a, sess: sess, inject: make(chan client.Event), cancel: cancel, done: make(chan struct{})}
+	u := &user{dir: dir, name: name, relay: r, prof: p, app: a, sess: sess, inject: make(chan client.Event), cancel: cancel, done: make(chan struct{})}
 
 	tapped := make(chan client.Event)
 	sessDone := make(chan struct{})
@@ -113,7 +141,14 @@ func newUser(t *testing.T, r relay, name string) *user {
 			if d, ok := ev.(client.Delivery); ok {
 				u.mu.Lock()
 				u.deliveries = append(u.deliveries, d)
+				hold := u.paused
+				if hold {
+					u.held = append(u.held, d)
+				}
 				u.mu.Unlock()
+				if hold {
+					continue
+				}
 			}
 			select {
 			case tapped <- ev:
@@ -157,7 +192,32 @@ func newUser(t *testing.T, r relay, name string) *user {
 	case <-time.After(eventTimeout):
 		t.Fatalf("%s did not connect", name)
 	}
+	waitFor(t, name+"'s prekey maintenance", func() bool { return a.maintRuns.Load() > 0 })
 	return u
+}
+
+// pause holds back deliveries until resume.
+func (u *user) pause() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.paused = true
+}
+
+// resume hands the held deliveries to the App, in order.
+func (u *user) resume() {
+	u.mu.Lock()
+	held := u.held
+	u.held, u.paused = nil, false
+	u.mu.Unlock()
+	for _, d := range held {
+		u.inject <- d
+	}
+}
+
+func (u *user) deliveryCount() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return len(u.deliveries)
 }
 
 func (u *user) stop() {
@@ -352,14 +412,13 @@ func TestConversation(t *testing.T) {
 	}
 
 	bob.stop()
-	var offline tui.MessageInfo
-	waitFor(t, "recipient offline status", func() bool {
-		offline = send(t, alice, bob.id(), "are you there?")
-		return offline.Status == tui.StatusRecipientOffline
-	})
+	offline := send(t, alice, bob.id(), "are you there?")
+	if offline.Status != tui.StatusSent || offline.Error != "" {
+		t.Fatalf("message to an offline contact %+v", offline)
+	}
 	h, _ = alice.app.History(bob.id(), 1)
-	if len(h) != 1 || h[0].ID != offline.ID || h[0].Status != tui.StatusRecipientOffline {
-		t.Fatalf("stored offline message %+v", h)
+	if len(h) != 1 || h[0].ID != offline.ID || h[0].Status != tui.StatusSent {
+		t.Fatalf("stored message %+v", h)
 	}
 
 	if err := alice.app.RemoveContact(bob.id()); err != nil {
@@ -525,5 +584,91 @@ func TestSendWithoutSession(t *testing.T) {
 	}
 	if _, err := alice.app.AddContact(context.Background(), bob.id(), ""); !errors.Is(err, ErrOffline) {
 		t.Fatalf("add while disconnected: %v", err)
+	}
+}
+
+func TestRelayOfflineDeliveryAndRestart(t *testing.T) {
+	r := startRelay(t)
+	alice, bob := newUser(t, r, "Alice"), newUser(t, r, "Bob")
+	addContact(t, alice, bob.id(), "Bob")
+	addContact(t, bob, alice.id(), "Alice")
+	bob.stop()
+
+	for _, text := range []string{"one", "two"} {
+		if m := send(t, alice, bob.id(), text); m.Status != tui.StatusSent {
+			t.Fatalf("send %q while bob is offline: %+v", text, m)
+		}
+	}
+	bob = bob.restart(t)
+	for _, want := range []string{"one", "two"} {
+		if in := expectEvent[tui.IncomingMessage](t, bob); in.Message.Text != want || in.UnknownSender {
+			t.Fatalf("bob received %+v, want %q", in, want)
+		}
+	}
+	if m := send(t, bob, alice.id(), "back online"); m.Status != tui.StatusSent {
+		t.Fatalf("reply %+v", m)
+	}
+	if in := expectEvent[tui.IncomingMessage](t, alice); in.Message.Text != "back online" {
+		t.Fatalf("alice received %+v", in)
+	}
+
+	bob = bob.restart(t)
+	time.Sleep(300 * time.Millisecond)
+	if n := bob.deliveryCount(); n != 0 {
+		t.Fatalf("relay delivered %d acknowledged messages again", n)
+	}
+	send(t, alice, bob.id(), "after restart")
+	if in := expectEvent[tui.IncomingMessage](t, bob); in.Message.Text != "after restart" {
+		t.Fatalf("bob received %+v", in)
+	}
+	alice = alice.restart(t)
+	send(t, bob, alice.id(), "both restarted")
+	if in := expectEvent[tui.IncomingMessage](t, alice); in.Message.Text != "both restarted" {
+		t.Fatalf("alice received %+v", in)
+	}
+	if alice.droppedCount() != 0 || bob.droppedCount() != 0 {
+		t.Fatalf("dropped alice=%d bob=%d", alice.droppedCount(), bob.droppedCount())
+	}
+}
+
+func TestRelaySimultaneousStart(t *testing.T) {
+	r := startRelay(t)
+	alice, bob := newUser(t, r, "Alice"), newUser(t, r, "Bob")
+	addContact(t, alice, bob.id(), "Bob")
+	addContact(t, bob, alice.id(), "Alice")
+	alice.pause()
+	bob.pause()
+	send(t, alice, bob.id(), "alice first")
+	send(t, bob, alice.id(), "bob first")
+	waitFor(t, "both deliveries", func() bool { return alice.deliveryCount() == 1 && bob.deliveryCount() == 1 })
+	alice.resume()
+	bob.resume()
+	if in := expectEvent[tui.IncomingMessage](t, alice); in.Message.Text != "bob first" {
+		t.Fatalf("alice received %+v", in)
+	}
+	if in := expectEvent[tui.IncomingMessage](t, bob); in.Message.Text != "alice first" {
+		t.Fatalf("bob received %+v", in)
+	}
+	for i := range 2 {
+		a, b := fmt.Sprintf("alice %d", i), fmt.Sprintf("bob %d", i)
+		send(t, alice, bob.id(), a)
+		send(t, bob, alice.id(), b)
+		if in := expectEvent[tui.IncomingMessage](t, bob); in.Message.Text != a {
+			t.Fatalf("bob received %+v, want %q", in, a)
+		}
+		if in := expectEvent[tui.IncomingMessage](t, alice); in.Message.Text != b {
+			t.Fatalf("alice received %+v, want %q", in, b)
+		}
+	}
+	as, err := alice.prof.DB.GetSession(context.Background(), bob.prof.Identity.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs, err := bob.prof.DB.GetSession(context.Background(), alice.prof.Identity.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if as.Initiator == bs.Initiator || !established(as) || !established(bs) {
+		t.Fatalf("sessions did not converge: alice initiator=%v, bob initiator=%v", as.Initiator, bs.Initiator)
 	}
 }

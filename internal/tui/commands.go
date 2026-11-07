@@ -190,9 +190,9 @@ func helpRows() []row {
 		row{"any mode", "ctrl+n / ctrl+p next or previous conversation"},
 		row{"insert", "enter send · esc normal mode · tab complete · pgup/pgdn scroll"},
 		row{"normal", "J/K select · enter open · i insert · j/k line · ctrl+d/u half page · g/G top/bottom · : command · q quit"},
-		row{"status", "… sending · ✓ sent to a connected device · ⧗ recipient offline, not delivered · ✕ not sent · ◷ sender clock off"},
+		row{"status", "… sending · ✓ sent, stored by the relay until delivered · ⧗ recipient offline, not delivered (old relays) · ✕ not sent · ◷ sender clock off"},
 		row{"contacts", "✓ verified · ⚠ safety number changed, run /verify"},
-		row{"privacy", "Messages to contacts are end-to-end encrypted and signed, without forward secrecy yet. The relay sees who talks to whom, when, and message sizes. Notes typed in System stay on this device."},
+		row{"privacy", "Messages to contacts are end-to-end encrypted with forward secrecy; session starts are signed. The relay sees who talks to whom, when, and message sizes. Notes typed in System stay on this device."},
 	)
 }
 
@@ -229,8 +229,8 @@ func (m *Model) statusRows() []row {
 		rows = append(rows, row{"identity", m.self.ShortID})
 	}
 	return append(rows,
-		row{"e2e", "HPKE ML-KEM-768 + X25519, signed with Ed25519 + ML-DSA-65"},
-		row{"limits", "no forward secrecy yet · no delivery to offline contacts · the relay sees sender, recipient, time and size"},
+		row{"e2e", "prekey sessions and KEM ratchet with ML-KEM-768 + X25519, session starts signed with Ed25519 + ML-DSA-65"},
+		row{"limits", "the relay sees sender, recipient, time and size · not independently audited"},
 	)
 }
 

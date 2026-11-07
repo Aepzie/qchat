@@ -40,9 +40,11 @@
 // authenticates before it counts as Connected: Hello/Welcome, then
 // Register/Registered, AuthBegin/AuthChallenge and AuthProof/AuthOK, all
 // within one handshake timeout. While connected, Request sends KeyRequest,
-// Send or Register frames and returns the matching response, and payloads
-// routed to the local identity arrive as Delivery events. The session
-// carries ciphertext only; end-to-end encryption is the caller's concern.
+// Send, Register, PrekeyUpload or PrekeyRequest frames and returns the
+// matching response, payloads routed to the local identity arrive as
+// Delivery events, and Ack tells the relay that a delivered payload has
+// been processed and may be deleted. The session carries ciphertext only;
+// end-to-end encryption is the caller's concern.
 package client
 
 import (
@@ -304,7 +306,7 @@ func (s *Session) setDisconnected() {
 
 // Request sends one request frame of type t with the given body and waits
 // for the response with the same frame ID. t must be TypeKeyRequest,
-// TypeSend or TypeRegister. Request is only allowed while the session is
+// TypeSend, TypeRegister, TypePrekeyUpload or TypePrekeyRequest. Request is only allowed while the session is
 // authenticated; otherwise it returns ErrNotConnected. An Error frame in
 // reply is returned as a *RemoteError. If ctx ends or the connection is lost
 // first, Request returns an error and does not resend the request; whether
@@ -351,8 +353,34 @@ func responseType(t protocol.FrameType) (protocol.FrameType, bool) {
 		return protocol.TypeSendResult, true
 	case protocol.TypeRegister:
 		return protocol.TypeRegistered, true
+	case protocol.TypePrekeyUpload:
+		return protocol.TypePrekeyStatus, true
+	case protocol.TypePrekeyRequest:
+		return protocol.TypePrekeyResponse, true
 	}
 	return 0, false
+}
+
+// Ack tells the relay that the delivery with the given queue ID (see
+// [Delivery.QueueID]) has been processed, so that the relay deletes its
+// stored copy. The relay sends no response: Ack returns as soon as the frame
+// is written and reports an error only if it could not be. Like Request it
+// is allowed only while the session is authenticated and returns
+// ErrNotConnected otherwise. A lost Ack is harmless: the relay delivers the
+// message again after the next authentication. queueID must not be 0. Ack
+// may be called concurrently.
+func (s *Session) Ack(queueID uint64) error {
+	s.mu.Lock()
+	c := s.live
+	s.mu.Unlock()
+	if c == nil || s.opts.Auth == nil {
+		return ErrNotConnected
+	}
+	f, err := protocol.NewFrame(protocol.TypeAck, c.newID(), protocol.Ack{QueueID: queueID})
+	if err != nil {
+		return fmt.Errorf("client: build %v frame: %w", protocol.TypeAck, err)
+	}
+	return c.writeFrame(c.life, f)
 }
 
 // backoffDelay returns the wait before the next attempt after failures

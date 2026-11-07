@@ -216,7 +216,7 @@ func TestChatSidebarShowsContacts(t *testing.T) {
 	m := newChatModel(t, newFakeBackend(), 100, 24)
 	s := screen(m)
 	top := strings.SplitN(s, "\n", 2)[0]
-	for _, want := range []string{"E2E · no forward secrecy yet", "id qc1-ssss-ssss"} {
+	for _, want := range []string{"E2E · forward secrecy", "id qc1-ssss-ssss"} {
 		if !strings.Contains(top, want) {
 			t.Errorf("status bar %q lacks %q", top, want)
 		}

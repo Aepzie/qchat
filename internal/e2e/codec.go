@@ -8,7 +8,7 @@ import (
 )
 
 // Limits applied by the strict decoder. Every structure handled by this
-// package is a flat map with at most eight entries, so these bounds are far
+// package is a flat map with at most four entries, so these bounds are far
 // above what valid input needs while keeping hostile input from making the
 // decoder recurse or allocate without bound.
 const (
@@ -20,8 +20,8 @@ const (
 var (
 	// encMode produces Core Deterministic CBOR (RFC 8949 section 4.2.1):
 	// shortest integer and length encodings, sorted map keys, no
-	// indefinite-length items and no tags. Signatures are computed over
-	// these bytes, so the encoding of a given value must be unique.
+	// indefinite-length items and no tags. The decoder accepts only these
+	// bytes, so the encoding of a given value must be unique.
 	encMode cbor.EncMode
 
 	// decMode is the strict decoder used for every structure.
@@ -64,12 +64,13 @@ var errNonCanonical = errors.New("non-canonical encoding")
 // exactly the canonical encoding of v.
 //
 // Accepting a single encoding per value removes any room for parser
-// differentials: two implementations (or the relay and a client) can never
-// disagree about what a signed structure says, and a signature can never be
-// carried over to an alternative encoding of the same fields (other integer
-// widths, other key orders). Because no field is omitempty, the re-encoding
-// also proves that every field was present: a missing field would reappear
-// with its zero value and break the comparison.
+// differentials: two implementations can never disagree about what a
+// structure says, and no structure has alternative encodings (other integer
+// widths, other key orders). The re-encoding also proves that every required
+// field was present: a missing field would reappear with its zero value (a
+// nil byte string encodes as null) and break the comparison. For the one
+// optional field, Envelope.Init, an explicitly encoded empty value is
+// omitted on re-encoding and therefore rejected as well.
 func decodeCanonical(b []byte, v any) error {
 	if err := decMode.Unmarshal(b, v); err != nil {
 		return err
