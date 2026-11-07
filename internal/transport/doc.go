@@ -27,4 +27,9 @@
 // The server side never logs client IP addresses. In particular the
 // net/http error log, which would otherwise print lines such as
 // "TLS handshake error from <ip>:<port>", is discarded (see NewHTTPServer).
+//
+// Clients can hide their IP address from the relay and from the network by
+// connecting through Tor: SOCKS5Dialer plugs a SOCKS5 proxy into
+// DialOptions.NetDialContext. Host names are resolved by the proxy, never
+// locally, and TLS with key pinning still runs end to end on top.
 package transport
