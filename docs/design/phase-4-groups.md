@@ -114,7 +114,7 @@ Rotation:
 
 Plaintext `Kind = 4` group message `{1: MsgID, 2: Sent, 3: Body}` is
 encrypted once with the sender key; the resulting **group envelope**
-`{1: Version=1, 2: Header, 3: Ciphertext, 4: Sig}` is sent with a new relay
+`{1: Version=3, 2: Header, 3: Ciphertext, 4: Sig}` is sent with a new relay
 frame:
 
 | Type | Name | Direction | Body |
