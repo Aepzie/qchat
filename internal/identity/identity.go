@@ -31,6 +31,9 @@ const (
 
 	// ContextSessionInit labels the signature on a session Init header.
 	ContextSessionInit = "qchat/v1/session-init"
+
+	// ContextGroupControl labels the signature on a group control message.
+	ContextGroupControl = "qchat/v1/group-control"
 )
 
 // SecretVersion is the format version of the record produced by
@@ -237,6 +240,12 @@ func (i *Identity) SignOneTimePrekey(tbs []byte) ([]byte, error) {
 // under [ContextSessionInit]. It exists for package handshake.
 func (i *Identity) SignSessionInit(tbs []byte) ([]byte, error) {
 	return i.sign(ContextSessionInit, tbs)
+}
+
+// SignGroupControl signs the to-be-signed encoding of a group control
+// message under [ContextGroupControl]. It exists for package group.
+func (i *Identity) SignGroupControl(tbs []byte) ([]byte, error) {
+	return i.sign(ContextGroupControl, tbs)
 }
 
 // Decapsulate recovers the shared secret that sealbox.Encapsulate produced
