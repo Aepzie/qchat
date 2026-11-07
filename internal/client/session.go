@@ -28,8 +28,21 @@
 // backoff from one second up to one minute, with random jitter so that many
 // clients do not reconnect in lockstep after a server restart.
 //
-// In this phase the session carries no chat messages and therefore no end to
-// end encryption: it only proves that the transport and handshake work.
+// A refused authentication is permanent in the same way: a registration the
+// relay denies (RegistrationDenied, Conflict or a bundle it cannot verify)
+// and an Unauthorized reply during authentication stop the session with an
+// error wrapping ErrAuthFailed. RateLimited and other errors during
+// authentication lead to a reconnect.
+//
+// # Identities and requests
+//
+// With Options.Auth set, every connection registers the local bundle and
+// authenticates before it counts as Connected: Hello/Welcome, then
+// Register/Registered, AuthBegin/AuthChallenge and AuthProof/AuthOK, all
+// within one handshake timeout. While connected, Request sends KeyRequest,
+// Send or Register frames and returns the matching response, and payloads
+// routed to the local identity arrive as Delivery events. The session
+// carries ciphertext only; end-to-end encryption is the caller's concern.
 package client
 
 import (
@@ -46,11 +59,25 @@ import (
 	"github.com/craguS/qchat/internal/transport"
 )
 
+// Authenticator supplies the local identity. A Session with a nil
+// Authenticator neither registers nor authenticates.
+type Authenticator interface {
+	// ID returns the identity ID.
+	ID() [32]byte
+	// Bundle returns the encoded, self-signed identity bundle.
+	Bundle() []byte
+	// Invite returns the invite code to register with, or "" for none.
+	Invite() string
+	// SignAuth signs the relay's authentication challenge nonce, bound to
+	// the relay fingerprint serverFP.
+	SignAuth(serverFP transport.Fingerprint, nonce []byte) ([]byte, error)
+}
+
 // Default timing parameters.
 const (
 	defaultBackoffMin  = time.Second
 	defaultBackoffMax  = time.Minute
-	handshakeTimeout   = 10 * time.Second
+	handshakeTimeout   = 20 * time.Second
 	writeTimeout       = 10 * time.Second
 	dialTimeout        = 45 * time.Second
 	defaultIdleGrace   = 10 * time.Second
@@ -65,7 +92,8 @@ const helloID = 1
 // Errors reported in StateChanged events and returned by Run. Each wraps
 // more detail where available; classify them with errors.Is.
 var (
-	// ErrHandshakeTimeout means the server did not answer Hello in time.
+	// ErrHandshakeTimeout means the server did not complete the handshake,
+	// including authentication, in time.
 	ErrHandshakeTimeout = errors.New("client: server did not complete the handshake in time")
 	// ErrKeepaliveTimeout means the server stopped answering keepalives.
 	ErrKeepaliveTimeout = errors.New("client: server stopped responding")
@@ -78,6 +106,13 @@ var (
 	ErrIncompatibleVersion = errors.New("client: server speaks an incompatible protocol version")
 	// ErrConnectionLost means an established connection broke.
 	ErrConnectionLost = errors.New("client: connection lost")
+	// ErrAuthFailed means the relay refused to register or authenticate the
+	// local identity, or the identity could not be presented to it. Retrying
+	// cannot fix that, so the session does not retry.
+	ErrAuthFailed = errors.New("client: authentication failed")
+	// ErrNotConnected is returned by Request while the session has no
+	// authenticated connection.
+	ErrNotConnected = errors.New("client: not connected")
 )
 
 // RemoteError is the error recorded when the server sends an Error frame.
@@ -104,6 +139,9 @@ type Options struct {
 	// Dialer, if non-nil, opens the TCP connection, for example through a
 	// SOCKS5 proxy such as Tor. TLS still runs end to end over it.
 	Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
+	// Auth, if non-nil, registers and authenticates every connection as
+	// the local identity.
+	Auth Authenticator
 }
 
 // Session is one logical connection to a qchat server, kept alive across
@@ -118,6 +156,7 @@ type Session struct {
 	mu        sync.Mutex
 	info      ConnectionInfo
 	connected bool
+	live      *liveConn
 
 	backoffMin time.Duration
 	backoffMax time.Duration
@@ -229,7 +268,7 @@ func (s *Session) classify(err error) (error, bool) {
 		s.emit(SecurityAlert{Expected: s.opts.Pin})
 		return err, true
 	}
-	if errors.Is(err, transport.ErrWeakHandshake) || errors.Is(err, ErrIncompatibleVersion) || errors.Is(err, transport.ErrInvalidAddress) {
+	if errors.Is(err, transport.ErrWeakHandshake) || errors.Is(err, ErrIncompatibleVersion) || errors.Is(err, transport.ErrInvalidAddress) || errors.Is(err, ErrAuthFailed) {
 		return err, true
 	}
 	var remote *RemoteError
@@ -241,17 +280,72 @@ func (s *Session) classify(err error) (error, bool) {
 
 func (s *Session) emit(ev Event) { s.events.push(ev) }
 
-func (s *Session) setConnected(info ConnectionInfo) {
+func (s *Session) setConnected(info ConnectionInfo, c *liveConn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.info = info
 	s.connected = true
+	s.live = c
 }
 
 func (s *Session) setDisconnected() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.connected = false
+	s.live = nil
+}
+
+// Request sends one request frame of type t with the given body and waits
+// for the response with the same frame ID. t must be TypeKeyRequest,
+// TypeSend or TypeRegister. Request is only allowed while the session is
+// authenticated; otherwise it returns ErrNotConnected. An Error frame in
+// reply is returned as a *RemoteError. If ctx ends or the connection is lost
+// first, Request returns an error and does not resend the request; whether
+// the server received it is unknown. Request may be called concurrently.
+func (s *Session) Request(ctx context.Context, t protocol.FrameType, body any) (protocol.Frame, error) {
+	want, ok := responseType(t)
+	if !ok {
+		return protocol.Frame{}, fmt.Errorf("client: %v is not a request frame", t)
+	}
+	s.mu.Lock()
+	c := s.live
+	s.mu.Unlock()
+	if c == nil || s.opts.Auth == nil {
+		return protocol.Frame{}, ErrNotConnected
+	}
+	f, err := protocol.NewFrame(t, 0, body)
+	if err != nil {
+		return protocol.Frame{}, fmt.Errorf("client: build %v frame: %w", t, err)
+	}
+	resp, err := c.request(ctx, f)
+	if err != nil {
+		return protocol.Frame{}, err
+	}
+	if resp.Type == protocol.TypeError {
+		remote, err := decodeRemoteError(resp)
+		if err != nil {
+			return protocol.Frame{}, err
+		}
+		return protocol.Frame{}, remote
+	}
+	if resp.Type != want {
+		return protocol.Frame{}, fmt.Errorf("%w: %v answered with %v", ErrProtocolViolation, t, resp.Type)
+	}
+	return resp, nil
+}
+
+// responseType returns the frame type answering a request of type t, and
+// whether t may be sent with Request.
+func responseType(t protocol.FrameType) (protocol.FrameType, bool) {
+	switch t {
+	case protocol.TypeKeyRequest:
+		return protocol.TypeKeyResponse, true
+	case protocol.TypeSend:
+		return protocol.TypeSendResult, true
+	case protocol.TypeRegister:
+		return protocol.TypeRegistered, true
+	}
+	return 0, false
 }
 
 // backoffDelay returns the wait before the next attempt after failures

@@ -16,6 +16,8 @@ const (
 	// handshake) is in progress.
 	Connecting State = iota + 1
 	// Connected means the handshake completed and keepalives are running.
+	// For a session with an Authenticator it also means the connection is
+	// authenticated.
 	Connected
 	// Disconnected means the last connection ended or an attempt failed. The
 	// session will retry after a backoff delay.
@@ -24,6 +26,10 @@ const (
 	// example because the server presented the wrong public key. Run has
 	// returned or is about to.
 	Failed
+	// Authenticating means the qchat handshake completed and the session is
+	// registering and authenticating its identity. Only sessions with an
+	// Authenticator enter it, between Connecting and Connected.
+	Authenticating
 )
 
 // String returns a lowercase name for the state.
@@ -37,13 +43,16 @@ func (s State) String() string {
 		return "disconnected"
 	case Failed:
 		return "failed"
+	case Authenticating:
+		return "authenticating"
 	default:
 		return "unknown"
 	}
 }
 
 // Event is something that happened to a Session. The concrete types are
-// StateChanged, RTT, ServerError and SecurityAlert.
+// StateChanged, RTT, ServerError, SecurityAlert, Authenticated, Delivery and
+// RegistrationDenied.
 type Event interface {
 	isEvent()
 }
@@ -91,10 +100,42 @@ type SecurityAlert struct {
 	Presented transport.Fingerprint
 }
 
-func (StateChanged) isEvent()  {}
-func (RTT) isEvent()           {}
-func (ServerError) isEvent()   {}
-func (SecurityAlert) isEvent() {}
+// Authenticated reports that the connection is authenticated as ID. It is
+// followed by a StateChanged event with State Connected.
+type Authenticated struct {
+	// ID is the authenticated identity.
+	ID [32]byte
+}
+
+// Delivery is a payload the relay routed to the local identity. Delivery
+// events are never dropped.
+type Delivery struct {
+	// From is the sender's identity as authenticated by the relay.
+	From [32]byte
+	// Payload is the end-to-end encrypted ciphertext. It is a copy owned by
+	// the receiver.
+	Payload []byte
+}
+
+// RegistrationDenied reports that the relay refused to register the local
+// bundle, for example because an invite code is missing or invalid or the
+// ID is registered with a different bundle. It is permanent: the event is
+// followed by a StateChanged event with State Failed.
+type RegistrationDenied struct {
+	// Code is the relay's error code, usually ErrCodeRegistrationDenied or
+	// ErrCodeConflict.
+	Code protocol.ErrorCode
+	// Message is the relay's explanation, reduced to printable ASCII.
+	Message string
+}
+
+func (StateChanged) isEvent()       {}
+func (RTT) isEvent()                {}
+func (ServerError) isEvent()        {}
+func (SecurityAlert) isEvent()      {}
+func (Authenticated) isEvent()      {}
+func (Delivery) isEvent()           {}
+func (RegistrationDenied) isEvent() {}
 
 // TransportDescription names the transport security every qchat connection
 // uses. Connections that cannot meet it are refused by package transport.
