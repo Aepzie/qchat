@@ -36,6 +36,11 @@ var (
 	// ErrIDMismatch reports a valid bundle that belongs to a different
 	// identity than the one requested.
 	ErrIDMismatch = errors.New("identity: bundle belongs to a different identity")
+
+	// ErrStaleBundle reports a valid bundle of the expected identity whose
+	// serial is lower than the caller's minimum, for example an older
+	// bundle replayed by the relay after a key rotation.
+	ErrStaleBundle = errors.New("identity: bundle is older than the known one")
 )
 
 // Bundle is a parsed and verified public identity bundle: the public keys of
@@ -222,6 +227,29 @@ func ParseBundleForID(b []byte, want ID) (*Bundle, error) {
 	}
 	if bundle.ID != want {
 		return nil, ErrIDMismatch
+	}
+	return bundle, nil
+}
+
+// ParseBundleForIDMinSerial is [ParseBundleForID] followed by a check that
+// the bundle's serial is at least minSerial; otherwise it returns
+// [ErrStaleBundle]. minSerial is normally the serial of the bundle the
+// caller already holds for want, so that the relay cannot answer with an
+// older, validly signed bundle of the same identity (for instance one with
+// a KEM key that was rotated out). A minSerial of 0 or 1 accepts every
+// valid bundle.
+//
+// The check only protects bundles the caller has seen before. On first
+// contact there is no known serial, and a stale bundle served then cannot
+// be detected; neither can one served after the stored serial itself was
+// rolled back.
+func ParseBundleForIDMinSerial(b []byte, want ID, minSerial uint64) (*Bundle, error) {
+	bundle, err := ParseBundleForID(b, want)
+	if err != nil {
+		return nil, err
+	}
+	if bundle.Serial < minSerial {
+		return nil, fmt.Errorf("%w: serial %d, want at least %d", ErrStaleBundle, bundle.Serial, minSerial)
 	}
 	return bundle, nil
 }

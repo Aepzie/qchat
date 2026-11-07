@@ -83,6 +83,28 @@ func TestParseBundleForID(t *testing.T) {
 	}
 }
 
+func TestParseBundleForIDMinSerial(t *testing.T) {
+	identity := generate(t)
+	raw, err := identity.Bundle(3, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, minSerial := range []uint64{0, 1, 3} {
+		if bundle, err := ParseBundleForIDMinSerial(raw, identity.ID(), minSerial); err != nil || bundle.Serial != 3 {
+			t.Errorf("min serial %d: %v", minSerial, err)
+		}
+	}
+	if _, err := ParseBundleForIDMinSerial(raw, identity.ID(), 4); !errors.Is(err, ErrStaleBundle) {
+		t.Errorf("stale bundle: %v, want ErrStaleBundle", err)
+	}
+	if _, err := ParseBundleForIDMinSerial(raw, generate(t).ID(), 1); !errors.Is(err, ErrIDMismatch) {
+		t.Errorf("other ID: %v, want ErrIDMismatch", err)
+	}
+	if _, err := ParseBundleForIDMinSerial(raw[:10], identity.ID(), 1); !errors.Is(err, ErrMalformedBundle) {
+		t.Errorf("truncated: %v", err)
+	}
+}
+
 func TestParseBundleTamper(t *testing.T) {
 	identity := katIdentity(t)
 	raw, err := identity.Bundle(1, time.Unix(katCreated, 0))
