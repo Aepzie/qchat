@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -191,5 +192,147 @@ func TestConcurrentOpenOfNewDatabase(t *testing.T) {
 		if n := countMigrations(t, path); n != len(migrations) {
 			t.Fatalf("round %d: %d migrations recorded, want %d", round, n, len(migrations))
 		}
+	}
+}
+
+// TestMigrateQueueToSharedPayloads opens a schema version 2 database with
+// stored messages and checks that migration 3 keeps every message, its
+// queue ID and the queue ID sequence, and moves each payload into
+// queue_payloads.
+func TestMigrateQueueToSharedPayloads(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "qchat.db")
+	alice, bob, carol := testID(1), testID(2), testID(3)
+	expires := time.Unix(1_700_003_600, 0).Unix()
+
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		"CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY) STRICT",
+		migrations[0],
+		migrations[1],
+		"INSERT INTO schema_migrations (version) VALUES (1), (2)",
+	}
+	for _, stmt := range statements {
+		if _, err := conn.Exec(stmt); err != nil {
+			t.Fatalf("build version 2 schema: %v", err)
+		}
+	}
+	for _, id := range [][32]byte{bob, carol} {
+		if _, err := conn.Exec("INSERT INTO identities (id, bundle, serial) VALUES (?, ?, 1)", id[:], []byte("bundle")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range []struct {
+		recipient [32]byte
+		payload   string
+	}{{bob, "first"}, {carol, "second"}, {bob, "third"}, {carol, "acked"}} {
+		if _, err := conn.Exec("INSERT INTO queue (recipient, sender, payload, size, expires) VALUES (?, ?, ?, ?, ?)",
+			row.recipient[:], alice[:], []byte(row.payload), len(row.payload), expires); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec("DELETE FROM queue WHERE qid = 4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open version 2 database: %v", err)
+	}
+	defer db.Close()
+	if got := countMigrations(t, path); got != len(migrations) {
+		t.Fatalf("schema_migrations has %d rows, want %d", got, len(migrations))
+	}
+	now := time.Unix(1_700_000_000, 0)
+	msgs, err := db.QueuedFor(ctx, bob, 0, 10, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 || msgs[0].QID != 1 || msgs[1].QID != 3 || string(msgs[0].Payload) != "first" ||
+		string(msgs[1].Payload) != "third" || msgs[0].Sender != alice {
+		t.Fatalf("bob's messages after migration: %+v", msgs)
+	}
+	if msgs, _ := db.QueuedFor(ctx, carol, 0, 10, now); len(msgs) != 1 || msgs[0].QID != 2 || string(msgs[0].Payload) != "second" {
+		t.Fatalf("carol's messages after migration: %+v", msgs)
+	}
+	if rows, size, refs := payloadStats(t, db); rows != 3 || size != int64(len("first")+len("second")+len("third")) || refs != 3 {
+		t.Fatalf("payloads after migration: %d rows, %d bytes, %d references", rows, size, refs)
+	}
+	var legacy int
+	if err := db.sql.QueryRow("SELECT count(*) FROM sqlite_master WHERE name IN ('queue_v3') OR sql LIKE '%queue_v3%'").Scan(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy != 0 {
+		t.Fatalf("%d schema objects still mention the temporary table", legacy)
+	}
+
+	if err := db.Ack(ctx, bob, 1); err != nil {
+		t.Fatal(err)
+	}
+	if rows, _, _ := payloadStats(t, db); rows != 2 {
+		t.Fatalf("%d payloads after acknowledging a migrated message, want 2", rows)
+	}
+	next, err := db.Enqueue(ctx, bob, alice, []byte("new"), now, now.Add(time.Hour), QueueLimits{MaxMessages: 10, MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next != 5 {
+		t.Fatalf("first queue ID after migration %d, want 5 (IDs are never reused)", next)
+	}
+	outcomes, err := db.EnqueueMulti(ctx, [][32]byte{bob, carol}, alice, []byte("group"), now, now.Add(time.Hour), QueueLimits{MaxMessages: 10, MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qids := qidsOf(t, outcomes); qids[0] != 6 || qids[1] != 7 {
+		t.Fatalf("queue IDs %v, want [6 7]", qids)
+	}
+}
+
+// TestMigrateEmptyQueueKeepsSequence checks that migration 3 keeps the
+// queue ID sequence even when every message was already deleted.
+func TestMigrateEmptyQueueKeepsSequence(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "qchat.db")
+	alice, bob := testID(1), testID(2)
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		"CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY) STRICT",
+		migrations[0],
+		migrations[1],
+		"INSERT INTO schema_migrations (version) VALUES (1), (2)",
+		"INSERT INTO identities (id, bundle, serial) VALUES (x'" + strings.Repeat("02", 32) + "', x'01', 1)",
+		"INSERT INTO queue (recipient, sender, payload, size, expires) VALUES (x'" + strings.Repeat("02", 32) + "', x'" + strings.Repeat("01", 32) + "', x'01', 1, 0)",
+		"UPDATE sqlite_sequence SET seq = 41 WHERE name = 'queue'",
+		"DELETE FROM queue",
+	}
+	for _, stmt := range statements {
+		if _, err := conn.Exec(stmt); err != nil {
+			t.Fatalf("build version 2 database: %v", err)
+		}
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Unix(1_700_000_000, 0)
+	qid, err := db.Enqueue(ctx, bob, alice, []byte("x"), now, now.Add(time.Hour), QueueLimits{MaxMessages: 1, MaxBytes: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qid != 42 {
+		t.Fatalf("queue ID %d after migrating an emptied queue, want 42", qid)
 	}
 }
