@@ -1,7 +1,8 @@
 // Package server implements the qchat relay server: configuration loading,
-// connection limits and the per-connection session protocol.
+// connection limits, the per-connection session protocol, identity
+// registration, authentication and message routing.
 //
-// # Session protocol (wire version 1, phase 1)
+// # Session protocol (wire version 1)
 //
 //  1. The client opens a WebSocket over pinned TLS (see package transport).
 //     It must send a binary message holding a Hello frame within
@@ -9,16 +10,79 @@
 //  2. The server negotiates a version and answers with a Welcome frame that
 //     echoes the Hello's frame ID. If no common version exists it sends an
 //     Error frame with code UnsupportedVersion and closes.
-//  3. The client then sends Ping frames; each is answered with a Pong that
-//     carries the same frame ID and nonce. The server does not send pings.
+//  3. The client then sends requests; every response echoes the request's
+//     frame ID. Ping is answered with a Pong carrying the same nonce. The
+//     server does not send pings.
 //  4. A session that sends nothing for 2*ping_interval+10s is closed.
 //  5. Text messages close the session with status 1003 (unsupported data).
-//     Malformed, unknown or unexpected frames, including a second Hello,
-//     produce an Error frame (BadRequest or the code chosen by
-//     protocol.ErrorCodeFor) and a close with status 1008.
 //  6. Each session has a token bucket (frames_per_second, burst). Exceeding
 //     it produces an Error frame with code RateLimited and a close with
 //     status 1008.
+//
+// # Identities, authentication and routing
+//
+// A session starts unauthenticated. It may send Ping, Register and
+// AuthBegin; KeyRequest and Send require authentication.
+//
+//   - Register{Bundle, Invite} verifies the bundle's self-signature and
+//     stores it. With registration = "open" any valid bundle is accepted;
+//     with "invite" a new ID needs a valid unused invite code, while a
+//     known ID may update its bundle without one. The identical bundle is
+//     accepted again, a higher serial replaces the stored bundle, anything
+//     else fails with Conflict. Register is also allowed after
+//     authentication, so a client can rotate its keys.
+//   - AuthBegin{ID} answers with an AuthChallenge carrying 32 fresh random
+//     bytes. A session has at most one outstanding challenge: a new
+//     AuthBegin replaces it. The challenge expires after 30 seconds and is
+//     consumed by the next AuthProof, whatever its outcome.
+//   - AuthProof{Sig} must be a signature, made with identity.SignAuth, over
+//     this relay's TLS fingerprint, the nonce and the ID. On success the
+//     session is bound to that ID for its lifetime and answered with AuthOK.
+//   - KeyRequest{ID} returns the stored bundle exactly as registered.
+//   - Send{To, Payload} pushes Deliver{From, Payload} to every live
+//     authenticated session of To, where From is the sender's authenticated
+//     ID, and answers SendResult Delivered if at least one session took the
+//     frame, RecipientOffline otherwise. Payloads are never stored.
+//
+// Register and AuthBegin also draw from a second, per-session token bucket
+// (5 per minute, burst 5), which bounds the signature checks and database
+// writes a session can cause.
+//
+// Each session has a single writer goroutine fed by a bounded queue of 64
+// frames. Responses to the session's own requests wait for room in the
+// queue; a Deliver pushed by another session never waits: if the
+// recipient's queue is full that delivery is dropped and, if no other
+// session of the recipient took it, reported as RecipientOffline.
+//
+// # Fatal and non-fatal errors
+//
+// Errors caused by the request's content or by relay state are answered
+// with an Error frame and the session continues:
+//
+//   - Unauthorized: KeyRequest or Send before authentication;
+//   - NotFound: AuthBegin, KeyRequest or Send naming an unknown ID;
+//   - RegistrationDenied: a new ID without a valid invite code;
+//   - Conflict: a different bundle for a known ID without a higher serial;
+//   - BadRequest: a Register bundle that does not verify, or Send to the
+//     sender's own ID;
+//   - TooLarge: a Send payload above limits.max_message_size;
+//   - RateLimited: Register or AuthBegin over the per-session bucket;
+//   - Internal: a database failure.
+//
+// Protocol violations are answered with an Error frame followed by a close
+// with status 1008:
+//
+//   - BadRequest: malformed frames or bodies, unknown frame types, frame
+//     types only the server sends, a second Hello, and AuthBegin or
+//     AuthProof on an already authenticated session;
+//   - UnsupportedVersion: no common wire version, or a frame of another
+//     version;
+//   - RateLimited: the per-session frame bucket is exhausted;
+//   - Unauthorized: AuthProof without an outstanding challenge, after it
+//     expired, or with a signature that does not verify.
+//
+// A message larger than limits.max_frame_size closes the session with
+// status 1009 without an Error frame.
 //
 // Error frames and WebSocket close reasons are fixed ASCII strings; they
 // never echo client data.
@@ -33,9 +97,12 @@
 //
 // # Privacy
 //
-// The server never writes client IP addresses, frame bodies or any other
-// client-controlled string to its log. Addresses are kept in memory only
-// while a connection is open, to enforce the per-IP connection limit.
+// The server never writes client IP addresses, identity IDs, payloads,
+// frame bodies or any other client-controlled string to its log. Addresses
+// are kept in memory only while a connection is open, to enforce the per-IP
+// connection limit; IDs of authenticated sessions only while they are
+// connected, to route messages. The database holds identity bundles and
+// invite code hashes, never messages.
 // Session events are logged at debug level with a random session number
 // that is meaningless outside the running process.
 package server

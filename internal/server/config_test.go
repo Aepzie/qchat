@@ -29,7 +29,7 @@ func TestDefaultConfig(t *testing.T) {
 		Listen:       "0.0.0.0:7443",
 		TLSCert:      "server.crt",
 		TLSKey:       "server.key",
-		Database:     "qchat.db",
+		Database:     "db/qchat.db",
 		Registration: "invite",
 		Limits: Limits{
 			MaxConnections:       1000,
@@ -319,7 +319,7 @@ func TestWriteTOMLRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := buf.String()
-	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS", "database = 'qchat.db'", "registration = 'invite'", "max_message_size = 262144", "never messages", "invite create"} {
+	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS", "database = 'db/qchat.db'", "registration = 'invite'", "max_message_size = 262144", "never messages", "invite create"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("WriteTOML output lacks %q:\n%s", want, text)
 		}

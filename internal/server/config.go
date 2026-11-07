@@ -24,7 +24,7 @@ const (
 	DefaultListen               = "0.0.0.0:7443"
 	DefaultTLSCert              = "server.crt"
 	DefaultTLSKey               = "server.key"
-	DefaultDatabase             = "qchat.db"
+	DefaultDatabase             = "db/qchat.db"
 	DefaultRegistration         = RegistrationInvite
 	DefaultMaxConnections       = 1000
 	DefaultMaxConnectionsPerIP  = 16
@@ -111,8 +111,12 @@ type Config struct {
 	TLSKey string `toml:"tls_key" comment:"PEM private key (keep it secret, mode 0600)."`
 	// Database is the path of the SQLite database holding registered
 	// identity bundles and invite code hashes, resolved like TLSCert. The
-	// server account needs write access to the file and its directory.
-	Database string `toml:"database" comment:"SQLite database of identity bundles and invite code hashes (never messages).\nRelative paths resolve against this file's directory; the server needs write access."`
+	// server account needs write access to the file and its directory,
+	// where SQLite creates the -wal and -shm files, so the database lives
+	// in a directory of its own: the server never needs write access to
+	// the directory holding its key and configuration. The directory must
+	// exist; "qchat-server init" creates it.
+	Database string `toml:"database" comment:"SQLite database of identity bundles and invite code hashes (never messages).\nRelative paths resolve against this file's directory. The server needs write access\nto the file and its directory (SQLite creates -wal and -shm files next to it)."`
 	// Registration is RegistrationInvite or RegistrationOpen.
 	Registration string `toml:"registration" comment:"Who may register a new identity: \"invite\" (requires a code from\n\"qchat-server invite create\") or \"open\" (anyone who can connect)."`
 	// Limits bounds the resources a client can consume.

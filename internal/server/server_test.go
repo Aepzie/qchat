@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,6 +90,7 @@ func startServer(t *testing.T, opts serverOptions) *testServer {
 	cfg := DefaultConfig()
 	cfg.Listen = "127.0.0.1:0"
 	cfg.Limits.HandshakeTimeout = DurationOf(5 * time.Second)
+	cfg.Database = filepath.Join(t.TempDir(), "qchat.db")
 	if opts.config != nil {
 		opts.config(&cfg)
 	}
@@ -101,6 +103,7 @@ func startServer(t *testing.T, opts serverOptions) *testServer {
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv.authBurst = 1000
 	if opts.tweak != nil {
 		opts.tweak(srv)
 	}
@@ -116,6 +119,7 @@ func startServer(t *testing.T, opts serverOptions) *testServer {
 	ts := &testServer{srv: srv, addr: ln.Addr().String(), pin: pin, cfg: cfg, cancel: cancel, done: make(chan error, 1)}
 	go func() { ts.done <- srv.Serve(ctx, ln) }()
 	t.Cleanup(func() { ts.stop(t) })
+	waitFor(t, "server to open its database", func() bool { return srv.Addr() != nil })
 	return ts
 }
 
@@ -802,6 +806,7 @@ func TestListenAndServe(t *testing.T) {
 	cert, pin := testIdentity(t)
 	cfg := DefaultConfig()
 	cfg.Listen = "127.0.0.1:0"
+	cfg.Database = filepath.Join(t.TempDir(), "qchat.db")
 	srv, err := New(cfg, cert, nil)
 	if err != nil {
 		t.Fatal(err)
