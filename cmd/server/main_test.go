@@ -48,7 +48,7 @@ func initDataDir(t *testing.T, extra ...string) (dir, pin string) {
 func TestInitCreatesIdentityAndConfig(t *testing.T) {
 	dir, pin := initDataDir(t, "--host", "chat.example.org", "--host", "192.0.2.7", "--listen", "127.0.0.1:7999")
 
-	for _, name := range []string{keyFileName, certFileName, configFileName} {
+	for _, name := range []string{keyFileName, certFileName, configFileName, server.DefaultDatabase} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("%s missing: %v", name, err)
@@ -223,7 +223,7 @@ func TestVersionHelpAndUnknown(t *testing.T) {
 	if code, stdout, _ := runCLI(t, "version"); code != 0 || stdout != "qchat-server dev\n" {
 		t.Errorf("version: exit %d, stdout %q", code, stdout)
 	}
-	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"frobnicate"}, {"invite"}, {"build-client"}} {
+	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"frobnicate"}, {"build-client"}} {
 		code, stdout, stderr := runCLI(t, args...)
 		if code != 2 || stdout != "" || !strings.Contains(stderr, "Usage: qchat-server") || !strings.Contains(stderr, "Planned") {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, stdout, stderr)

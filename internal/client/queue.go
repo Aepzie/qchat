@@ -6,9 +6,8 @@ import "sync"
 const eventBuffer = 32
 
 // maxPendingEvents bounds the events held back while the consumer is slow.
-// Critical events arrive at most a few times per connection attempt, and
-// attempts are spaced by at least the minimum backoff, so the bound is only
-// reached if the consumer has stopped reading altogether.
+// Critical events are queued even beyond the bound, so it only limits
+// expendable ones; it is reached only if the consumer has fallen far behind.
 const maxPendingEvents = 1024
 
 // eventQueue decouples the network loop from the consumer. push never
@@ -17,7 +16,8 @@ const maxPendingEvents = 1024
 // Delivery policy: an RTT event replaces a still-undelivered RTT event at the
 // tail of the queue (only the latest measurement matters), and when the
 // queue is full the oldest RTT or Connecting event is discarded first.
-// SecurityAlert and Failed events are never discarded.
+// SecurityAlert, Authenticated, Delivery, RegistrationDenied and Failed
+// events are never discarded.
 type eventQueue struct {
 	out    chan Event
 	notify chan struct{}
@@ -129,7 +129,7 @@ func isExpendable(ev Event) bool {
 
 func isCritical(ev Event) bool {
 	switch e := ev.(type) {
-	case SecurityAlert:
+	case SecurityAlert, Authenticated, Delivery, RegistrationDenied:
 		return true
 	case StateChanged:
 		return e.State == Failed

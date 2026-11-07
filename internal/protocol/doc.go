@@ -50,12 +50,52 @@
 // them rejects it. Malformed input yields an error wrapping [ErrMalformed];
 // the decoder never panics.
 //
+// # Message flow
+//
+// A session starts with the [Hello]/[Welcome] handshake. Afterwards either
+// side may send [Ping] at any time and the peer answers with [Pong]. A
+// response always carries the frame ID of the request it answers, and any
+// request may instead be answered with an [ErrorBody] carrying that ID.
+//
+// Identities are named by an ID of [IDSize] bytes derived from their public
+// identity bundle. The client uses the following exchanges:
+//
+//	Registration (allowed before authentication)
+//	  C→S  Register{Bundle, Invite}  self-signed bundle, optional invite code
+//	  S→C  Registered{}              or Error RegistrationDenied / Conflict
+//
+//	Challenge-response authentication
+//	  C→S  AuthBegin{ID}             the identity to authenticate as
+//	  S→C  AuthChallenge{Nonce}      NonceSize fresh random bytes
+//	  C→S  AuthProof{Sig}            signature binding the relay, nonce and ID
+//	  S→C  AuthOK{}                  or Error Unauthorized
+//
+//	Key lookup (requires authentication)
+//	  C→S  KeyRequest{ID}
+//	  S→C  KeyResponse{Bundle}       or Error NotFound
+//
+//	Messaging (requires authentication)
+//	  C→S  Send{To, Payload}
+//	  S→C  SendResult{Status}        Delivered or RecipientOffline
+//	  S→C  Deliver{From, Payload}    pushed to every authenticated
+//	                                 connection of the recipient
+//
+// The authentication signature covers the fingerprint of the relay's TLS
+// public key as well as the nonce and the ID, so a proof cannot be replayed
+// against another relay, and a connection is authenticated for exactly one
+// ID. [Registered] and [AuthOK] carry no fields; their only valid body is the
+// empty map. These frame types were added within wire version 1: a peer that
+// predates them rejects them as unknown types, which is the intended,
+// backwards compatible failure mode.
+//
 // # Relay model
 //
-// The server is an untrusted relay. In phase 1 it only takes part in the
-// handshake, keepalive and error reporting, all of which use the plaintext
-// bodies defined in this package. In later phases the bodies of message
-// frames will be end-to-end encrypted blobs: the server sees them as opaque
-// ciphertext that it routes by frame type and size, and it never needs, nor
-// is able, to interpret their contents.
+// The server is an untrusted relay. The handshake, keepalive, error,
+// registration, authentication and key lookup bodies are plaintext and
+// defined in this package. The Payload of [Send] and [Deliver] is end-to-end
+// encrypted ciphertext: the relay routes it by recipient ID and checks only
+// its size, and it never needs, nor is able, to interpret its contents.
+// Identity bundles returned by the relay are verified by the client, which
+// checks that each bundle is validly self-signed and that its ID equals the
+// requested ID, so the relay cannot substitute keys.
 package protocol

@@ -15,7 +15,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"golang.org/x/time/rate"
 
+	"github.com/craguS/qchat/internal/identity"
+	"github.com/craguS/qchat/internal/store/serverdb"
 	"github.com/craguS/qchat/internal/transport"
 )
 
@@ -51,20 +54,31 @@ type Stats struct {
 // Server is the qchat relay server. Create it with New and start it with
 // Serve or ListenAndServe; a Server can be started only once.
 //
-// Privacy: the server never logs client IP addresses, frame contents or
-// any other client-controlled string. Session events are logged at debug
-// level only, identified by a random per-process session number.
+// Privacy: the server never logs client IP addresses, identity IDs, frame
+// contents or any other client-controlled string. Session events are logged
+// at debug level only, identified by a random per-process session number.
 type Server struct {
-	cfg       Config
-	tlsConfig *tls.Config
-	logger    *slog.Logger
-	limiter   *connLimiter
-	pending   chan struct{}
+	cfg         Config
+	tlsConfig   *tls.Config
+	fingerprint transport.Fingerprint
+	logger      *slog.Logger
+	limiter     *connLimiter
+	pending     chan struct{}
+	db          *serverdb.DB
 
 	setupTimeout     time.Duration
 	handshakeTimeout time.Duration
 	idleTimeout      time.Duration
 	shutdownTimeout  time.Duration
+	challengeTTL     time.Duration
+	authRate         rate.Limit
+	authBurst        int
+	now              func() time.Time
+
+	routesMu sync.Mutex
+	routes   map[identity.ID]map[*session]struct{}
+
+	queueBudget *byteBudget
 
 	started  atomic.Bool
 	total    atomic.Uint64
@@ -86,12 +100,17 @@ func New(cfg Config, cert tls.Certificate, logger *slog.Logger) (*Server, error)
 	if len(cert.Certificate) == 0 {
 		return nil, errors.New("server: TLS certificate chain is empty")
 	}
+	fingerprint, err := transport.FingerprintOfTLS(cert)
+	if err != nil {
+		return nil, fmt.Errorf("server: %w", err)
+	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Server{
 		cfg:              cfg,
 		tlsConfig:        transport.ServerTLSConfig(cert),
+		fingerprint:      fingerprint,
 		logger:           logger,
 		limiter:          newConnLimiter(cfg.Limits.MaxConnections, cfg.Limits.MaxConnectionsPerIP),
 		pending:          make(chan struct{}, cfg.Limits.MaxPendingHandshakes),
@@ -99,6 +118,12 @@ func New(cfg Config, cert tls.Certificate, logger *slog.Logger) (*Server, error)
 		handshakeTimeout: cfg.Limits.HandshakeTimeout.Std(),
 		idleTimeout:      cfg.Limits.idleTimeout(),
 		shutdownTimeout:  shutdownTimeout,
+		challengeTTL:     challengeTTL,
+		authRate:         rate.Every(authInterval),
+		authBurst:        authBurst,
+		now:              time.Now,
+		routes:           make(map[identity.ID]map[*session]struct{}),
+		queueBudget:      newByteBudget(cfg.Limits.MaxTotalQueueBytes),
 		sessions:         make(map[*session]struct{}),
 	}, nil
 }
@@ -113,11 +138,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return s.Serve(ctx, ln)
 }
 
-// Serve accepts TLS connections on ln until ctx is cancelled, then shuts
-// down gracefully: new connections are refused, open sessions are closed
-// with WebSocket status 1001 (going away), and Serve waits for them, up to
-// a bounded time. It returns nil after a shutdown triggered by ctx, and an
-// error if the listener fails. Serve takes ownership of ln and closes it.
+// Serve opens the configured database, then accepts TLS connections on ln
+// until ctx is cancelled and shuts down gracefully: new connections are
+// refused, open sessions are closed with WebSocket status 1001 (going
+// away), and Serve waits for them, up to a bounded time, before closing the
+// database. It returns nil after a shutdown triggered by ctx, and an error
+// if the database cannot be opened or the listener fails. Serve takes
+// ownership of ln and closes it.
 //
 // Only transport.WebSocketPath is served; every other path gets 404. Each
 // connection carries a single request.
@@ -132,6 +159,13 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		_ = ln.Close()
 		return errors.New("server: already started")
 	}
+	db, err := serverdb.Open(s.cfg.Database)
+	if err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("server: %w", err)
+	}
+	s.db = db
+	defer s.closeDatabase()
 	s.mu.Lock()
 	s.addr = ln.Addr()
 	s.mu.Unlock()
@@ -164,6 +198,13 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 	s.logger.Info("server stopped")
 	return nil
+}
+
+// closeDatabase closes the database once every session has ended.
+func (s *Server) closeDatabase() {
+	if err := s.db.Close(); err != nil {
+		s.logger.Error("cannot close database", "err", err)
+	}
 }
 
 // Addr returns the listening address, or nil before Serve has started.
@@ -251,7 +292,14 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess := newSession(s, conn)
+	binding, err := transport.AuthBinding(r.TLS)
+	if err != nil {
+		s.logger.Debug("no channel binding for connection")
+		_ = conn.Close(websocket.StatusInternalError, "")
+		return
+	}
+
+	sess := newSession(s, conn, binding)
 	if !s.register(sess) {
 		_ = conn.Close(websocket.StatusGoingAway, closeTextShutdown)
 		return

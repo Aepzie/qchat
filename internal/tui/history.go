@@ -24,6 +24,7 @@ const (
 	entryNote
 	entryOutput
 	entryAlert
+	entryMessage
 )
 
 // row is one labelled line of command output. A value may span several
@@ -43,6 +44,16 @@ type entry struct {
 	rows  []row
 	alert client.SecurityAlert
 	addr  string
+
+	// Message fields, used by entryMessage.
+	from     string
+	msgID    string
+	outgoing bool
+	status   MessageStatus
+	errText  string
+	skew     bool
+	// sender is the identity ID behind an entry under Message requests.
+	sender string
 }
 
 // Layout of a history line: "15:04:05" + two spaces, then a one-cell marker
@@ -60,12 +71,37 @@ func (e entry) standsAlone() bool {
 	return e.kind == entryNote || e.kind == entryOutput || e.kind == entryAlert
 }
 
+// needsGap reports whether a blank line separates two adjacent entries.
+// Consecutive messages from the same sender stay together.
+func needsGap(prev, cur entry) bool {
+	if prev.kind == entryMessage && cur.kind == entryMessage {
+		return prev.outgoing != cur.outgoing || prev.from != cur.from
+	}
+	return cur.standsAlone() || prev.standsAlone() || cur.kind == entryMessage || prev.kind == entryMessage
+}
+
+// separator returns the lines drawn between two adjacent entries: a date
+// divider when the day changes, a blank line, or nothing.
+func separator(prev, cur entry, width int, st styles) []string {
+	py, pm, pd := prev.at.Date()
+	cy, cm, cd := cur.at.Date()
+	if py != cy || pm != cm || pd != cd {
+		label := "── " + cur.at.Format("Mon 2 Jan 2006") + " "
+		rule := max(min(width, 48)-lipgloss.Width(label), 0)
+		return []string{"", st.faint.Render(truncate(label+strings.Repeat("─", rule), width))}
+	}
+	if needsGap(prev, cur) {
+		return []string{""}
+	}
+	return nil
+}
+
 // renderEntries draws the whole history at the given width.
 func renderEntries(entries []entry, width int, st styles) []string {
 	var lines []string
 	for i, e := range entries {
-		if i > 0 && (e.standsAlone() || entries[i-1].standsAlone()) {
-			lines = append(lines, "")
+		if i > 0 {
+			lines = append(lines, separator(entries[i-1], e, width, st)...)
 		}
 		lines = append(lines, renderEntry(e, width, st)...)
 	}
@@ -80,6 +116,8 @@ func renderEntry(e entry, width int, st styles) []string {
 		return renderOutput(e, width, st)
 	case entryAlert:
 		return renderAlert(e, width, st)
+	case entryMessage:
+		return renderMessage(e, width, st)
 	default:
 		return renderLine(e, width, st)
 	}
@@ -121,6 +159,56 @@ func renderNote(e entry, width int, st styles) []string {
 		out = append(out, indent+st.text.Render(line))
 	}
 	return out
+}
+
+// renderMessage draws a message: a header with time, sender and delivery
+// status, then the body.
+func renderMessage(e entry, width int, st styles) []string {
+	name := st.bold.Render(truncate(e.from, max(width/3, 8)))
+	if e.outgoing {
+		name = st.accent.Bold(true).Render("you")
+	}
+	head := timestamp(e, st) + "  " + name
+	for _, meta := range messageMeta(e, st) {
+		if lipgloss.Width(head)+2+lipgloss.Width(meta) <= width {
+			head += "  " + meta
+			break
+		}
+	}
+	out := []string{head}
+	indent := strings.Repeat(" ", noteIndent)
+	for _, line := range wrapLines(e.text, width-noteIndent) {
+		out = append(out, indent+st.text.Render(line))
+	}
+	if e.status == StatusFailed && e.errText != "" {
+		for _, line := range wrapLines(e.errText, width-noteIndent) {
+			out = append(out, indent+st.danger.Render(line))
+		}
+	}
+	return out
+}
+
+// messageMeta returns the status and clock-skew markers of a message, from
+// the most to the least descriptive form.
+func messageMeta(e entry, st styles) []string {
+	var long, short []string
+	switch e.status {
+	case StatusSending:
+		long, short = append(long, st.faint.Render("… sending")), append(short, st.faint.Render("…"))
+	case StatusSent:
+		long, short = append(long, st.muted.Render("✓ sent")), append(short, st.muted.Render("✓"))
+	case StatusRecipientOffline:
+		long, short = append(long, st.warn.Render("⧗ recipient offline · not delivered")), append(short, st.warn.Render("⧗ offline"))
+	case StatusFailed:
+		long, short = append(long, st.danger.Render("✕ not sent")), append(short, st.danger.Render("✕"))
+	}
+	if e.skew {
+		long, short = append(long, st.warn.Render("◷ sender clock off")), append(short, st.warn.Render("◷"))
+	}
+	if len(long) == 0 {
+		return nil
+	}
+	return []string{strings.Join(long, "  "), strings.Join(short, " ")}
 }
 
 // renderOutput draws command output: a title and aligned key/value rows.

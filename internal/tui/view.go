@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -24,13 +25,14 @@ type dims struct {
 	sidebarW int
 	mainW    int
 	bodyH    int
+	bannerH  int
 	inputH   int
 	paletteH int
 	historyH int
 }
 
 // dims computes the layout. Every row of the body is accounted for:
-// header + history + palette + separator + input == bodyH.
+// header + banner + history + palette + separator + input == bodyH.
 func (m *Model) dims() dims {
 	d := dims{}
 	if m.width < MinWidth || m.height < MinHeight {
@@ -43,10 +45,15 @@ func (m *Model) dims() dims {
 	d.mainW = m.width - d.sidebarW
 	d.bodyH = m.height - 2
 	d.inputH = min(max(m.input.Height(), 1), maxInputHeight)
+	if m.confirm.active {
+		d.inputH = 1
+	}
 	if matches, open := m.paletteMatches(); open {
 		d.paletteH = min(max(len(matches), 1), maxPaletteRows)
 	}
 	room := d.bodyH - 2 - d.inputH
+	d.bannerH = len(m.renderBanner(d.mainW, room))
+	room -= d.bannerH
 	d.paletteH = min(d.paletteH, max(room-1, 0))
 	d.historyH = room - d.paletteH
 	return d
@@ -95,33 +102,39 @@ func (m Model) render() string {
 	}
 	d := m.dims()
 	if d.tooSmall {
-		return m.renderTooSmall()
+		return renderTooSmall(m.st, m.width, m.height, MinWidth, MinHeight)
 	}
-	sidebar := m.renderSidebar(d)
-	main := m.renderMain(d)
 	lines := make([]string, 0, m.height)
 	lines = append(lines, m.renderStatus(m.width))
-	for i := 0; i < d.bodyH; i++ {
-		line := main[i]
-		if d.sidebarW > 0 {
-			line = sidebar[i] + line
+	if m.overlay.kind != overlayNone {
+		lines = append(lines, m.renderOverlay(m.width, d.bodyH)...)
+	} else {
+		sidebar := m.renderSidebar(d)
+		main := m.renderMain(d)
+		for i := 0; i < d.bodyH; i++ {
+			line := main[i]
+			if d.sidebarW > 0 {
+				line = sidebar[i] + line
+			}
+			lines = append(lines, line)
 		}
-		lines = append(lines, line)
 	}
 	lines = append(lines, m.renderFooter(m.width))
 	return clamp(strings.Join(lines, "\n"), m.width, m.height)
 }
 
-func (m Model) renderTooSmall() string {
+// renderTooSmall draws the notice shown when the terminal is smaller than
+// minW×minH.
+func renderTooSmall(st styles, width, height, minW, minH int) string {
 	var lines []string
-	for _, l := range wrapLines(fmt.Sprintf("Terminal too small (need %d×%d)", MinWidth, MinHeight), m.width) {
-		lines = append(lines, m.st.bold.Render(l))
+	for _, l := range wrapLines(fmt.Sprintf("Terminal too small (need %d×%d)", minW, minH), width) {
+		lines = append(lines, st.bold.Render(l))
 	}
-	for _, l := range wrapLines(fmt.Sprintf("current size %d×%d", m.width, m.height), m.width) {
-		lines = append(lines, m.st.muted.Render(l))
+	for _, l := range wrapLines(fmt.Sprintf("current size %d×%d", width, height), width) {
+		lines = append(lines, st.muted.Render(l))
 	}
-	box := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, strings.Join(lines, "\n"))
-	return clamp(box, m.width, m.height)
+	box := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, strings.Join(lines, "\n"))
+	return clamp(box, width, height)
 }
 
 // statusSegment is one optional piece of the status bar. Segments with a
@@ -129,6 +142,15 @@ func (m Model) renderTooSmall() string {
 type statusSegment struct {
 	text     string
 	priority int
+}
+
+// e2eBadges returns the end-to-end encryption badge, longest form first.
+// Phase 2 has no forward secrecy, and the badge says so.
+func e2eBadges(enabled bool) []string {
+	if !enabled {
+		return []string{" E2E: off "}
+	}
+	return []string{" E2E · no forward secrecy yet ", " E2E · no FS yet ", " E2E·noFS "}
 }
 
 func (m Model) renderStatus(width int) string {
@@ -148,10 +170,11 @@ func (m Model) renderStatus(width int) string {
 	if m.conn.state == client.Connected && m.conn.hasRTT {
 		segments = append(segments, statusSegment{st.bar.Foreground(t.Text).Render(formatRTT(m.conn.rtt)), 30})
 	}
-	right := st.barBadge.Render(" E2E: not yet ")
+	if m.hasSelf && m.self.ShortID != "" {
+		segments = append(segments, statusSegment{st.barFaint.Render("id ") + st.barMuted.Render(m.self.ShortID), 25})
+	}
 	sep := st.bar.Render("  ")
 	lead := st.bar.Render(" ")
-
 	join := func(segs []statusSegment) string {
 		parts := make([]string, len(segs))
 		for i, s := range segs {
@@ -159,16 +182,33 @@ func (m Model) renderStatus(width int) string {
 		}
 		return lead + strings.Join(parts, sep)
 	}
-	left := join(segments)
-	for lipgloss.Width(left)+1+lipgloss.Width(right) > width && len(segments) > 2 {
-		drop := 0
-		for i, s := range segments {
-			if s.priority < segments[drop].priority {
-				drop = i
+	fit := func(right string) (string, bool) {
+		segs := slices.Clone(segments)
+		left := join(segs)
+		lost := false
+		for lipgloss.Width(left)+1+lipgloss.Width(right) > width && len(segs) > 2 {
+			drop := 0
+			for i, s := range segs {
+				if s.priority < segs[drop].priority {
+					drop = i
+				}
 			}
+			lost = lost || segs[drop].priority >= 30
+			segs = slices.Delete(segs, drop, drop+1)
+			left = join(segs)
 		}
-		segments = append(segments[:drop], segments[drop+1:]...)
-		left = join(segments)
+		return left, !lost
+	}
+
+	badges := e2eBadges(m.cfg.Backend != nil)
+	var left, right string
+	for i, b := range badges {
+		right = st.barBadge.Render(b)
+		var kept bool
+		left, kept = fit(right)
+		if kept && lipgloss.Width(left)+1+lipgloss.Width(right) <= width || i == len(badges)-1 {
+			break
+		}
 	}
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -187,6 +227,8 @@ func (m Model) stateSegment() string {
 		return st.bar.Foreground(t.Success).Render("●") + st.bar.Render(" connected")
 	case m.conn.state == client.Connecting:
 		return st.bar.Foreground(t.Warning).Render("◌ connecting")
+	case m.conn.state == client.Authenticating:
+		return st.bar.Foreground(t.Warning).Render("◌ authenticating")
 	case m.conn.state == client.Disconnected:
 		return st.bar.Foreground(t.Danger).Render("✕ disconnected")
 	case m.conn.state == client.Failed:
@@ -199,12 +241,28 @@ func (m Model) stateSegment() string {
 func (m Model) renderFooter(width int) string {
 	st := m.st
 	pill := st.pillInsert.Render(" INSERT ")
-	hints := "enter send · esc normal · tab complete · /help"
+	hints := "enter send · ctrl+n/p switch · esc normal · tab complete · /help"
 	if m.mode == ModeNormal {
 		pill = st.pillNormal.Render(" NORMAL ")
-		hints = "i insert · j/k scroll · ctrl+d/u page · g/G ends · : command · q quit"
+		hints = "J/K select · enter open · j/k scroll · g/G ends · : command · q quit"
 	}
-	right := st.barFaint.Render("notes stay local ")
+	switch {
+	case m.overlay.kind == overlayVerify:
+		hints = "v verified · u not verified · esc close"
+	case m.overlay.kind == overlayWhoami:
+		hints = "esc close"
+	case m.confirm.active:
+		hints = "y remove · any other key keeps the contact"
+	}
+	c := m.conv(m.open)
+	note := "notes stay local "
+	switch {
+	case c != nil && c.kind == convContact:
+		note = "end-to-end encrypted "
+	case c != nil && c.kind == convRequests:
+		note = "read only "
+	}
+	right := st.barFaint.Render(note)
 	room := width - lipgloss.Width(pill) - 2 - lipgloss.Width(right)
 	if room < 24 {
 		right = ""
@@ -219,7 +277,8 @@ func (m Model) renderFooter(width int) string {
 }
 
 // renderSidebar draws the conversation list, exactly d.bodyH lines of
-// d.sidebarW cells, the last column being the border.
+// d.sidebarW cells, the last column being the border. The list scrolls to
+// keep the selected row visible.
 func (m Model) renderSidebar(d dims) []string {
 	if d.sidebarW == 0 {
 		return nil
@@ -228,13 +287,30 @@ func (m Model) renderSidebar(d dims) []string {
 	inner := d.sidebarW - 1
 	plain := lipgloss.NewStyle()
 	lines := []string{"", "  " + st.sidebarTitle.Render("CONVERSATIONS"), ""}
-	for i, c := range m.conversations {
-		lines = append(lines, m.renderConversation(c, i == m.selected, inner))
+
+	var hint []string
+	if len(m.convs) == 1 {
+		text := "No contacts yet. /add <qc1-id> [name]"
+		if m.cfg.Backend == nil {
+			text = "No identity loaded; messaging is off."
+		}
+		hint = append(hint, "")
+		for _, l := range wrapLines(text, inner-4) {
+			hint = append(hint, "  "+st.faint.Italic(true).Render(l))
+		}
 	}
-	lines = append(lines, "")
-	for _, l := range wrapLines("Contacts arrive in v0.2", inner-4) {
-		lines = append(lines, "  "+st.faint.Italic(true).Render(l))
+	rows := max(d.bodyH-len(lines)-len(hint), 1)
+	focus := m.open
+	if m.mode == ModeNormal {
+		focus = m.cursor
 	}
+	start := max(m.convIndex(focus)-rows+1, 0)
+	for i := start; i < len(m.convs) && i < start+rows; i++ {
+		c := &m.convs[i]
+		lines = append(lines, m.renderConversation(c, c.key == m.open, m.mode == ModeNormal && c.key == m.cursor, inner))
+	}
+	lines = append(lines, hint...)
+
 	out := make([]string, d.bodyH)
 	edge := st.border.Render("│")
 	for i := range out {
@@ -247,8 +323,11 @@ func (m Model) renderSidebar(d dims) []string {
 	return out
 }
 
-func (m Model) renderConversation(c conversation, selected bool, width int) string {
+// renderConversation draws one sidebar row: name, verification marker and
+// unread badge.
+func (m Model) renderConversation(c *conversation, selected, cursor bool, width int) string {
 	st := m.st
+	t := st.theme
 	badge, badgeW := "", 0
 	if c.unread > 0 {
 		label := fmt.Sprintf(" %d ", min(c.unread, 999))
@@ -259,13 +338,28 @@ func (m Model) renderConversation(c conversation, selected bool, width int) stri
 			badge = st.accent.Bold(true).Render(label)
 		}
 	}
-	nameW := max(width-3-badgeW, 1)
-	name := truncate(sanitizeText(c.name), nameW)
-	if selected {
-		body := st.rowSelected.Render(padPlain(" "+name, width-1-badgeW))
-		return st.rowMarker.Render("▌") + body + badge
+	mark, markColor := "", t.Text
+	if c.kind == convContact {
+		switch {
+		case c.contact.KeyChanged:
+			mark, markColor = " ⚠", t.Danger
+		case c.contact.Verified:
+			mark, markColor = " ✓", t.Success
+		}
 	}
-	return padRight("  "+st.muted.Render(name), width-badgeW, lipgloss.NewStyle()) + badge
+	markW := lipgloss.Width(mark)
+	nameW := max(width-3-badgeW-markW, 1)
+	name := truncate(c.title(), nameW)
+	if selected {
+		body := st.rowSelected.Render(padPlain(" "+name, width-1-badgeW-markW))
+		return st.rowMarker.Render("▌") + body + st.rowSelected.Foreground(markColor).Render(mark) + badge
+	}
+	lead := "  "
+	if cursor {
+		lead = st.accent.Render("›") + " "
+	}
+	row := lead + st.muted.Render(name) + lipgloss.NewStyle().Foreground(markColor).Render(mark)
+	return padRight(row, width-badgeW, lipgloss.NewStyle()) + badge
 }
 
 // renderMain draws the right pane, exactly d.bodyH lines of d.mainW cells.
@@ -276,6 +370,9 @@ func (m Model) renderMain(d dims) []string {
 
 	lines := make([]string, 0, d.bodyH)
 	lines = append(lines, m.renderHeader(d.mainW))
+	for _, b := range m.renderBanner(d.mainW, d.bodyH-2-d.inputH) {
+		lines = append(lines, fit(b))
+	}
 
 	history := strings.Split(m.history.View(), "\n")
 	for i := 0; i < d.historyH; i++ {
@@ -291,6 +388,9 @@ func (m Model) renderMain(d dims) []string {
 	lines = append(lines, st.border.Render(strings.Repeat("─", d.mainW)))
 
 	input := strings.Split(m.input.View(), "\n")
+	if m.confirm.active {
+		input = []string{st.warn.Bold(true).Render(truncate("Remove "+m.confirm.name+" from your contacts? Later messages arrive as requests. y/N", d.mainW-2))}
+	}
 	for i := 0; i < d.inputH; i++ {
 		line := ""
 		if i < len(input) {
@@ -301,19 +401,71 @@ func (m Model) renderMain(d dims) []string {
 	return lines
 }
 
+// renderHeader draws the conversation title with, for contacts, the short
+// ID and the verification state.
 func (m Model) renderHeader(width int) string {
 	st := m.st
-	title := " " + st.bold.Render("# System")
-	sub := st.faint.Render("  connection log and local notes")
+	c := m.conv(m.open)
+	if c == nil {
+		c = &m.convs[0]
+	}
 	hint := ""
 	if !m.history.AtBottom() {
 		hint = st.accent.Render("↓ newer below") + " "
 	}
-	room := width - lipgloss.Width(title) - lipgloss.Width(hint)
-	if lipgloss.Width(sub) > room-1 {
-		sub = ""
+	room := width - lipgloss.Width(hint)
+	var title string
+	var extras []string
+	switch c.kind {
+	case convSystem:
+		title = " " + st.bold.Render("# System")
+		extras = []string{st.faint.Render("  connection log and local notes")}
+	case convRequests:
+		title = " " + st.bold.Render("# Message requests")
+		extras = []string{st.faint.Render("  from people not in your contacts")}
+	default:
+		title = " " + st.bold.Render(truncate(c.contact.label(), max(room/2, 8)))
+		state := []string{st.ok.Render("  ✓ verified"), st.ok.Render("  ✓")}
+		switch {
+		case c.contact.KeyChanged:
+			state = []string{st.danger.Bold(true).Render("  ⚠ key changed — /verify"), st.danger.Bold(true).Render("  ⚠ /verify")}
+		case !c.contact.Verified:
+			state = []string{st.warn.Render("  unverified — /verify"), st.warn.Render("  unverified")}
+		}
+		extras = []string{st.faint.Render("  "+c.contact.ShortID) + state[0], state[0], state[1]}
 	}
-	return padRight(title+sub, width-lipgloss.Width(hint), lipgloss.NewStyle()) + hint
+	line := title
+	for _, extra := range extras {
+		if lipgloss.Width(title)+lipgloss.Width(extra) <= room-1 {
+			line = title + extra
+			break
+		}
+	}
+	return padRight(truncateStyled(line, room), room, lipgloss.NewStyle()) + hint
+}
+
+// renderBanner draws the key-change warning of the open contact: a red box
+// when there is room, one line otherwise, nothing when there is no warning.
+// room is the height left for banner and history together.
+func (m Model) renderBanner(mainW, room int) []string {
+	c := m.conv(m.open)
+	if c == nil || c.kind != convContact || !c.contact.KeyChanged || room < 2 {
+		return nil
+	}
+	st := m.st
+	inner := min(mainW-2, maxAlertWidth) - 4
+	body := []string{st.alertTitle.Render(truncate("⚠ Safety number changed", inner))}
+	for _, l := range wrapLines(c.contact.label()+"'s keys changed. This happens after a reinstall, or when someone intercepts. "+
+		"Sending still works, but compare the new safety number with /verify before you trust this conversation.", inner) {
+		body = append(body, st.text.Render(l))
+	}
+	if room-len(body)-2 >= 4 {
+		for i, l := range body {
+			body[i] = padRight(l, inner, lipgloss.NewStyle())
+		}
+		return strings.Split(st.alertBox.Render(strings.Join(body, "\n")), "\n")
+	}
+	return []string{st.alertTitle.Render(truncate("⚠ Safety number changed · compare it with /verify", mainW-2))}
 }
 
 // renderPalette draws the command palette rows, or nothing if it is closed.

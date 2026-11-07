@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/craguS/qchat/internal/server"
 )
 
 // readSecurity returns the owner and DACL of path.
@@ -58,7 +60,7 @@ func allowedACEs(t *testing.T, path string) []*windows.ACCESS_ALLOWED_ACE {
 
 func TestInitAppliesProtectedACL(t *testing.T) {
 	dir, _ := initDataDir(t)
-	for _, path := range []string{dir, filepath.Join(dir, keyFileName), filepath.Join(dir, certFileName), filepath.Join(dir, configFileName)} {
+	for _, path := range []string{dir, filepath.Join(dir, keyFileName), filepath.Join(dir, certFileName), filepath.Join(dir, configFileName), filepath.Join(dir, server.DefaultDatabase), filepath.Dir(filepath.Join(dir, server.DefaultDatabase))} {
 		for _, ace := range allowedACEs(t, path) {
 			if label := broadSIDLabel(aceSID(ace)); label != "" {
 				t.Errorf("%s: ACE grants %#x to %s", path, ace.Mask, label)
@@ -90,6 +92,53 @@ func TestInitServiceAccountGetsReadAccess(t *testing.T) {
 		if !found {
 			t.Errorf("%s: no ACE for the service account", path)
 		}
+	}
+}
+
+func TestInitServiceAccountGetsDatabaseWriteAccess(t *testing.T) {
+	const localService = "S-1-5-19"
+	dir, _ := initDataDir(t, "--service-account", localService)
+	dbPath := filepath.Join(dir, server.DefaultDatabase)
+	const modify = windows.FILE_READ_DATA | windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA | windows.DELETE
+	const forbidden = windows.WRITE_DAC | windows.WRITE_OWNER | fileDeleteChild | windows.GENERIC_ALL
+	for _, path := range []string{filepath.Dir(dbPath), dbPath} {
+		var found bool
+		for _, ace := range allowedACEs(t, path) {
+			if aceSID(ace).String() != localService {
+				continue
+			}
+			found = true
+			if ace.Mask&modify != modify {
+				t.Errorf("%s: service account lacks modify access (mask %#x)", path, ace.Mask)
+			}
+			if ace.Mask&forbidden != 0 {
+				t.Errorf("%s: service account may change permissions (mask %#x)", path, ace.Mask)
+			}
+			if path != dbPath && ace.Header.AceFlags&(windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE) == 0 {
+				t.Errorf("%s: service account entry is not inheritable", path)
+			}
+		}
+		if !found {
+			t.Errorf("%s: no ACE for the service account", path)
+		}
+	}
+	for _, path := range []string{dir, filepath.Join(dir, configFileName), filepath.Join(dir, certFileName)} {
+		for _, ace := range allowedACEs(t, path) {
+			if aceSID(ace).String() == localService && ace.Mask&broadWriteRights != 0 {
+				t.Errorf("%s: service account has write access (mask %#x)", path, ace.Mask)
+			}
+		}
+	}
+}
+
+func TestInitRefusesServiceAccountDatabaseInDataDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	code, _, stderr := runCLI(t, "init", "--data-dir", dir, "--service-account", "S-1-5-19", "--database", "qchat.db")
+	if code != 2 || !strings.Contains(stderr, "--database") {
+		t.Fatalf("init with database in data dir: exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Error("data directory created although init failed")
 	}
 }
 
@@ -201,5 +250,91 @@ func TestInitRefusesJunction(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(target, keyFileName)); err == nil {
 		t.Fatal("key written through a junction")
+	}
+}
+
+// serviceAccountACEs returns the access-allowed entries of the DACL of path
+// that name sid, inherited ones included.
+func serviceAccountACEs(t *testing.T, path, sid string) []*windows.ACCESS_ALLOWED_ACE {
+	t.Helper()
+	dacl, _, err := readSecurity(t, path).DACL()
+	if err != nil || dacl == nil {
+		t.Fatalf("%s: no DACL (%v)", path, err)
+	}
+	var aces []*windows.ACCESS_ALLOWED_ACE
+	for i := range uint32(dacl.AceCount) {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		if ace.Header.AceType == windows.ACCESS_ALLOWED_ACE_TYPE && aceSID(ace).String() == sid {
+			aces = append(aces, ace)
+		}
+	}
+	return aces
+}
+
+func TestInitForceAddsServiceAccountToExistingDatabase(t *testing.T) {
+	const localService = "S-1-5-19"
+	dir, _ := initDataDir(t)
+	dbPath := filepath.Join(dir, server.DefaultDatabase)
+	dbDir := filepath.Dir(dbPath)
+	if aces := serviceAccountACEs(t, dbDir, localService); len(aces) != 0 {
+		t.Fatalf("database directory has %d service account entries before --service-account", len(aces))
+	}
+	sidecar := filepath.Join(dbDir, "leftover")
+	if err := os.WriteFile(sidecar, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for run := range 2 {
+		if code, _, stderr := runCLI(t, "init", "--data-dir", dir, "--force", "--service-account", localService); code != 0 {
+			t.Fatalf("run %d: init --force --service-account: exit %d, stderr %q", run, code, stderr)
+		}
+		for _, path := range []string{dbDir, dbPath} {
+			aces := serviceAccountACEs(t, path, localService)
+			if len(aces) != 1 {
+				t.Fatalf("run %d: %s has %d service account entries, want 1", run, path, len(aces))
+			}
+			if aces[0].Mask != serviceAccountModify {
+				t.Errorf("run %d: %s: service account mask %#x, want %#x", run, path, aces[0].Mask, serviceAccountModify)
+			}
+			if path == dbDir && aces[0].Header.AceFlags&(windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE) != windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE {
+				t.Errorf("run %d: %s: service account entry is not inheritable (flags %#x)", run, path, aces[0].Header.AceFlags)
+			}
+		}
+		allowedACEs(t, dbDir)
+		allowedACEs(t, dbPath)
+	}
+	inherited := serviceAccountACEs(t, sidecar, localService)
+	if len(inherited) != 1 || inherited[0].Mask&serviceAccountModify != serviceAccountModify {
+		t.Fatalf("existing file in the database directory did not inherit the service account entry: %d entries", len(inherited))
+	}
+	created := filepath.Join(dbDir, "qchat.db-shm")
+	if err := os.WriteFile(created, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if aces := serviceAccountACEs(t, created, localService); len(aces) != 1 {
+		t.Fatalf("new file in the database directory has %d service account entries, want 1", len(aces))
+	}
+}
+
+func TestInitRefusesBroadlyAccessibleExistingDatabase(t *testing.T) {
+	dir, _ := initDataDir(t)
+	dbPath := filepath.Join(dir, server.DefaultDatabase)
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;OW)(A;;FR;;;BU)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(dbPath, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := runCLI(t, "init", "--data-dir", dir, "--force", "--service-account", "S-1-5-19")
+	if code != 1 || !strings.Contains(stderr, "Users") {
+		t.Fatalf("init with a broadly readable database: exit %d, stderr %q", code, stderr)
 	}
 }

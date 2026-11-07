@@ -1,0 +1,224 @@
+package protocol
+
+import "fmt"
+
+// Size limits for the bodies of the identity, authentication and messaging
+// frames.
+const (
+	// IDSize is the length, in bytes, of an identity ID.
+	IDSize = 32
+	// NonceSize is the length, in bytes, of an authentication challenge nonce.
+	NonceSize = 32
+	// MaxBundleSize is the largest identity bundle, in bytes, a [Register] or
+	// [KeyResponse] may carry.
+	MaxBundleSize = 16 << 10
+	// MaxInviteLen is the maximum length, in bytes, of [Register.Invite].
+	MaxInviteLen = 64
+	// MaxSignatureSize is the largest authentication signature, in bytes, an
+	// [AuthProof] may carry.
+	MaxSignatureSize = 8 << 10
+	// MaxPayloadSize is the largest ciphertext, in bytes, a [Send] or
+	// [Deliver] may carry. It leaves 1 KiB of MaxFrameSize for the frame and
+	// body overhead, so a maximal payload always fits in a frame.
+	MaxPayloadSize = MaxFrameSize - 1<<10
+)
+
+// Register uploads a signed identity bundle to the relay. It is allowed
+// before authentication. The relay answers with [Registered] or an
+// [ErrorBody].
+type Register struct {
+	// Bundle is the encoded, self-signed identity bundle, between 1 and
+	// MaxBundleSize bytes. The relay verifies it and derives the ID from it.
+	Bundle []byte `cbor:"1,keyasint"`
+	// Invite is the invite code required to register a new ID on relays that
+	// restrict registration: printable ASCII, at most MaxInviteLen bytes. An
+	// empty Invite is encoded by omitting the field; an explicitly encoded
+	// empty string is not canonical and is rejected.
+	Invite string `cbor:"2,keyasint,omitempty"`
+}
+
+func (Register) frameType() FrameType { return TypeRegister }
+
+func (r Register) validate() error {
+	if err := checkBounded("bundle", r.Bundle, MaxBundleSize); err != nil {
+		return err
+	}
+	if len(r.Invite) > MaxInviteLen {
+		return fmt.Errorf("%w: invite is %d bytes", ErrMalformed, len(r.Invite))
+	}
+	return checkPrintableASCII("invite", r.Invite)
+}
+
+// Registered confirms that the bundle of a [Register] is stored. Its only
+// valid encoding is the empty map.
+type Registered struct{}
+
+func (Registered) frameType() FrameType { return TypeRegistered }
+
+func (Registered) validate() error { return nil }
+
+// AuthBegin starts authentication of the connection as the identity ID. The
+// relay answers with an [AuthChallenge].
+type AuthBegin struct {
+	// ID is the identity to authenticate as, exactly IDSize bytes.
+	ID []byte `cbor:"1,keyasint"`
+}
+
+func (AuthBegin) frameType() FrameType { return TypeAuthBegin }
+
+func (a AuthBegin) validate() error { return checkFixed("ID", a.ID, IDSize) }
+
+// AuthChallenge carries the fresh nonce the client must sign in its
+// [AuthProof].
+type AuthChallenge struct {
+	// Nonce is chosen at random by the relay, exactly NonceSize bytes.
+	Nonce []byte `cbor:"1,keyasint"`
+}
+
+func (AuthChallenge) frameType() FrameType { return TypeAuthChallenge }
+
+func (a AuthChallenge) validate() error { return checkFixed("nonce", a.Nonce, NonceSize) }
+
+// AuthProof answers an [AuthChallenge] with a signature by the identity key
+// over the relay fingerprint, the nonce and the ID. The relay answers with
+// [AuthOK] or an [ErrorBody].
+type AuthProof struct {
+	// Sig is the encoded signature, between 1 and MaxSignatureSize bytes.
+	Sig []byte `cbor:"1,keyasint"`
+}
+
+func (AuthProof) frameType() FrameType { return TypeAuthProof }
+
+func (a AuthProof) validate() error { return checkBounded("signature", a.Sig, MaxSignatureSize) }
+
+// AuthOK confirms that the connection is authenticated as the ID named in the
+// preceding [AuthBegin]. Its only valid encoding is the empty map.
+type AuthOK struct{}
+
+func (AuthOK) frameType() FrameType { return TypeAuthOK }
+
+func (AuthOK) validate() error { return nil }
+
+// KeyRequest asks the relay for the identity bundle registered for ID. The
+// relay answers with a [KeyResponse] or an [ErrorBody].
+type KeyRequest struct {
+	// ID is the identity to look up, exactly IDSize bytes.
+	ID []byte `cbor:"1,keyasint"`
+}
+
+func (KeyRequest) frameType() FrameType { return TypeKeyRequest }
+
+func (k KeyRequest) validate() error { return checkFixed("ID", k.ID, IDSize) }
+
+// KeyResponse returns the identity bundle requested by a [KeyRequest]. The
+// receiver must verify the bundle and check that its ID equals the requested
+// ID; the relay is not trusted to do so.
+type KeyResponse struct {
+	// Bundle is the encoded, self-signed identity bundle, between 1 and
+	// MaxBundleSize bytes.
+	Bundle []byte `cbor:"1,keyasint"`
+}
+
+func (KeyResponse) frameType() FrameType { return TypeKeyResponse }
+
+func (k KeyResponse) validate() error { return checkBounded("bundle", k.Bundle, MaxBundleSize) }
+
+// Send asks the relay to route Payload to the identity To. The relay answers
+// with a [SendResult] or an [ErrorBody].
+type Send struct {
+	// To is the recipient identity, exactly IDSize bytes.
+	To []byte `cbor:"1,keyasint"`
+	// Payload is end-to-end encrypted ciphertext, between 1 and
+	// MaxPayloadSize bytes. It is opaque to the relay.
+	Payload []byte `cbor:"2,keyasint"`
+}
+
+func (Send) frameType() FrameType { return TypeSend }
+
+func (s Send) validate() error {
+	if err := checkFixed("recipient ID", s.To, IDSize); err != nil {
+		return err
+	}
+	return checkBounded("payload", s.Payload, MaxPayloadSize)
+}
+
+// SendStatus is the outcome of a [Send] reported in a [SendResult].
+type SendStatus uint8
+
+// Send outcomes defined by wire version 1.
+const (
+	// SendDelivered means the payload was pushed to at least one connection
+	// of the recipient.
+	SendDelivered SendStatus = 1
+	// SendRecipientOffline means the recipient has no authenticated
+	// connection; the relay does not store the payload.
+	SendRecipientOffline SendStatus = 2
+)
+
+// String returns the name of the status, or "SendStatus(n)" for values that
+// are not defined.
+func (s SendStatus) String() string {
+	switch s {
+	case SendDelivered:
+		return "Delivered"
+	case SendRecipientOffline:
+		return "RecipientOffline"
+	default:
+		return fmt.Sprintf("SendStatus(%d)", uint8(s))
+	}
+}
+
+// Valid reports whether s is a send status defined by this version of the
+// protocol.
+func (s SendStatus) Valid() bool {
+	return s >= SendDelivered && s <= SendRecipientOffline
+}
+
+// SendResult reports the outcome of a [Send].
+type SendResult struct {
+	// Status is the outcome; it must be a defined SendStatus.
+	Status SendStatus `cbor:"1,keyasint"`
+}
+
+func (SendResult) frameType() FrameType { return TypeSendResult }
+
+func (s SendResult) validate() error {
+	if !s.Status.Valid() {
+		return fmt.Errorf("%w: undefined send status %d", ErrMalformed, uint8(s.Status))
+	}
+	return nil
+}
+
+// Deliver pushes a payload routed by the relay to its recipient.
+type Deliver struct {
+	// From is the authenticated identity of the sender, exactly IDSize bytes.
+	From []byte `cbor:"1,keyasint"`
+	// Payload is the end-to-end encrypted ciphertext exactly as sent, between
+	// 1 and MaxPayloadSize bytes.
+	Payload []byte `cbor:"2,keyasint"`
+}
+
+func (Deliver) frameType() FrameType { return TypeDeliver }
+
+func (d Deliver) validate() error {
+	if err := checkFixed("sender ID", d.From, IDSize); err != nil {
+		return err
+	}
+	return checkBounded("payload", d.Payload, MaxPayloadSize)
+}
+
+// checkFixed reports ErrMalformed unless b is exactly size bytes long.
+func checkFixed(field string, b []byte, size int) error {
+	if len(b) != size {
+		return fmt.Errorf("%w: %s is %d bytes, want %d", ErrMalformed, field, len(b), size)
+	}
+	return nil
+}
+
+// checkBounded reports ErrMalformed unless b holds between 1 and limit bytes.
+func checkBounded(field string, b []byte, limit int) error {
+	if len(b) == 0 || len(b) > limit {
+		return fmt.Errorf("%w: %s is %d bytes, want 1 to %d", ErrMalformed, field, len(b), limit)
+	}
+	return nil
+}

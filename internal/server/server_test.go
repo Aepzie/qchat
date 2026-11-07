@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,6 +90,7 @@ func startServer(t *testing.T, opts serverOptions) *testServer {
 	cfg := DefaultConfig()
 	cfg.Listen = "127.0.0.1:0"
 	cfg.Limits.HandshakeTimeout = DurationOf(5 * time.Second)
+	cfg.Database = filepath.Join(t.TempDir(), "qchat.db")
 	if opts.config != nil {
 		opts.config(&cfg)
 	}
@@ -101,6 +103,7 @@ func startServer(t *testing.T, opts serverOptions) *testServer {
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv.authBurst = 1000
 	if opts.tweak != nil {
 		opts.tweak(srv)
 	}
@@ -116,6 +119,7 @@ func startServer(t *testing.T, opts serverOptions) *testServer {
 	ts := &testServer{srv: srv, addr: ln.Addr().String(), pin: pin, cfg: cfg, cancel: cancel, done: make(chan error, 1)}
 	go func() { ts.done <- srv.Serve(ctx, ln) }()
 	t.Cleanup(func() { ts.stop(t) })
+	waitFor(t, "server to open its database", func() bool { return srv.Addr() != nil })
 	return ts
 }
 
@@ -143,14 +147,36 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
+// bindings maps every connection opened by dial to its TLS channel binding.
+var bindings sync.Map
+
 func dial(t *testing.T, ts *testServer) *websocket.Conn {
 	t.Helper()
-	conn, err := transport.Dial(testContext(t), ts.addr, ts.pin, transport.DialOptions{})
+	conn, state, err := transport.DialWithState(testContext(t), ts.addr, ts.pin, transport.DialOptions{})
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	t.Cleanup(func() { conn.CloseNow() })
+	binding, err := transport.AuthBinding(&state)
+	if err != nil {
+		t.Fatalf("AuthBinding: %v", err)
+	}
+	bindings.Store(conn, binding)
+	t.Cleanup(func() {
+		bindings.Delete(conn)
+		conn.CloseNow()
+	})
 	return conn
+}
+
+// bindingOf returns the client side channel binding of a connection opened
+// by dial.
+func bindingOf(t *testing.T, conn *websocket.Conn) []byte {
+	t.Helper()
+	binding, ok := bindings.Load(conn)
+	if !ok {
+		t.Fatal("connection was not opened by dial")
+	}
+	return binding.([]byte)
 }
 
 func sendFrame[T any](t *testing.T, conn *websocket.Conn, frameType protocol.FrameType, id uint64, body T) {
@@ -802,6 +828,7 @@ func TestListenAndServe(t *testing.T) {
 	cert, pin := testIdentity(t)
 	cfg := DefaultConfig()
 	cfg.Listen = "127.0.0.1:0"
+	cfg.Database = filepath.Join(t.TempDir(), "qchat.db")
 	srv, err := New(cfg, cert, nil)
 	if err != nil {
 		t.Fatal(err)

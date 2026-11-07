@@ -67,34 +67,47 @@ type DialOptions struct {
 //     data together with secrets before encryption leaks information through
 //     ciphertext lengths (the CRIME/BREACH class of attacks).
 func Dial(ctx context.Context, hostport string, pin Fingerprint, opts DialOptions) (*websocket.Conn, error) {
+	conn, _, err := DialWithState(ctx, hostport, pin, opts)
+	return conn, err
+}
+
+// DialWithState is like [Dial] but also returns the state of the TLS
+// connection the WebSocket runs on, from which [AuthBinding] derives the
+// channel binding of an authentication proof. The returned state is a copy;
+// its ExportKeyingMaterial method stays usable after DialWithState returns.
+func DialWithState(ctx context.Context, hostport string, pin Fingerprint, opts DialOptions) (*websocket.Conn, tls.ConnectionState, error) {
 	if pin.IsZero() {
-		return nil, errNoPin
+		return nil, tls.ConnectionState{}, errNoPin
 	}
 	host, err := ValidateHostPort(hostport)
 	if err != nil {
-		return nil, err
+		return nil, tls.ConnectionState{}, err
 	}
 
 	endpoint := url.URL{Scheme: "wss", Host: host, Path: WebSocketPath}
 	client := newPinnedHTTPClient(pin, opts.NetDialContext)
 	defer client.CloseIdleConnections()
 
-	conn, _, err := websocket.Dial(ctx, endpoint.String(), &websocket.DialOptions{
+	conn, resp, err := websocket.Dial(ctx, endpoint.String(), &websocket.DialOptions{
 		HTTPClient:      client,
 		HTTPHeader:      http.Header{"User-Agent": []string{""}},
 		Subprotocols:    []string{Subprotocol},
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("transport: dial %s: %w", host, err)
+		return nil, tls.ConnectionState{}, fmt.Errorf("transport: dial %s: %w", host, err)
 	}
 
 	if conn.Subprotocol() != Subprotocol {
 		conn.Close(websocket.StatusPolicyViolation, "unsupported subprotocol")
-		return nil, fmt.Errorf("transport: dial %s: server did not select subprotocol %q", host, Subprotocol)
+		return nil, tls.ConnectionState{}, fmt.Errorf("transport: dial %s: server did not select subprotocol %q", host, Subprotocol)
+	}
+	if resp == nil || resp.TLS == nil || !resp.TLS.HandshakeComplete {
+		conn.Close(websocket.StatusInternalError, "")
+		return nil, tls.ConnectionState{}, fmt.Errorf("transport: dial %s: no TLS state for the connection", host)
 	}
 	conn.SetReadLimit(effectiveReadLimit(opts.ReadLimit))
-	return conn, nil
+	return conn, *resp.TLS, nil
 }
 
 // newPinnedHTTPClient builds a single-use HTTP client whose every TLS

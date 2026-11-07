@@ -62,7 +62,8 @@ process crashes.
 ```
 
 This writes `server.key` (the private key), `server.crt` and `server.toml`,
-and prints the fingerprint users must pin. Keep the data directory outside
+creates the database `db\qchat.db` (registered identity bundles and invite
+code hashes, never messages), and prints the fingerprint users must pin. Keep the data directory outside
 any user profile. Running `init` again refuses to overwrite the identity;
 `--force` creates a new key, which changes the fingerprint and locks out
 every client pinned to the old one.
@@ -75,7 +76,17 @@ local user read new subdirectories):
   Administrators group when `init` runs elevated) have full control;
 - `NT SERVICE\qchat-server` may read, but not change, the key and
   configuration, so a compromised server process cannot alter them;
+- `NT SERVICE\qchat-server` may modify (read, write, create and delete
+  files, but not change permissions in) the `db` subdirectory, inherited by
+  every file in it: SQLite writes `qchat.db` and creates and deletes
+  `qchat.db-wal` and `qchat.db-shm` next to it while the server runs;
 - nobody else has access.
+
+This is why the database lives in a directory of its own: the service needs
+write access to the database directory, never to the directory holding the
+key. `--database PATH` puts it elsewhere (a relative path resolves against
+the data directory); with `--service-account` it must not be directly in the
+data directory.
 
 The files are created with this ACL, so at no point can other users read the
 key. `--service-account` also accepts a SID (`S-1-5-...`), which avoids
@@ -98,13 +109,21 @@ Check that the ACL looks as described above:
 ```powershell
 icacls C:\ProgramData\qchat
 icacls C:\ProgramData\qchat\server.key
+icacls C:\ProgramData\qchat\db
 ```
 
 Expect entries for SYSTEM (`S-1-5-18`), Administrators (`S-1-5-32-544`),
 OWNER RIGHTS (`S-1-3-4`) with `(F)` and `NT SERVICE\qchat-server` with `(RX)`
-only; names are localized, for example `VORDEFINIERT\Administratoren` on
+only, except on `db` and the files in it, where `NT SERVICE\qchat-server` has
+`(M)` (modify; `(OI)(CI)(M)` on the directory itself); names are localized, for example `VORDEFINIERT\Administratoren` on
 German Windows. There must be no entry for `Users`, `Authenticated Users` or
 `Everyone`, and none marked `(I)` (inherited).
+
+Running `init --force --service-account "NT SERVICE\qchat-server"` again on
+an existing data directory keeps the database and adds the service
+account's `(M)` entry to `db` and `db\qchat.db` if it is missing; running it
+more than once changes nothing further. It replaces the key, though, so
+prefer the `icacls` commands below when clients are already pinned.
 
 If you created the data directory with an older version of `init` or without
 `--service-account`, either recreate it (which changes the fingerprint), or
@@ -116,6 +135,21 @@ icacls C:\ProgramData\qchat /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-
 
 `/inheritance:r` removes the entries inherited from `C:\ProgramData`, and
 `/T` applies the change to the files already in the directory.
+
+A data directory created before the database moved to `db\` has
+`database = 'qchat.db'` in `server.toml`, and the service cannot write it.
+Stop the service, then move the database into its own directory and grant
+the service account modify access there:
+
+```powershell
+New-Item -ItemType Directory C:\ProgramData\qchat\db
+Move-Item C:\ProgramData\qchat\qchat.db C:\ProgramData\qchat\db\qchat.db
+icacls C:\ProgramData\qchat\db /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "NT SERVICE\qchat-server:(OI)(CI)M" /T
+```
+
+and change the line in `server.toml` to `database = 'db/qchat.db'`. Move
+`qchat.db-wal` and `qchat.db-shm` along if they exist (they do only after an
+unclean stop).
 
 Then run the server once in the foreground to check the configuration (stop
 it with Ctrl+C):

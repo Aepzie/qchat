@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/craguS/qchat/internal/client"
+	"github.com/craguS/qchat/internal/protocol"
 	"github.com/craguS/qchat/internal/transport"
 )
 
@@ -111,5 +113,52 @@ func TestRunVersionAndUsage(t *testing.T) {
 	}
 	if code := run([]string{"--bogus"}, &out, &errOut); code != 2 {
 		t.Fatalf("unknown flag: code %d", code)
+	}
+}
+
+func TestProfileAndInviteFlags(t *testing.T) {
+	o := flags(t, "--server", "chat.example.org:443", "--pin", pinA, "--profile", `C:\qchat\alice`, "-invite", "ABCD-EFGH-2345")
+	if o.profileDir != `C:\qchat\alice` || o.invite != "ABCD-EFGH-2345" || !o.serverSet || !o.pinSet {
+		t.Fatalf("options %+v", o)
+	}
+	if o := flags(t); o.profileDir != "" || o.invite != "" {
+		t.Fatalf("defaults %+v", o)
+	}
+	for _, bad := range []string{"has space", "tab\tcode", "ünicode", strings.Repeat("a", 65)} {
+		if _, err := parseFlags([]string{"--invite", bad}, &bytes.Buffer{}); err == nil {
+			t.Fatalf("invite %q accepted", bad)
+		}
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--server", "chat.example.org:443", "--pin", pinA, "--invite", "bad code"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "--invite") {
+		t.Fatalf("bad invite: code %d, stderr %q", code, errOut.String())
+	}
+}
+
+func TestLockedBuildIgnoresProfileFlags(t *testing.T) {
+	emb := embedded{addr: "chat.example.org:443", pin: mustPin(t, pinA), ok: true}
+	if _, err := resolveTarget(emb, flags(t, "--server", "evil.example.org:443", "--profile", t.TempDir(), "--invite", "CODE")); err == nil {
+		t.Fatal("locked build accepted another server")
+	}
+	if _, err := resolveTarget(emb, flags(t, "--pin", pinB, "--invite", "CODE")); err == nil {
+		t.Fatal("locked build accepted another pin")
+	}
+	got, err := resolveTarget(emb, flags(t, "--profile", t.TempDir(), "--invite", "CODE"))
+	if err != nil || !got.locked || got.addr != emb.addr {
+		t.Fatalf("locked target %+v, %v", got, err)
+	}
+}
+
+func TestRegistrationHint(t *testing.T) {
+	denied := client.RegistrationDenied{Code: protocol.ErrCodeRegistrationDenied, Message: "invite required\x1b[2J"}
+	if hint := registrationHint(denied, false); !strings.Contains(hint, "--invite CODE") || strings.Contains(hint, "\x1b") {
+		t.Fatalf("hint without invite: %q", hint)
+	}
+	if hint := registrationHint(denied, true); !strings.Contains(hint, "not accepted") {
+		t.Fatalf("hint with invite: %q", hint)
+	}
+	conflict := client.RegistrationDenied{Code: protocol.ErrCodeConflict}
+	if hint := registrationHint(conflict, false); !strings.Contains(hint, "different key") {
+		t.Fatalf("conflict hint: %q", hint)
 	}
 }
