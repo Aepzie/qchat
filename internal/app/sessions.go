@@ -597,6 +597,35 @@ func (a *App) commitRequestLocked(ctx context.Context, o opened, m clientdb.Mess
 	return nil
 }
 
+// commitSession stores the session changes of a decrypted message that is
+// not filed as a conversation message (group control and sender key
+// messages): the Init in the replay set first, then the session, then the
+// deletion of the consumed one-time prekey, like a message request.
+// a.ratchetMu must be held.
+func (a *App) commitSession(ctx context.Context, from identity.ID, o opened) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if o.seen != nil {
+		replayed, err := a.prof.DB.MarkInitSeen(ctx, o.seen.SPKID, o.seen.Key, o.seen.Expires)
+		if err != nil {
+			return dbError(err)
+		}
+		if replayed {
+			return clientdb.ErrInitSeen
+		}
+	}
+	if err := a.prof.DB.PutSession(ctx, o.next); err != nil {
+		return dbError(err)
+	}
+	if o.consumedOPK != 0 {
+		_ = a.prof.DB.DeletePrekeySecret(ctx, clientdb.PrekeyOneTime, o.consumedOPK)
+	}
+	if o.shadow != nil {
+		a.keepShadow(from, *o.shadow)
+	}
+	return nil
+}
+
 // adoptBundle stores a verified bundle of the contact id if it is newer than
 // the stored one (see applyBundle) and reports whether the contact's
 // encryption key changed.
@@ -619,13 +648,16 @@ func (a *App) adoptBundle(id identity.ID, fresh *identity.Bundle) bool {
 // sealOutgoing encrypts pt for the contact c, starting a session first if
 // there is none, and commits the advanced session together with record
 // before returning the relay payload, so that no ciphertext ever leaves
-// the device without its state being stored. A non-empty reason explains
-// why no session could be started (nothing was stored then); err reports
-// local failures.
+// the device without its state being stored. A nil record stores the
+// session alone, for messages that are not shown in the conversation (group
+// control and sender key messages). A non-empty reason explains why no
+// session could be started (nothing was stored then); err reports local
+// failures. c need not be stored: a group member that is not a contact is
+// passed with its verified bundle.
 //
 // An own session that has not received anything for so long that the peer
 // would reject its Init as stale (initRefreshAge) is replaced by a new one.
-func (a *App) sealOutgoing(ctx context.Context, c clientdb.Contact, pt e2e.Plaintext, record clientdb.Message) (payload []byte, reason string, err error) {
+func (a *App) sealOutgoing(ctx context.Context, c clientdb.Contact, pt e2e.Plaintext, record *clientdb.Message) (payload []byte, reason string, err error) {
 	id := identity.ID(c.ID)
 	usable := func() (clientdb.Session, bool, error) {
 		cur, found, err := a.loadSession(ctx, id)
@@ -688,7 +720,13 @@ func (a *App) sealOutgoing(ctx context.Context, c clientdb.Contact, pt e2e.Plain
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err := a.prof.DB.CommitSend(ctx, next, record); err != nil {
+	if record == nil {
+		if err := a.prof.DB.PutSession(ctx, next); err != nil {
+			return nil, "", err
+		}
+		return payload, "", nil
+	}
+	if err := a.prof.DB.CommitSend(ctx, next, *record); err != nil {
 		return nil, "", err
 	}
 	a.inflight[messageKey{peer: id, msgID: record.MsgID}] = struct{}{}

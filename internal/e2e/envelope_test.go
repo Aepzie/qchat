@@ -151,7 +151,7 @@ func TestPlaintextRejectsInvalid(t *testing.T) {
 			t.Errorf("%s: NewPlaintext = %v", name, err)
 		}
 	}
-	if _, err := NewPlaintext(Kind(2), []byte("x"), testNow); !errors.Is(err, ErrInvalidMessage) {
+	if _, err := NewPlaintext(Kind(5), []byte("x"), testNow); !errors.Is(err, ErrInvalidMessage) {
 		t.Errorf("unknown kind: %v", err)
 	}
 	if _, err := MarshalPlaintext(Plaintext{Kind: KindText}); !errors.Is(err, ErrInvalidMessage) {
@@ -172,7 +172,9 @@ func TestPlaintextRejectsInvalid(t *testing.T) {
 	}
 	for name, b := range map[string][]byte{
 		"short ID":      encode(wire{1: id[:15], 2: 5, 3: 1, 4: []byte("x")}),
-		"unknown kind":  encode(wire{1: id, 2: 5, 3: 2, 4: []byte("x")}),
+		"unknown kind":  encode(wire{1: id, 2: 5, 3: 5, 4: []byte("x")}),
+		"zero kind":     encode(wire{1: id, 2: 5, 3: 0, 4: []byte("x")}),
+		"group utf8":    encode(wire{1: id, 2: 5, 3: 4, 4: []byte{0xff}}),
 		"empty body":    encode(wire{1: id, 2: 5, 3: 1, 4: []byte{}}),
 		"bad utf8":      encode(wire{1: id, 2: 5, 3: 1, 4: []byte{0xff}}),
 		"missing sent":  encode(wire{1: id, 3: 1, 4: []byte("x")}),
@@ -183,6 +185,36 @@ func TestPlaintextRejectsInvalid(t *testing.T) {
 		if _, err := ParsePlaintext(b); !errors.Is(err, ErrMalformed) {
 			t.Errorf("%s: ParsePlaintext = %v, want ErrMalformed", name, err)
 		}
+	}
+}
+
+func TestPlaintextKinds(t *testing.T) {
+	binary := []byte{0xff, 0x00, 0xfe}
+	for _, kind := range []Kind{KindGroupControl, KindSenderKey} {
+		p, err := NewPlaintext(kind, binary, testNow)
+		if err != nil {
+			t.Fatalf("kind %d with binary body: %v", kind, err)
+		}
+		b, err := MarshalPlaintext(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := ParsePlaintext(b)
+		if err != nil || got.Kind != kind || !bytes.Equal(got.Body, binary) {
+			t.Fatalf("kind %d round trip: %+v, %v", kind, got, err)
+		}
+		if kind.IsText() {
+			t.Errorf("kind %d reported as text", kind)
+		}
+	}
+	if _, err := NewPlaintext(KindGroupText, binary, testNow); !errors.Is(err, ErrInvalidMessage) {
+		t.Errorf("group text with invalid UTF-8: %v", err)
+	}
+	if p, err := NewPlaintext(KindGroupText, []byte("hi"), testNow); err != nil || !p.Kind.IsText() {
+		t.Errorf("group text: %v", err)
+	}
+	if _, err := NewPlaintext(KindSenderKey, nil, testNow); !errors.Is(err, ErrInvalidMessage) {
+		t.Errorf("empty distribution body: %v", err)
 	}
 }
 

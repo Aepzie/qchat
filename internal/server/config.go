@@ -21,28 +21,29 @@ import (
 
 // Default configuration values. They are also written by "qchat-server init".
 const (
-	DefaultListen                = "0.0.0.0:7443"
-	DefaultTLSCert               = "server.crt"
-	DefaultTLSKey                = "server.key"
-	DefaultDatabase              = "db/qchat.db"
-	DefaultRegistration          = RegistrationInvite
-	DefaultMaxConnections        = 1000
-	DefaultMaxConnectionsPerIP   = 16
-	DefaultMaxPendingHandshakes  = 64
-	DefaultMaxFrameSize          = protocol.MaxFrameSize
-	DefaultMaxMessageSize        = 256 << 10
-	DefaultMaxQueueBytes         = 2 << 20
-	DefaultMaxTotalQueueBytes    = 256 << 20
-	DefaultMaxSessionsPerID      = 4
-	DefaultFramesPerSecond       = 20.0
-	DefaultBurst                 = 40
-	DefaultHandshakeTimeout      = 10 * time.Second
-	DefaultPingInterval          = 30 * time.Second
-	DefaultUndeliveredTTL        = 7 * 24 * time.Hour
-	DefaultMaxQueuedMessages     = 1000
-	DefaultMaxQueuedBytes        = 64 << 20
-	DefaultPrekeyRequestsPerHour = 30
-	DefaultLogLevel              = "info"
+	DefaultListen                   = "0.0.0.0:7443"
+	DefaultTLSCert                  = "server.crt"
+	DefaultTLSKey                   = "server.key"
+	DefaultDatabase                 = "db/qchat.db"
+	DefaultRegistration             = RegistrationInvite
+	DefaultMaxConnections           = 1000
+	DefaultMaxConnectionsPerIP      = 16
+	DefaultMaxPendingHandshakes     = 64
+	DefaultMaxFrameSize             = protocol.MaxFrameSize
+	DefaultMaxMessageSize           = 256 << 10
+	DefaultMaxQueueBytes            = 2 << 20
+	DefaultMaxTotalQueueBytes       = 256 << 20
+	DefaultMaxSessionsPerID         = 4
+	DefaultFramesPerSecond          = 20.0
+	DefaultBurst                    = 40
+	DefaultHandshakeTimeout         = 10 * time.Second
+	DefaultPingInterval             = 30 * time.Second
+	DefaultUndeliveredTTL           = 7 * 24 * time.Hour
+	DefaultMaxQueuedMessages        = 1000
+	DefaultMaxQueuedBytes           = 64 << 20
+	DefaultPrekeyRequestsPerHour    = 120
+	DefaultMultiRecipientsPerMinute = 3000
+	DefaultLogLevel                 = "info"
 )
 
 // Values of Config.Registration.
@@ -73,13 +74,19 @@ const (
 // may always hold at least one payload of the largest size the protocol
 // allows.
 const (
-	MinUndeliveredTTL        = time.Hour
-	MaxUndeliveredTTL        = 30 * 24 * time.Hour
-	MaxQueuedMessages        = 1_000_000
-	MinQueuedBytes           = protocol.MaxFrameSize
-	MaxQueuedBytes           = 1 << 40
-	MaxPrekeyRequestsPerHour = 3600
+	MinUndeliveredTTL           = time.Hour
+	MaxUndeliveredTTL           = 30 * 24 * time.Hour
+	MaxQueuedMessages           = 1_000_000
+	MinQueuedBytes              = protocol.MaxFrameSize
+	MaxQueuedBytes              = 1 << 40
+	MaxPrekeyRequestsPerHour    = 3600
+	MaxMultiRecipientsPerMinute = 1_000_000
 )
+
+// MultiRecipientsBurst is the number of recipients a session may name in
+// SendMulti requests at once above Limits.MultiRecipientsPerMinute: two
+// requests with the most recipients the protocol allows.
+const MultiRecipientsBurst = 2 * protocol.MaxMultiRecipients
 
 // Bounds enforced by Config.Validate.
 const (
@@ -208,9 +215,17 @@ type Limits struct {
 	// MaxQueuedBytes.
 	MaxQueuedBytes int64 `toml:"max_queued_bytes" comment:"Payload bytes of unacknowledged messages stored per recipient\n(1048576 to 1099511627776)."`
 	// PrekeyRequestsPerHour is the number of prekey bundles one session may
-	// fetch per hour, between 1 and MaxPrekeyRequestsPerHour. It slows the
-	// draining of other users' one-time prekeys.
-	PrekeyRequestsPerHour int `toml:"prekey_requests_per_hour" comment:"Prekey bundles a session may fetch per hour (1 to 3600)."`
+	// fetch per hour, between 1 and MaxPrekeyRequestsPerHour, with a burst
+	// of the same size. It slows the draining of other users' one-time
+	// prekeys. The default of 120 lets a client that joins a group set up
+	// pairwise sessions with the other members without long waits.
+	PrekeyRequestsPerHour int `toml:"prekey_requests_per_hour" comment:"Prekey bundles a session may fetch per hour (1 to 3600).\nGroups need one pairwise session per member, so keep this well above the group size."`
+	// MultiRecipientsPerMinute is the sustained number of recipients one
+	// session may name per minute across its SendMulti requests, between 1
+	// and MaxMultiRecipientsPerMinute, with a burst of
+	// MultiRecipientsBurst. Each SendMulti also counts as one frame
+	// toward FramesPerSecond.
+	MultiRecipientsPerMinute int `toml:"multi_recipients_per_minute" comment:"Recipients a session may address per minute with SendMulti (1 to 1000000),\nwith a burst of 512. Each SendMulti also counts as one frame."`
 }
 
 // LogConfig configures logging.
@@ -230,21 +245,22 @@ func DefaultConfig() Config {
 		Registration:   DefaultRegistration,
 		UndeliveredTTL: DurationOf(DefaultUndeliveredTTL),
 		Limits: Limits{
-			MaxConnections:         DefaultMaxConnections,
-			MaxConnectionsPerIP:    DefaultMaxConnectionsPerIP,
-			MaxPendingHandshakes:   DefaultMaxPendingHandshakes,
-			MaxFrameSize:           DefaultMaxFrameSize,
-			MaxMessageSize:         DefaultMaxMessageSize,
-			MaxQueueBytes:          DefaultMaxQueueBytes,
-			MaxTotalQueueBytes:     DefaultMaxTotalQueueBytes,
-			MaxSessionsPerIdentity: DefaultMaxSessionsPerID,
-			FramesPerSecond:        DefaultFramesPerSecond,
-			Burst:                  DefaultBurst,
-			HandshakeTimeout:       DurationOf(DefaultHandshakeTimeout),
-			PingInterval:           DurationOf(DefaultPingInterval),
-			MaxQueuedMessages:      DefaultMaxQueuedMessages,
-			MaxQueuedBytes:         DefaultMaxQueuedBytes,
-			PrekeyRequestsPerHour:  DefaultPrekeyRequestsPerHour,
+			MaxConnections:           DefaultMaxConnections,
+			MaxConnectionsPerIP:      DefaultMaxConnectionsPerIP,
+			MaxPendingHandshakes:     DefaultMaxPendingHandshakes,
+			MaxFrameSize:             DefaultMaxFrameSize,
+			MaxMessageSize:           DefaultMaxMessageSize,
+			MaxQueueBytes:            DefaultMaxQueueBytes,
+			MaxTotalQueueBytes:       DefaultMaxTotalQueueBytes,
+			MaxSessionsPerIdentity:   DefaultMaxSessionsPerID,
+			FramesPerSecond:          DefaultFramesPerSecond,
+			Burst:                    DefaultBurst,
+			HandshakeTimeout:         DurationOf(DefaultHandshakeTimeout),
+			PingInterval:             DurationOf(DefaultPingInterval),
+			MaxQueuedMessages:        DefaultMaxQueuedMessages,
+			MaxQueuedBytes:           DefaultMaxQueuedBytes,
+			PrekeyRequestsPerHour:    DefaultPrekeyRequestsPerHour,
+			MultiRecipientsPerMinute: DefaultMultiRecipientsPerMinute,
 		},
 		Log: LogConfig{Level: DefaultLogLevel},
 	}
@@ -404,6 +420,8 @@ func (l Limits) validate() error {
 		return fmt.Errorf("config: limits.max_queued_bytes must be between %d and %d", MinQueuedBytes, int64(MaxQueuedBytes))
 	case l.PrekeyRequestsPerHour < 1 || l.PrekeyRequestsPerHour > MaxPrekeyRequestsPerHour:
 		return fmt.Errorf("config: limits.prekey_requests_per_hour must be between 1 and %d", MaxPrekeyRequestsPerHour)
+	case l.MultiRecipientsPerMinute < 1 || l.MultiRecipientsPerMinute > MaxMultiRecipientsPerMinute:
+		return fmt.Errorf("config: limits.multi_recipients_per_minute must be between 1 and %d", MaxMultiRecipientsPerMinute)
 	}
 	return validatePingInterval(l.PingInterval.Std())
 }

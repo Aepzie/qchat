@@ -33,21 +33,22 @@ func TestDefaultConfig(t *testing.T) {
 		Registration:   "invite",
 		UndeliveredTTL: DurationOf(168 * time.Hour),
 		Limits: Limits{
-			MaxConnections:         1000,
-			MaxConnectionsPerIP:    16,
-			MaxPendingHandshakes:   64,
-			MaxFrameSize:           1048576,
-			MaxMessageSize:         262144,
-			MaxQueueBytes:          2 << 20,
-			MaxTotalQueueBytes:     256 << 20,
-			MaxSessionsPerIdentity: 4,
-			FramesPerSecond:        20,
-			Burst:                  40,
-			HandshakeTimeout:       DurationOf(10 * time.Second),
-			PingInterval:           DurationOf(30 * time.Second),
-			MaxQueuedMessages:      1000,
-			MaxQueuedBytes:         64 << 20,
-			PrekeyRequestsPerHour:  30,
+			MaxConnections:           1000,
+			MaxConnectionsPerIP:      16,
+			MaxPendingHandshakes:     64,
+			MaxFrameSize:             1048576,
+			MaxMessageSize:           262144,
+			MaxQueueBytes:            2 << 20,
+			MaxTotalQueueBytes:       256 << 20,
+			MaxSessionsPerIdentity:   4,
+			FramesPerSecond:          20,
+			Burst:                    40,
+			HandshakeTimeout:         DurationOf(10 * time.Second),
+			PingInterval:             DurationOf(30 * time.Second),
+			MaxQueuedMessages:        1000,
+			MaxQueuedBytes:           64 << 20,
+			PrekeyRequestsPerHour:    120,
+			MultiRecipientsPerMinute: 3000,
 		},
 		Log: LogConfig{Level: "info"},
 	}
@@ -72,6 +73,7 @@ undelivered_ttl = "48h"
 max_queued_messages = 50
 max_queued_bytes = 2097152
 prekey_requests_per_hour = 5
+multi_recipients_per_minute = 600
 max_connections = 50
 max_connections_per_ip = 4
 max_pending_handshakes = 8
@@ -99,21 +101,22 @@ level = "debug"
 		Registration:   "open",
 		UndeliveredTTL: DurationOf(48 * time.Hour),
 		Limits: Limits{
-			MaxQueuedMessages:      50,
-			MaxQueuedBytes:         2 << 20,
-			PrekeyRequestsPerHour:  5,
-			MaxConnections:         50,
-			MaxConnectionsPerIP:    4,
-			MaxPendingHandshakes:   8,
-			MaxFrameSize:           65536,
-			MaxMessageSize:         4096,
-			MaxQueueBytes:          1 << 20,
-			MaxTotalQueueBytes:     8 << 20,
-			MaxSessionsPerIdentity: 2,
-			FramesPerSecond:        2.5,
-			Burst:                  7,
-			HandshakeTimeout:       DurationOf(1500 * time.Millisecond),
-			PingInterval:           DurationOf(time.Minute),
+			MaxQueuedMessages:        50,
+			MaxQueuedBytes:           2 << 20,
+			PrekeyRequestsPerHour:    5,
+			MultiRecipientsPerMinute: 600,
+			MaxConnections:           50,
+			MaxConnectionsPerIP:      4,
+			MaxPendingHandshakes:     8,
+			MaxFrameSize:             65536,
+			MaxMessageSize:           4096,
+			MaxQueueBytes:            1 << 20,
+			MaxTotalQueueBytes:       8 << 20,
+			MaxSessionsPerIdentity:   2,
+			FramesPerSecond:          2.5,
+			Burst:                    7,
+			HandshakeTimeout:         DurationOf(1500 * time.Millisecond),
+			PingInterval:             DurationOf(time.Minute),
 		},
 		Log: LogConfig{Level: "debug"},
 	}
@@ -295,6 +298,8 @@ func TestValidateRejects(t *testing.T) {
 		"huge queued bytes":       func(c *Config) { c.Limits.MaxQueuedBytes = MaxQueuedBytes + 1 },
 		"zero prekey requests":    func(c *Config) { c.Limits.PrekeyRequestsPerHour = 0 },
 		"many prekey requests":    func(c *Config) { c.Limits.PrekeyRequestsPerHour = MaxPrekeyRequestsPerHour + 1 },
+		"zero multi recipients":   func(c *Config) { c.Limits.MultiRecipientsPerMinute = 0 },
+		"many multi recipients":   func(c *Config) { c.Limits.MultiRecipientsPerMinute = MaxMultiRecipientsPerMinute + 1 },
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -307,30 +312,32 @@ func TestValidateRejects(t *testing.T) {
 
 func TestValidateAccepts(t *testing.T) {
 	cases := map[string]func(*Config){
-		"empty host":           func(c *Config) { c.Listen = ":7443" },
-		"ipv6 host":            func(c *Config) { c.Listen = "[::]:7443" },
-		"port zero":            func(c *Config) { c.Listen = "127.0.0.1:0" },
-		"minimum ping":         func(c *Config) { c.Limits.PingInterval = DurationOf(time.Second) },
-		"maximum ping":         func(c *Config) { c.Limits.PingInterval = DurationOf(time.Hour) },
-		"per ip equals total":  func(c *Config) { c.Limits.MaxConnectionsPerIP = c.Limits.MaxConnections },
-		"fractional rate":      func(c *Config) { c.Limits.FramesPerSecond = 0.1 },
-		"each log level":       func(c *Config) { c.Log.Level = "warn" },
-		"pending above total":  func(c *Config) { c.Limits.MaxPendingHandshakes = c.Limits.MaxConnections + 1 },
-		"open registration":    func(c *Config) { c.Registration = RegistrationOpen },
-		"minimum message size": func(c *Config) { c.Limits.MaxMessageSize = MinMessageSize },
-		"maximum message size": func(c *Config) { c.Limits.MaxMessageSize = MaxMessageSize },
-		"absolute database":    func(c *Config) { c.Database = filepath.Join(os.TempDir(), "q.db") },
-		"minimum queue":        func(c *Config) { c.Limits.MaxQueueBytes, c.Limits.MaxTotalQueueBytes = MinQueueBytes, MinQueueBytes },
-		"maximum total queue":  func(c *Config) { c.Limits.MaxTotalQueueBytes = MaxTotalQueueBytes },
-		"one session per id":   func(c *Config) { c.Limits.MaxSessionsPerIdentity = 1 },
-		"minimum ttl":          func(c *Config) { c.UndeliveredTTL = DurationOf(MinUndeliveredTTL) },
-		"maximum ttl":          func(c *Config) { c.UndeliveredTTL = DurationOf(MaxUndeliveredTTL) },
-		"one queued message":   func(c *Config) { c.Limits.MaxQueuedMessages = 1 },
-		"most queued messages": func(c *Config) { c.Limits.MaxQueuedMessages = MaxQueuedMessages },
-		"minimum queued bytes": func(c *Config) { c.Limits.MaxQueuedBytes = MinQueuedBytes },
-		"maximum queued bytes": func(c *Config) { c.Limits.MaxQueuedBytes = MaxQueuedBytes },
-		"one prekey request":   func(c *Config) { c.Limits.PrekeyRequestsPerHour = 1 },
-		"most prekey requests": func(c *Config) { c.Limits.PrekeyRequestsPerHour = MaxPrekeyRequestsPerHour },
+		"empty host":            func(c *Config) { c.Listen = ":7443" },
+		"ipv6 host":             func(c *Config) { c.Listen = "[::]:7443" },
+		"port zero":             func(c *Config) { c.Listen = "127.0.0.1:0" },
+		"minimum ping":          func(c *Config) { c.Limits.PingInterval = DurationOf(time.Second) },
+		"maximum ping":          func(c *Config) { c.Limits.PingInterval = DurationOf(time.Hour) },
+		"per ip equals total":   func(c *Config) { c.Limits.MaxConnectionsPerIP = c.Limits.MaxConnections },
+		"fractional rate":       func(c *Config) { c.Limits.FramesPerSecond = 0.1 },
+		"each log level":        func(c *Config) { c.Log.Level = "warn" },
+		"pending above total":   func(c *Config) { c.Limits.MaxPendingHandshakes = c.Limits.MaxConnections + 1 },
+		"open registration":     func(c *Config) { c.Registration = RegistrationOpen },
+		"minimum message size":  func(c *Config) { c.Limits.MaxMessageSize = MinMessageSize },
+		"maximum message size":  func(c *Config) { c.Limits.MaxMessageSize = MaxMessageSize },
+		"absolute database":     func(c *Config) { c.Database = filepath.Join(os.TempDir(), "q.db") },
+		"minimum queue":         func(c *Config) { c.Limits.MaxQueueBytes, c.Limits.MaxTotalQueueBytes = MinQueueBytes, MinQueueBytes },
+		"maximum total queue":   func(c *Config) { c.Limits.MaxTotalQueueBytes = MaxTotalQueueBytes },
+		"one session per id":    func(c *Config) { c.Limits.MaxSessionsPerIdentity = 1 },
+		"minimum ttl":           func(c *Config) { c.UndeliveredTTL = DurationOf(MinUndeliveredTTL) },
+		"maximum ttl":           func(c *Config) { c.UndeliveredTTL = DurationOf(MaxUndeliveredTTL) },
+		"one queued message":    func(c *Config) { c.Limits.MaxQueuedMessages = 1 },
+		"most queued messages":  func(c *Config) { c.Limits.MaxQueuedMessages = MaxQueuedMessages },
+		"minimum queued bytes":  func(c *Config) { c.Limits.MaxQueuedBytes = MinQueuedBytes },
+		"maximum queued bytes":  func(c *Config) { c.Limits.MaxQueuedBytes = MaxQueuedBytes },
+		"one prekey request":    func(c *Config) { c.Limits.PrekeyRequestsPerHour = 1 },
+		"most prekey requests":  func(c *Config) { c.Limits.PrekeyRequestsPerHour = MaxPrekeyRequestsPerHour },
+		"one multi recipient":   func(c *Config) { c.Limits.MultiRecipientsPerMinute = 1 },
+		"most multi recipients": func(c *Config) { c.Limits.MultiRecipientsPerMinute = MaxMultiRecipientsPerMinute },
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -368,7 +375,7 @@ func TestWriteTOMLRoundTrip(t *testing.T) {
 	text := buf.String()
 	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS", "database = 'db/qchat.db'", "registration = 'invite'", "max_message_size = 262144", "max_queue_bytes = 2097152", "max_total_queue_bytes = 268435456", "max_sessions_per_identity = 4", "invite create",
 		"undelivered_ttl = '168h0m0s'", "max_queued_messages = 1000", "max_queued_bytes = 67108864",
-		"prekey_requests_per_hour = 30", "waiting for delivery"} {
+		"prekey_requests_per_hour = 120", "multi_recipients_per_minute = 3000", "burst of 512", "waiting for delivery"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("WriteTOML output lacks %q:\n%s", want, text)
 		}

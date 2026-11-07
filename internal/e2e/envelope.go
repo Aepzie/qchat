@@ -13,11 +13,27 @@ import (
 // Kind is the content type of a message.
 type Kind uint8
 
-// Message kinds.
+// Message kinds. Kinds 1 to 3 travel over pairwise ratchet sessions inside
+// an [Envelope]; kind 4 is only ever encrypted with a group sender key
+// (package senderkey) and must be rejected when it arrives pairwise, just as
+// kinds 1 to 3 must be rejected inside a group envelope.
 const (
 	// KindText is a UTF-8 text message.
 	KindText Kind = 1
+	// KindGroupControl carries a signed group control message (package
+	// group) as its body. The body is binary.
+	KindGroupControl Kind = 2
+	// KindSenderKey carries a sender key distribution message (package
+	// senderkey) as its body. The body is binary.
+	KindSenderKey Kind = 3
+	// KindGroupText is a UTF-8 text message to a group, encrypted with the
+	// sender's group sender key.
+	KindGroupText Kind = 4
 )
+
+// IsText reports whether k is a kind whose body is UTF-8 text shown to the
+// user.
+func (k Kind) IsText() bool { return k == KindText || k == KindGroupText }
 
 // Format parameters and limits.
 const (
@@ -143,7 +159,8 @@ type Plaintext struct {
 	Sent time.Time
 	// Kind is the content type.
 	Kind Kind
-	// Body is the content, valid UTF-8 for [KindText]. It is not
+	// Body is the content, valid UTF-8 for [KindText] and [KindGroupText]
+	// and opaque bytes for the other kinds. Text is not
 	// sanitised: it may contain control characters and terminal escape
 	// sequences, which a user interface must neutralise before display.
 	Body []byte
@@ -159,13 +176,13 @@ type plaintextWire struct {
 
 // checkContent enforces the kind and body rules.
 func checkContent(kind Kind, body []byte) error {
-	if kind != KindText {
+	if kind < KindText || kind > KindGroupText {
 		return fmt.Errorf("unknown kind %d", kind)
 	}
 	if len(body) == 0 || len(body) > MaxBodySize {
 		return fmt.Errorf("body must be 1 to %d bytes", MaxBodySize)
 	}
-	if !utf8.Valid(body) {
+	if kind.IsText() && !utf8.Valid(body) {
 		return errors.New("text body is not valid UTF-8")
 	}
 	return nil
@@ -173,7 +190,8 @@ func checkContent(kind Kind, body []byte) error {
 
 // NewPlaintext returns a plaintext of the given kind and body with a fresh
 // random message ID, sent at now. It returns [ErrInvalidMessage] unless
-// kind is [KindText] and body is 1 to [MaxBodySize] bytes of valid UTF-8.
+// kind is known and body is 1 to [MaxBodySize] bytes, valid UTF-8 for the
+// text kinds.
 // body is not copied.
 func NewPlaintext(kind Kind, body []byte, now time.Time) (Plaintext, error) {
 	if err := checkContent(kind, body); err != nil {

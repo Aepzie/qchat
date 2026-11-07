@@ -84,6 +84,13 @@
 //	Messaging (requires authentication)
 //	  C→S  Send{To, Payload}
 //	  S→C  SendResult{Status}        Accepted, or Error NotFound / QueueFull
+//	  C→S  SendMulti{To, Payload}    one payload for up to MaxMultiRecipients IDs
+//	  S→C  SendMultiResult{Status, Failed, Reasons}
+//	                                 Accepted, listing the recipients the
+//	                                 message was not stored for (NotFound /
+//	                                 QueueFull each), or Error BadRequest /
+//	                                 TooLarge / RateLimited, in which case
+//	                                 none is stored
 //	  S→C  Deliver{From, Payload, QueueID}
 //	                                 pushed to every authenticated connection
 //	                                 of the recipient, and again after each
@@ -98,14 +105,24 @@
 // were added within wire version 1: a peer that predates them rejects them as
 // unknown types, which is the intended, backwards compatible failure mode.
 //
+// [SendMulti] lets a client hand the relay one ciphertext for several
+// recipients, as group messaging needs: the relay stores the message for
+// every recipient that can take it and delivers one copy per recipient,
+// each with its own queue ID, as an ordinary [Deliver], so recipients
+// cannot tell it apart from a Send. One unknown recipient or full queue
+// does not block the others: the [SendMultiResult] lists the recipients
+// the message was not stored for, each with its reason. Each copy counts
+// toward its recipient's queue limits. The relay sees the sender, the
+// recipient list and the payload size, but no group ID, name or membership.
+//
 // # Relay model
 //
 // The server is an untrusted relay. The handshake, keepalive, error,
 // registration, authentication, key lookup and prekey bodies are plaintext
-// and defined in this package. The Payload of [Send] and [Deliver] is
-// end-to-end encrypted ciphertext: the relay routes and stores it by
-// recipient ID and checks only its size, and it never needs, nor is able, to
-// interpret its contents. Identity bundles returned by the relay are verified
+// and defined in this package. The Payload of [Send], [SendMulti] and
+// [Deliver] is end-to-end encrypted ciphertext: the relay routes and stores
+// it by recipient ID and checks only its size, and it never needs, nor is
+// able, to interpret its contents. Identity bundles returned by the relay are verified
 // by the client, which checks that each bundle is validly self-signed and
 // that its ID equals the requested ID, and prekeys are verified against that
 // bundle, so the relay cannot substitute keys.

@@ -16,6 +16,10 @@ import (
 // string is used as ContactInfo.ID, as the contactID argument of every method
 // and in every ChatEvent.
 //
+// Groups are identified by "grp-" followed by 64 lowercase hex digits
+// (GroupInfo.ID). History, Send and MarkRead accept a group ID wherever they
+// accept a contact ID and then act on the group conversation.
+//
 // Every string a Backend returns is treated as untrusted and sanitised before
 // it is drawn.
 type Backend interface {
@@ -48,6 +52,84 @@ type Backend interface {
 	MarkVerified(contactID string, verified bool) error
 	// MarkRead resets the unread count of a contact.
 	MarkRead(contactID string) error
+	// Groups returns every group the user belongs to or has left, in the
+	// order the sidebar shows them.
+	Groups() ([]GroupInfo, error)
+	// CreateGroup creates a group named name with the given members (full
+	// identity IDs) and the user as its only admin, and tells every member.
+	CreateGroup(ctx context.Context, name string, memberIDs []string) (GroupInfo, error)
+	// ChangeGroup applies one membership or name change to a group and
+	// tells the members. It fails if the user may not make the change.
+	ChangeGroup(ctx context.Context, groupID string, change GroupChange) (GroupInfo, error)
+}
+
+// GroupInfo describes one group.
+type GroupInfo struct {
+	// ID is the group ID, "grp-" and 64 hex digits.
+	ID string
+	// Name is the group name, chosen by its admins and shown to members.
+	Name string
+	// Members lists the members, the user included, sorted by ID.
+	Members []GroupMember
+	// Left reports that the user left or was removed. The conversation is
+	// kept read only.
+	Left bool
+	// Invite reports that someone who is not a contact put the user into
+	// the group. The user can read but not write until it accepts.
+	Invite bool
+	// Unread counts messages the user has not seen.
+	Unread int
+	// OutOfSync reports that a member's view of the group (membership,
+	// admins or name) differs from the user's, so its messages may have
+	// been sent to a different set of members.
+	OutOfSync bool
+}
+
+// GroupMember is one member of a group.
+type GroupMember struct {
+	// ID is the member's full identity ID.
+	ID string
+	// ShortID is an abbreviated ID.
+	ShortID string
+	// DisplayName is the local name of a member who is a contact, or empty.
+	DisplayName string
+	// Admin reports whether the member may change the group.
+	Admin bool
+	// Self reports whether the member is the user.
+	Self bool
+}
+
+// GroupOp is a change to a group.
+type GroupOp uint8
+
+// Group changes. Every change except GroupLeave needs admin rights.
+const (
+	// GroupAdd adds GroupChange.Member.
+	GroupAdd GroupOp = iota + 1
+	// GroupRemove removes GroupChange.Member.
+	GroupRemove
+	// GroupPromote makes GroupChange.Member an admin.
+	GroupPromote
+	// GroupDemote takes admin rights from GroupChange.Member.
+	GroupDemote
+	// GroupRename sets the name to GroupChange.Name.
+	GroupRename
+	// GroupLeave removes the user from the group, or declines an
+	// invitation.
+	GroupLeave
+	// GroupAccept accepts an invitation (GroupInfo.Invite). It changes
+	// nothing for the other members.
+	GroupAccept
+)
+
+// GroupChange is the argument of Backend.ChangeGroup.
+type GroupChange struct {
+	Op GroupOp
+	// Member is the full identity ID the change applies to, for add,
+	// remove, promote and demote.
+	Member string
+	// Name is the new name, for rename.
+	Name string
 }
 
 // SelfInfo describes the local identity.
@@ -136,6 +218,9 @@ type MessageInfo struct {
 	// ClockSkew reports that Sent is more than 24 hours away from the local
 	// time of arrival, so the sender's timestamp should not be trusted.
 	ClockSkew bool
+	// From is the sender's identity ID for an incoming group message, and
+	// empty otherwise.
+	From string
 }
 
 // VerificationInfo is what the user compares to verify a contact.
@@ -152,7 +237,7 @@ type VerificationInfo struct {
 
 // ChatEvent is pushed by the application layer on Config.ChatEvents. The
 // concrete types are IncomingMessage, MessageStatusChanged,
-// ContactKeyChanged and ContactsChanged.
+// ContactKeyChanged, ContactsChanged and GroupChanged.
 type ChatEvent interface {
 	chatEvent()
 }
@@ -164,8 +249,16 @@ type IncomingMessage struct {
 	// Message is the message itself.
 	Message MessageInfo
 	// UnknownSender reports that the sender is not a contact. Such messages
-	// are shown under "Message requests".
+	// are shown under "Message requests". It is never set for group
+	// messages.
 	UnknownSender bool
+	// GroupID is set for a group message: the message belongs to that
+	// group's conversation, and ContactID and Message.From name the sender.
+	GroupID string
+	// OutOfSync reports, for a group message, that the sender's view of the
+	// group differs from the user's. The group is then shown as out of
+	// sync until the next group list says otherwise.
+	OutOfSync bool
 }
 
 // MessageStatusChanged reports a new delivery status for an outgoing message.
@@ -185,7 +278,16 @@ type ContactKeyChanged struct {
 // ContactsChanged asks the interface to reload the contact list.
 type ContactsChanged struct{}
 
+// GroupChanged reports that a group was created, joined, changed or left.
+// The interface reloads the group list and shows Notice, if any, in the
+// group's conversation.
+type GroupChanged struct {
+	GroupID string
+	Notice  string
+}
+
 func (IncomingMessage) chatEvent()      {}
 func (MessageStatusChanged) chatEvent() {}
 func (ContactKeyChanged) chatEvent()    {}
 func (ContactsChanged) chatEvent()      {}
+func (GroupChanged) chatEvent()         {}

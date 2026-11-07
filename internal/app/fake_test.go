@@ -50,6 +50,8 @@ type fakeRelay struct {
 	acked   map[identity.ID][]uint64
 	uploads map[identity.ID][]protocol.PrekeyUpload
 	nextQID uint64
+	// multi counts SendMulti requests.
+	multi int
 	// failUploads makes every non-empty PrekeyUpload fail.
 	failUploads bool
 }
@@ -122,6 +124,20 @@ func (c *fakeConn) Request(ctx context.Context, t protocol.FrameType, body any) 
 		r.nextQID++
 		r.queues[to] = append(r.queues[to], client.Delivery{From: [32]byte(c.id), Payload: slices.Clone(req.Payload), QueueID: r.nextQID})
 		return protocol.NewFrame(protocol.TypeSendResult, 1, protocol.SendResult{Status: protocol.SendAccepted})
+	case protocol.SendMulti:
+		result := protocol.SendMultiResult{Status: protocol.SendAccepted}
+		for _, raw := range req.To {
+			to := identity.ID(raw)
+			if _, ok := r.bundles[to]; !ok || to == c.id {
+				result.Failed = append(result.Failed, raw)
+				result.Reasons = append(result.Reasons, protocol.ErrCodeNotFound)
+				continue
+			}
+			r.nextQID++
+			r.queues[to] = append(r.queues[to], client.Delivery{From: [32]byte(c.id), Payload: slices.Clone(req.Payload), QueueID: r.nextQID})
+		}
+		r.multi++
+		return protocol.NewFrame(protocol.TypeSendMultiResult, 1, result)
 	}
 	return protocol.Frame{}, errors.New("fake relay: unexpected request")
 }

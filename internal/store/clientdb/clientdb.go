@@ -24,7 +24,8 @@ var (
 	ErrCorrupt = errors.New("clientdb: stored record is corrupt or was tampered with")
 	// ErrNotFound means the requested row does not exist.
 	ErrNotFound = errors.New("clientdb: not found")
-	// ErrDuplicate means a message with the same (Peer, MsgID) already exists.
+	// ErrDuplicate means a message with the same (Peer, MsgID), or a group
+	// message with the same (Group, Sender, MsgID), already exists.
 	ErrDuplicate = errors.New("clientdb: duplicate message")
 	// ErrInvalid means an argument failed validation.
 	ErrInvalid = errors.New("clientdb: invalid argument")
@@ -36,13 +37,19 @@ var (
 )
 
 const (
-	tableMeta     = "meta"
-	tableContacts = "contacts"
-	tableMessages = "messages"
-	tableSettings = "settings"
-	tableSeen     = "seen"
-	tableSessions = "sessions"
-	tablePrekeys  = "prekeys"
+	tableMeta       = "meta"
+	tableContacts   = "contacts"
+	tableMessages   = "messages"
+	tableSettings   = "settings"
+	tableSeen       = "seen"
+	tableSessions   = "sessions"
+	tablePrekeys    = "prekeys"
+	tableGroups     = "chat_groups"
+	tableSenderKeys = "sender_keys"
+	// tableGroupMessages is the associated data domain of group message rows,
+	// which live in the messages table. It differs from tableMessages so
+	// that a group message row can never be opened as a 1:1 message.
+	tableGroupMessages = "messages/group"
 
 	metaCanary = "canary"
 
@@ -88,6 +95,17 @@ var migrations = []string{
 		expires INTEGER NOT NULL
 	) STRICT, WITHOUT ROWID;
 	CREATE INDEX IF NOT EXISTS seen_inits_expires ON seen_inits (expires);`,
+	`CREATE TABLE IF NOT EXISTS chat_groups (
+		lookup BLOB PRIMARY KEY,
+		value  BLOB NOT NULL
+	) STRICT;
+	CREATE TABLE IF NOT EXISTS sender_keys (
+		lookup BLOB PRIMARY KEY,
+		grp    BLOB NOT NULL,
+		member BLOB NOT NULL,
+		value  BLOB NOT NULL
+	) STRICT;
+	CREATE INDEX IF NOT EXISTS sender_keys_grp_member ON sender_keys (grp, member);`,
 }
 
 // DB is an open client database. It is safe for concurrent use.

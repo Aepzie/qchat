@@ -161,7 +161,7 @@ func TestDecodeRejects(t *testing.T) {
 		{"VersionAsText", "a2 01 61 31 02 03", ErrMalformed},
 		{"TypeZero", "a2 01 01 02 00", ErrUnknownType},
 		{"TypeMissing", "a1 01 01", ErrUnknownType},
-		{"TypeUnknown", "a2 01 01 02 16", ErrUnknownType},
+		{"TypeUnknown", "a2 01 01 02 18 18", ErrUnknownType},
 		{"TypeOverflow", "a2 01 01 02 19 01 03", ErrMalformed},
 		{"TrailingByte", "a2 01 01 02 03 00", ErrMalformed},
 		{"TrailingFrame", "a2 01 01 02 03 a2 01 01 02 03", ErrMalformed},
@@ -249,7 +249,7 @@ func TestEncodeRejects(t *testing.T) {
 		{"VersionZero", Frame{Type: TypePing}, ErrUnsupportedVersion},
 		{"VersionTwo", Frame{Version: 2, Type: TypePing}, ErrUnsupportedVersion},
 		{"TypeZero", Frame{Version: Version}, ErrUnknownType},
-		{"TypeUnknown", Frame{Version: Version, Type: 22}, ErrUnknownType},
+		{"TypeUnknown", Frame{Version: Version, Type: 24}, ErrUnknownType},
 		{"BodyTooLarge", Frame{Version: Version, Type: TypePing, Body: make([]byte, MaxFrameSize+1)}, ErrFrameTooLarge},
 		{"FrameTooLarge", Frame{Version: Version, Type: TypePing, Body: make([]byte, MaxFrameSize)}, ErrFrameTooLarge},
 	}
@@ -270,8 +270,8 @@ func TestFrameTypeString(t *testing.T) {
 		TypeAuthOK: "AuthOK", TypeKeyRequest: "KeyRequest", TypeKeyResponse: "KeyResponse",
 		TypeSend: "Send", TypeSendResult: "SendResult", TypeDeliver: "Deliver",
 		TypePrekeyUpload: "PrekeyUpload", TypePrekeyStatus: "PrekeyStatus", TypePrekeyRequest: "PrekeyRequest",
-		TypePrekeyResponse: "PrekeyResponse", TypeAck: "Ack",
-		0: "FrameType(0)", 22: "FrameType(22)", 200: "FrameType(200)",
+		TypePrekeyResponse: "PrekeyResponse", TypeAck: "Ack", TypeSendMulti: "SendMulti",
+		TypeSendMultiResult: "SendMultiResult", 0: "FrameType(0)", 24: "FrameType(24)", 200: "FrameType(200)",
 	}
 	for typ, s := range want {
 		if got := typ.String(); got != s {
@@ -279,7 +279,7 @@ func TestFrameTypeString(t *testing.T) {
 		}
 	}
 	for typ := 0; typ < 256; typ++ {
-		valid := typ >= 1 && typ <= 21
+		valid := typ >= 1 && typ <= 23
 		if got := FrameType(typ).Valid(); got != valid {
 			t.Errorf("FrameType(%d).Valid() = %v, want %v", typ, got, valid)
 		}

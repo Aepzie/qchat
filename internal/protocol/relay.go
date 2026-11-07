@@ -249,3 +249,101 @@ func checkBounded(field string, b []byte, limit int) error {
 	}
 	return nil
 }
+
+// Limits of the [SendMulti] body.
+const (
+	// MaxMultiRecipients is the largest number of recipients a [SendMulti]
+	// may name.
+	MaxMultiRecipients = 256
+	// MaxMultiPayloadSize is the largest ciphertext, in bytes, a
+	// [SendMulti] may carry. It is smaller than MaxPayloadSize by the space
+	// MaxMultiRecipients IDs take, so a maximal SendMulti always fits in a
+	// frame. Each copy the relay delivers is an ordinary [Deliver].
+	MaxMultiPayloadSize = MaxPayloadSize - 8<<10
+)
+
+// SendMulti asks the relay to route the identical Payload to every identity
+// in To, for example a group message encrypted once for all members. The
+// relay stores the message for every recipient that can take it, each copy
+// with its own queue ID, and pushes each copy as an ordinary [Deliver]. It
+// answers with a [SendMultiResult] listing the recipients it could not
+// store the message for, or with an [ErrorBody] if it rejects the request
+// as a whole, in which case no copy is stored. The relay learns the
+// recipient list and the payload size but nothing about any group.
+type SendMulti struct {
+	// To lists between 1 and MaxMultiRecipients distinct recipient
+	// identities, each exactly IDSize bytes. It must not contain the
+	// sender.
+	To [][]byte `cbor:"1,keyasint"`
+	// Payload is end-to-end encrypted ciphertext, between 1 and
+	// MaxMultiPayloadSize bytes. It is opaque to the relay.
+	Payload []byte `cbor:"2,keyasint"`
+}
+
+func (SendMulti) frameType() FrameType { return TypeSendMulti }
+
+func (s SendMulti) validate() error {
+	if len(s.To) == 0 || len(s.To) > MaxMultiRecipients {
+		return fmt.Errorf("%w: %d recipients, want 1 to %d", ErrMalformed, len(s.To), MaxMultiRecipients)
+	}
+	seen := make(map[[IDSize]byte]struct{}, len(s.To))
+	for _, to := range s.To {
+		if err := checkFixed("recipient ID", to, IDSize); err != nil {
+			return err
+		}
+		id := [IDSize]byte(to)
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("%w: duplicate recipient ID", ErrMalformed)
+		}
+		seen[id] = struct{}{}
+	}
+	return checkBounded("payload", s.Payload, MaxMultiPayloadSize)
+}
+
+// SendMultiResult reports the outcome of a [SendMulti] the relay accepted.
+// The message is stored for every recipient of the request except those
+// listed in Failed; Reasons[i] says why it was not stored for Failed[i].
+// An empty Failed, encoded by omitting both lists, means every recipient
+// got the message.
+type SendMultiResult struct {
+	// Status is the outcome of the request as a whole; it must be
+	// SendAccepted, even when no recipient could take the message.
+	Status SendStatus `cbor:"1,keyasint"`
+	// Failed lists at most MaxMultiRecipients distinct recipient IDs, each
+	// exactly IDSize bytes, for which the message was not stored. An empty
+	// list is encoded by omitting the field.
+	Failed [][]byte `cbor:"2,keyasint,omitempty"`
+	// Reasons holds one defined error code per entry of Failed, in the same
+	// order: ErrCodeNotFound for an unknown recipient and ErrCodeQueueFull
+	// for one whose stored messages reached the relay's limits. It is
+	// omitted exactly when Failed is.
+	Reasons []ErrorCode `cbor:"3,keyasint,omitempty"`
+}
+
+func (SendMultiResult) frameType() FrameType { return TypeSendMultiResult }
+
+func (s SendMultiResult) validate() error {
+	if s.Status != SendAccepted {
+		return fmt.Errorf("%w: send multi status %d, want %d", ErrMalformed, uint8(s.Status), uint8(SendAccepted))
+	}
+	if len(s.Failed) > MaxMultiRecipients {
+		return fmt.Errorf("%w: %d failed recipients, want at most %d", ErrMalformed, len(s.Failed), MaxMultiRecipients)
+	}
+	if len(s.Reasons) != len(s.Failed) {
+		return fmt.Errorf("%w: %d reasons for %d failed recipients", ErrMalformed, len(s.Reasons), len(s.Failed))
+	}
+	seen := make(map[[IDSize]byte]struct{}, len(s.Failed))
+	for i, id := range s.Failed {
+		if err := checkFixed("failed recipient ID", id, IDSize); err != nil {
+			return err
+		}
+		if _, dup := seen[[IDSize]byte(id)]; dup {
+			return fmt.Errorf("%w: duplicate failed recipient ID", ErrMalformed)
+		}
+		seen[[IDSize]byte(id)] = struct{}{}
+		if !s.Reasons[i].Valid() {
+			return fmt.Errorf("%w: undefined error code %d", ErrMalformed, uint16(s.Reasons[i]))
+		}
+	}
+	return nil
+}

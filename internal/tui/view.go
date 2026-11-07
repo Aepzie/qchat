@@ -249,16 +249,18 @@ func (m Model) renderFooter(width int) string {
 	switch {
 	case m.overlay.kind == overlayVerify:
 		hints = "v verified · u not verified · esc close"
-	case m.overlay.kind == overlayWhoami:
+	case m.overlay.kind == overlayWhoami || m.overlay.kind == overlayMembers:
 		hints = "esc close"
 	case m.confirm.active:
-		hints = "y remove · any other key keeps the contact"
+		hints = m.confirm.hints()
 	}
 	c := m.conv(m.open)
 	note := "notes stay local "
 	switch {
 	case c != nil && c.kind == convContact:
 		note = "end-to-end encrypted "
+	case c != nil && c.kind == convGroup && !c.group.Left:
+		note = "end-to-end encrypted · relay sees recipients "
 	case c != nil && c.kind == convRequests:
 		note = "read only "
 	}
@@ -347,6 +349,16 @@ func (m Model) renderConversation(c *conversation, selected, cursor bool, width 
 			mark, markColor = " ✓", t.Success
 		}
 	}
+	if c.kind == convGroup {
+		switch {
+		case c.group.Left:
+			mark, markColor = " ✕", t.Muted
+		case c.group.OutOfSync:
+			mark, markColor = " ⚠", t.Warning
+		case c.group.Invite:
+			mark, markColor = " ?", t.Warning
+		}
+	}
 	markW := lipgloss.Width(mark)
 	nameW := max(width-3-badgeW-markW, 1)
 	name := truncate(c.title(), nameW)
@@ -358,7 +370,11 @@ func (m Model) renderConversation(c *conversation, selected, cursor bool, width 
 	if cursor {
 		lead = st.accent.Render("›") + " "
 	}
-	row := lead + st.muted.Render(name) + lipgloss.NewStyle().Foreground(markColor).Render(mark)
+	nameStyle := st.muted
+	if c.kind == convGroup && c.group.Left {
+		nameStyle = st.faint
+	}
+	row := lead + nameStyle.Render(name) + lipgloss.NewStyle().Foreground(markColor).Render(mark)
 	return padRight(row, width-badgeW, lipgloss.NewStyle()) + badge
 }
 
@@ -389,7 +405,7 @@ func (m Model) renderMain(d dims) []string {
 
 	input := strings.Split(m.input.View(), "\n")
 	if m.confirm.active {
-		input = []string{st.warn.Bold(true).Render(truncate("Remove "+m.confirm.name+" from your contacts? Later messages arrive as requests. y/N", d.mainW-2))}
+		input = []string{st.warn.Bold(true).Render(truncate(m.confirm.prompt(), d.mainW-2))}
 	}
 	for i := 0; i < d.inputH; i++ {
 		line := ""
@@ -423,6 +439,20 @@ func (m Model) renderHeader(width int) string {
 	case convRequests:
 		title = " " + st.bold.Render("# Message requests")
 		extras = []string{st.faint.Render("  from people not in your contacts")}
+	case convGroup:
+		title = " " + st.bold.Render(truncate(c.title(), max(room/2, 8)))
+		count := fmt.Sprintf("  %d members", len(c.group.Members))
+		switch {
+		case c.group.Left:
+			extras = []string{st.warn.Render("  you left · read only"), st.warn.Render("  left")}
+		case c.group.Invite:
+			extras = []string{st.warn.Render("  invitation · /group accept"), st.warn.Render("  invitation")}
+		case selfAdmin(c.group):
+			extras = []string{st.faint.Render(count) + st.accent.Render(" · you are admin") + st.faint.Render(" · /group members"),
+				st.faint.Render(count) + st.accent.Render(" · you are admin"), st.faint.Render(count)}
+		default:
+			extras = []string{st.faint.Render(count + " · /group members"), st.faint.Render(count)}
+		}
 	default:
 		title = " " + st.bold.Render(truncate(c.contact.label(), max(room/2, 8)))
 		state := []string{st.ok.Render("  ✓ verified"), st.ok.Render("  ✓")}
@@ -444,19 +474,32 @@ func (m Model) renderHeader(width int) string {
 	return padRight(truncateStyled(line, room), room, lipgloss.NewStyle()) + hint
 }
 
-// renderBanner draws the key-change warning of the open contact: a red box
-// when there is room, one line otherwise, nothing when there is no warning.
+// renderBanner draws the warning of the open conversation (a changed
+// safety number, or a group out of sync): a box when there is room, one
+// line otherwise, nothing when there is no warning.
 // room is the height left for banner and history together.
 func (m Model) renderBanner(mainW, room int) []string {
 	c := m.conv(m.open)
-	if c == nil || c.kind != convContact || !c.contact.KeyChanged || room < 2 {
+	if c == nil || room < 2 {
+		return nil
+	}
+	var title, text, short string
+	switch {
+	case c.kind == convContact && c.contact.KeyChanged:
+		title, short = "⚠ Safety number changed", "⚠ Safety number changed · compare it with /verify"
+		text = c.contact.label() + "'s keys changed. This happens after a reinstall, or when someone intercepts. " +
+			"Sending still works, but compare the new safety number with /verify before you trust this conversation."
+	case c.kind == convGroup && c.group.OutOfSync && !c.group.Left:
+		title, short = "⚠ Group out of sync", "⚠ group state differs — messages may be from a different membership view"
+		text = "The group state differs from this member — messages may be from a different membership view. " +
+			"It settles once every member has seen the latest change; /group members shows your view."
+	default:
 		return nil
 	}
 	st := m.st
 	inner := min(mainW-2, maxAlertWidth) - 4
-	body := []string{st.alertTitle.Render(truncate("⚠ Safety number changed", inner))}
-	for _, l := range wrapLines(c.contact.label()+"'s keys changed. This happens after a reinstall, or when someone intercepts. "+
-		"Sending still works, but compare the new safety number with /verify before you trust this conversation.", inner) {
+	body := []string{st.alertTitle.Render(truncate(title, inner))}
+	for _, l := range wrapLines(text, inner) {
 		body = append(body, st.text.Render(l))
 	}
 	if room-len(body)-2 >= 4 {
@@ -465,7 +508,7 @@ func (m Model) renderBanner(mainW, room int) []string {
 		}
 		return strings.Split(st.alertBox.Render(strings.Join(body, "\n")), "\n")
 	}
-	return []string{st.alertTitle.Render(truncate("⚠ Safety number changed · compare it with /verify", mainW-2))}
+	return []string{st.alertTitle.Render(truncate(short, mainW-2))}
 }
 
 // renderPalette draws the command palette rows, or nothing if it is closed.
@@ -484,10 +527,14 @@ func (m Model) renderPalette(d dims) []string {
 		start = sel - d.paletteH + 1
 	}
 	width := d.mainW - 2
+	nameW := 13
+	for _, c := range matches {
+		nameW = max(nameW, len(c.name))
+	}
 	var out []string
 	for i := start; i < len(matches) && len(out) < d.paletteH; i++ {
 		c := matches[i]
-		text := truncate(fmt.Sprintf("  %-13s %s", c.name, c.summary), width)
+		text := truncate(fmt.Sprintf("  %-*s %s", nameW, c.name, c.summary), width)
 		if i == sel {
 			out = append(out, st.paletteSel.Render(padPlain(text, width)))
 			continue

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,6 +16,7 @@ const (
 	overlayNone overlayKind = iota
 	overlayVerify
 	overlayWhoami
+	overlayMembers
 )
 
 // safetyDigits is the length of a safety number.
@@ -34,13 +36,35 @@ type overlay struct {
 	code       *qr.Code
 	busy       bool
 	errText    string
+	// members and left describe the group of the members overlay.
+	members []GroupMember
+	left    bool
 }
 
 // confirmation is a pending y/N question shown in place of the input.
+// It removes the contact contactID, or leaves the group groupID when that
+// is set.
 type confirmation struct {
 	active    bool
 	contactID string
+	groupID   string
 	name      string
+}
+
+// prompt is the question of the confirmation.
+func (c confirmation) prompt() string {
+	if c.groupID != "" {
+		return "Leave " + c.name + "? Its history stays on this device. y/N"
+	}
+	return "Remove " + c.name + " from your contacts? Later messages arrive as requests. y/N"
+}
+
+// hints are the footer key hints of the confirmation.
+func (c confirmation) hints() string {
+	if c.groupID != "" {
+		return "y leave · any other key stays in the group"
+	}
+	return "y remove · any other key keeps the contact"
 }
 
 // openVerify shows the safety number of a contact. It reports false if the
@@ -106,7 +130,16 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
 func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) tea.Cmd {
 	c := m.confirm
 	m.confirm = confirmation{}
-	if (msg.String() == "y" || msg.String() == "Y") && m.cfg.Backend != nil {
+	yes := (msg.String() == "y" || msg.String() == "Y") && m.cfg.Backend != nil
+	switch {
+	case c.groupID != "" && yes:
+		return leaveGroupCmd(m.cfg.Backend, c.groupID)
+	case c.groupID != "":
+		if m.conv(c.groupID) != nil {
+			m.addTo(c.groupID, entry{kind: entrySystem, text: "You stay in the group."})
+		}
+		return nil
+	case yes:
 		return removeCmd(m.cfg.Backend, c.contactID, c.name)
 	}
 	m.log(entrySystem, "Kept "+c.name+".")
@@ -135,6 +168,9 @@ func (m Model) overlayText(width int) []string {
 		for _, l := range wrapLines(text, width) {
 			lines = append(lines, style.Render(l))
 		}
+	}
+	if o.kind == overlayMembers {
+		return m.membersText(width)
 	}
 	if o.kind == overlayWhoami {
 		lines = append(lines, st.muted.Render("Your ID"))
@@ -191,6 +227,9 @@ func (m Model) renderOverlay(width, height int) []string {
 	}
 	if o.kind == overlayVerify {
 		title = st.bold.Render("Verify "+o.name) + st.faint.Render("  "+o.shortID)
+	}
+	if o.kind == overlayMembers {
+		title = st.bold.Render("# "+o.name) + st.faint.Render(fmt.Sprintf("  %d members", len(o.members)))
 	}
 	header := []string{truncateStyled(title, innerW), ""}
 	content := m.overlayLayout(header, innerW, innerH)

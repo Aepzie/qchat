@@ -5,12 +5,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/craguS/qchat/internal/client"
 	"github.com/craguS/qchat/internal/e2e"
 	"github.com/craguS/qchat/internal/identity"
 	"github.com/craguS/qchat/internal/protocol"
+	"github.com/craguS/qchat/internal/senderkey"
 	"github.com/craguS/qchat/internal/store/clientdb"
 	"github.com/craguS/qchat/internal/tui"
 )
@@ -27,46 +29,137 @@ type messageKey struct {
 	msgID [e2e.MsgIDSize]byte
 }
 
+// outcome says what becomes of a relay delivery after processing.
+type outcome uint8
+
+const (
+	// outcomeDone: the delivery was filed, or can never be read; it is
+	// acknowledged.
+	outcomeDone outcome = iota
+	// outcomeRetry: a local failure that may not recur; the delivery is
+	// not acknowledged, so the relay delivers it again.
+	outcomeRetry
+	// outcomeWait: the delivery needs a group state or sender key that has
+	// not arrived yet; it waits (see groups.go) and is not acknowledged.
+	outcomeWait
+)
+
 // handleDelivery decrypts, verifies and files one relayed message, and
 // acknowledges it to the relay unless it failed for a reason that may not
-// recur (see transientError). Anything that fails is dropped without
-// telling the interface: the relay, or whoever controls it, must not be
-// able to inject content or noise.
+// recur (see transientError) or waits for group input. Anything that fails
+// is dropped without telling the interface: the relay, or whoever controls
+// it, must not be able to inject content or noise.
 func (a *App) handleDelivery(ctx context.Context, d client.Delivery) {
-	ack, events := a.receive(ctx, d)
-	if ack && d.QueueID != 0 {
-		if sess := a.session(); sess != nil {
-			_ = sess.Ack(d.QueueID)
+	a.groupMu.Lock()
+	r := a.receive(ctx, d)
+	var acks []uint64
+	switch r.outcome {
+	case outcomeDone:
+		acks = append(acks, d.QueueID)
+	case outcomeWait:
+		if r.hold != nil && a.holdLocked(*r.hold) {
+			acks = append(acks, d.QueueID)
 		}
 	}
-	for _, ev := range events {
+	retried, events := a.retryPendingLocked(ctx, r.changed)
+	a.groupMu.Unlock()
+	acks = append(acks, retried...)
+	if sess := a.session(); sess != nil {
+		for _, q := range acks {
+			if q != 0 {
+				_ = sess.Ack(q)
+			}
+		}
+	}
+	for _, ev := range append(r.events, events...) {
 		a.emit(ev)
 	}
 }
 
-// receive processes one delivery. It reports whether the delivery may be
-// acknowledged (it was filed, or it can never be read) and returns the
-// events to show.
-func (a *App) receive(ctx context.Context, d client.Delivery) (bool, []tui.ChatEvent) {
-	from := identity.ID(d.From)
-	env, err := e2e.ParseEnvelope(d.Payload)
-	if err != nil || from == a.prof.Identity.ID() {
-		a.countDropped()
-		return true, nil
-	}
-	return a.openAndFile(ctx, from, env)
+// received is the result of processing one delivery.
+type received struct {
+	outcome outcome
+	// hold is the input to keep when the outcome is outcomeWait.
+	hold *pendingGroup
+	// changed reports a stored group state or sender key.
+	changed bool
+	events  []tui.ChatEvent
 }
 
-func (a *App) openAndFile(ctx context.Context, from identity.ID, env e2e.Envelope) (bool, []tui.ChatEvent) {
-	a.ratchetMu.Lock()
-	defer a.ratchetMu.Unlock()
-	o, err := a.open(ctx, from, env)
+// receive processes one delivery. a.groupMu must be held.
+func (a *App) receive(ctx context.Context, d client.Delivery) received {
+	from := identity.ID(d.From)
+	if from == a.prof.Identity.ID() {
+		a.countDropped()
+		return received{outcome: outcomeDone}
+	}
+	if senderkey.IsGroupEnvelope(d.Payload) {
+		r := a.receiveGroupEnvelope(ctx, from, d.Payload)
+		out := received{outcome: r.outcome, changed: r.changed, events: r.events}
+		if r.outcome == outcomeWait {
+			out.hold = &pendingGroup{queueID: d.QueueID, from: from, envelope: slices.Clone(d.Payload)}
+		}
+		return out
+	}
+	env, err := e2e.ParseEnvelope(d.Payload)
 	if err != nil {
 		a.countDropped()
-		return !isTransient(err), nil
+		return received{outcome: outcomeDone}
+	}
+	return a.openAndFile(ctx, d.QueueID, from, env)
+}
+
+// openAndFile decrypts a pairwise envelope and files its content: a text
+// message in the conversation, group input through applyGroupPayload once
+// the session has been committed. a.groupMu must be held.
+func (a *App) openAndFile(ctx context.Context, queueID uint64, from identity.ID, env e2e.Envelope) received {
+	a.ratchetMu.Lock()
+	o, err := a.open(ctx, from, env)
+	if err != nil {
+		a.ratchetMu.Unlock()
+		a.countDropped()
+		return received{outcome: outcomeOf(err)}
 	}
 	defer clear(o.plaintext.Body)
-	return a.fileOpened(ctx, from, o)
+	switch o.plaintext.Kind {
+	case e2e.KindText:
+		ack, events := a.fileOpened(ctx, from, o)
+		a.ratchetMu.Unlock()
+		if !ack {
+			return received{outcome: outcomeRetry}
+		}
+		return received{outcome: outcomeDone, events: events}
+	case e2e.KindGroupControl, e2e.KindSenderKey:
+	default:
+		a.ratchetMu.Unlock()
+		a.countDropped()
+		return received{outcome: outcomeDone}
+	}
+	err = a.commitSession(ctx, from, o)
+	a.ratchetMu.Unlock()
+	if err != nil {
+		a.countDropped()
+		return received{outcome: outcomeOf(err)}
+	}
+	var events []tui.ChatEvent
+	if o.sender != nil && a.adoptBundle(from, o.sender) {
+		events = append(events, tui.ContactKeyChanged{ContactID: canonicalID(from)})
+	}
+	body := slices.Clone(o.plaintext.Body)
+	r := a.applyGroupPayload(ctx, from, o.plaintext.Kind, body, o.sender)
+	out := received{outcome: r.outcome, changed: r.changed, events: append(events, r.events...)}
+	if r.outcome == outcomeWait {
+		out.hold = &pendingGroup{queueID: queueID, from: from, kind: o.plaintext.Kind, body: body, bundle: o.sender}
+	}
+	return out
+}
+
+// outcomeOf classifies a processing error.
+func outcomeOf(err error) outcome {
+	if isTransient(err) {
+		return outcomeRetry
+	}
+	return outcomeDone
 }
 
 // persistRequestsLocked moves the message requests of a new contact into
@@ -93,10 +186,14 @@ func (a *App) countDropped() {
 }
 
 // Send encrypts text for a contact, stores it and hands it to the relay.
+// For a group ID it sends a group message (see sendGroup).
 // Relay and network failures are reported in the returned message's status,
 // not as an error; a message that could not even be encrypted, because no
 // session could be started, is stored as failed.
 func (a *App) Send(ctx context.Context, contactID, text string) (tui.MessageInfo, error) {
+	if isGroupKey(contactID) {
+		return a.sendGroup(ctx, contactID, text)
+	}
 	id, err := parseContactID(contactID)
 	if err != nil {
 		return tui.MessageInfo{}, err
@@ -118,7 +215,7 @@ func (a *App) Send(ctx context.Context, contactID, text string) (tui.MessageInfo
 		return tui.MessageInfo{}, err
 	}
 	record := clientdb.Message{Peer: id, MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent, Body: text, Status: clientdb.StatusSent}
-	payload, reason, err := a.sealOutgoing(ctx, c, pt, record)
+	payload, reason, err := a.sealOutgoing(ctx, c, pt, &record)
 	if err != nil {
 		return tui.MessageInfo{}, err
 	}
@@ -195,9 +292,12 @@ func (a *App) deliver(ctx context.Context, to identity.ID, payload []byte) (uint
 	}
 }
 
-// History returns up to limit of the latest messages with a contact,
-// oldest first.
+// History returns up to limit of the latest messages with a contact or in
+// a group, oldest first.
 func (a *App) History(contactID string, limit int) ([]tui.MessageInfo, error) {
+	if isGroupKey(contactID) {
+		return a.groupHistory(contactID, limit)
+	}
 	id, err := parseContactID(contactID)
 	if err != nil {
 		return nil, err

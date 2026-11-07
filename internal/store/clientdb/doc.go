@@ -34,10 +34,17 @@
 //
 // Someone holding qchat.db but not the database key can see:
 //
-//   - the number of contacts, messages, settings, ratchet sessions and own
-//     prekey secrets, and the size of every stored value;
+//   - the number of contacts, groups, messages, settings, ratchet sessions,
+//     own prekey secrets and sender key states, and the size of every stored
+//     value;
 //   - which messages belong to the same conversation, because the peer column
-//     is the same HMAC for every message of one contact;
+//     is the same HMAC for every message of one contact or group, though not
+//     whether a conversation is a 1:1 or a group conversation;
+//   - which sender key states belong to the same group, and which of them
+//     belong to the same member of that group (the grp and member columns),
+//     and which row is the group's own sender key state (its member column
+//     is empty); member columns are keyed by group, so one member's rows
+//     cannot be linked across groups;
 //   - the local, monotonically increasing sequence number of each message,
 //     and therefore the relative order in which messages were stored;
 //   - the number of messages ever stored, including those of deleted
@@ -52,7 +59,14 @@
 //
 // The file does not reveal contact IDs, display names, identity bundles,
 // message IDs, message bodies, timestamps, statuses, setting values, which
-// peers have a session, ratchet states, or prekey kinds, IDs and keys.
+// peers have a session, ratchet states, prekey kinds, IDs and keys, group
+// IDs, group states (and with them names and members), message senders,
+// sender key generations or sender key states.
+//
+// Group message rows share the messages table, its sequence and its replay
+// tombstones with 1:1 messages, but are sealed under a different associated
+// data domain, so a group row moved into a 1:1 conversation fails
+// authentication.
 //
 // # What is not detected
 //
@@ -85,18 +99,21 @@
 // Forward secrecy needs deleted prekey private keys and ratchet states to be
 // gone from the files, not just unreachable: someone who later learns the
 // database key could otherwise decrypt an old copy of the row. Therefore
-// DeletePrekeySecret, PruneRetiredPrekeys, DeleteSession and a CommitReceive
-// that consumes a one-time prekey run PRAGMA wal_checkpoint(TRUNCATE) after
-// committing. It copies every WAL frame into the main file, syncs it and
-// truncates the -wal file to zero bytes, which removes the old page images;
-// the main file then holds only the zeroed pages written by secure_delete.
-// This costs a few extra writes and syncs per call (typically milliseconds
-// on a small client database), which is why it is not done after ordinary
-// writes. Superseded session states written by PutSession, CommitSend and
-// CommitReceive therefore stay in the -wal file until the next checkpoint
-// (SQLite's automatic one or Close). Data already copied by the operating
-// system or the storage device below the file level, such as SSD remapping
-// or backups, is out of reach of any of this.
+// DeletePrekeySecret, PruneRetiredPrekeys, DeleteSession, a CommitReceive
+// that consumes a one-time prekey, DeleteGroup and the sender key deletions
+// (DeleteMemberSenderKey, DeleteMemberSenderKeys, DeleteGroupSenderKeys) run
+// PRAGMA wal_checkpoint(TRUNCATE) after committing. It copies every WAL
+// frame into the main file, syncs it and truncates the -wal file to zero
+// bytes, which removes the old page images; the main file then holds only
+// the zeroed pages written by secure_delete. This costs a few extra writes
+// and syncs per call (typically milliseconds on a small client database),
+// which is why it is not done after ordinary writes. Superseded session and
+// sender key states written by PutSession, CommitSend, CommitReceive,
+// PutOwnSenderKey, PutMemberSenderKey, CommitGroupSend and
+// CommitGroupReceive therefore stay in the -wal file until the next
+// checkpoint (SQLite's automatic one or Close). Data already copied by the
+// operating system or the storage device below the file level, such as SSD
+// remapping or backups, is out of reach of any of this.
 //
 // # File permissions
 //

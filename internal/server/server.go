@@ -78,6 +78,7 @@ type Server struct {
 	uploadRate       rate.Limit
 	uploadBurst      int
 	pruneInterval    time.Duration
+	multiSendWait    time.Duration
 	now              func() time.Time
 
 	routesMu sync.Mutex
@@ -131,6 +132,7 @@ func New(cfg Config, cert tls.Certificate, logger *slog.Logger) (*Server, error)
 		uploadRate:       rate.Every(uploadInterval),
 		uploadBurst:      uploadBurst,
 		pruneInterval:    pruneInterval,
+		multiSendWait:    min(multiSendMaxWait, cfg.Limits.idleTimeout()/2),
 		now:              time.Now,
 		routes:           make(map[identity.ID]map[*session]struct{}),
 		queueBudget:      newByteBudget(cfg.Limits.MaxTotalQueueBytes),

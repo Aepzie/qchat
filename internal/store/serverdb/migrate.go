@@ -43,6 +43,36 @@ var migrations = []string{
 	) STRICT;
 	CREATE INDEX queue_recipient_qid ON queue (recipient, qid);
 	CREATE INDEX queue_expires ON queue (expires);`,
+	`CREATE TABLE queue_payloads (
+		pid     INTEGER PRIMARY KEY,
+		payload BLOB    NOT NULL CHECK (length(payload) > 0),
+		size    INTEGER NOT NULL CHECK (size = length(payload)),
+		refs    INTEGER NOT NULL CHECK (refs > 0)
+	) STRICT;
+	CREATE TABLE queue_v3 (
+		qid       INTEGER PRIMARY KEY AUTOINCREMENT,
+		recipient BLOB    NOT NULL REFERENCES identities (id) ON DELETE CASCADE,
+		sender    BLOB    NOT NULL CHECK (length(sender) = 32),
+		pid       INTEGER NOT NULL REFERENCES queue_payloads (pid),
+		size      INTEGER NOT NULL CHECK (size > 0),
+		expires   INTEGER NOT NULL
+	) STRICT;
+	INSERT INTO queue_payloads (pid, payload, size, refs)
+		SELECT qid, payload, size, 1 FROM queue;
+	INSERT INTO queue_v3 (qid, recipient, sender, pid, size, expires)
+		SELECT qid, recipient, sender, qid, size, expires FROM queue;
+	DELETE FROM sqlite_sequence WHERE name = 'queue_v3';
+	INSERT INTO sqlite_sequence (name, seq)
+		SELECT 'queue_v3', seq FROM sqlite_sequence WHERE name = 'queue';
+	DROP TABLE queue;
+	ALTER TABLE queue_v3 RENAME TO queue;
+	CREATE INDEX queue_recipient_qid ON queue (recipient, qid);
+	CREATE INDEX queue_expires ON queue (expires);
+	CREATE INDEX queue_pid ON queue (pid);
+	CREATE TRIGGER queue_release_payload AFTER DELETE ON queue BEGIN
+		DELETE FROM queue_payloads WHERE pid = OLD.pid AND refs = 1;
+		UPDATE queue_payloads SET refs = refs - 1 WHERE pid = OLD.pid;
+	END;`,
 }
 
 // migrate applies the missing migrations in one write transaction, so

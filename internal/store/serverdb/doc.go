@@ -27,14 +27,25 @@
 //   - one_time_prekeys(id, key_id, prekey): at most MaxOneTimePrekeys
 //     one-time prekeys per identity. TakePrekeys deletes the one it hands
 //     out in the same transaction, so each is handed out exactly once.
-//   - queue(qid, recipient, sender, payload, size, expires): messages
-//     waiting for their recipient. The payload is end-to-end encrypted
-//     ciphertext that the relay cannot read. The sender ID is stored in the
-//     clear because the recipient needs it to pick the session that
-//     decrypts the message; this is metadata the relay learns anyway from
-//     the authenticated connection, and hiding it (sealed sender) is left to
-//     a later phase. A row is deleted when its recipient acknowledges it or
-//     when it expires (PruneQueue); no delivery or read time is stored.
+//   - queue(qid, recipient, sender, pid, size, expires): messages waiting
+//     for their recipient. The sender ID is stored in the clear because the
+//     recipient needs it to pick the session that decrypts the message;
+//     this is metadata the relay learns anyway from the authenticated
+//     connection, and hiding it (sealed sender) is left to a later phase.
+//     size is the full size of the payload, which counts toward the
+//     recipient's limits even when the payload is shared. A row is deleted
+//     when its recipient acknowledges it or when it expires (PruneQueue);
+//     no delivery or read time is stored.
+//   - queue_payloads(pid, payload, size, refs): the end-to-end encrypted
+//     ciphertext of queued messages, which the relay cannot read, stored
+//     once per message however many recipients it has. refs counts the
+//     queue rows referring to the payload; a trigger on queue decrements it
+//     whenever a row is deleted, by acknowledgement, expiry or a deleted
+//     identity, and deletes the payload with its last reference.
+//
+// Schema version 3 moved the payloads of existing queue rows into
+// queue_payloads, one payload per row, keeping their queue IDs and the
+// queue ID sequence.
 //
 // Prekeys and queued messages reference the identity they belong to, by
 // foreign key with ON DELETE CASCADE.
