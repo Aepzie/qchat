@@ -136,6 +136,20 @@ func FuzzApply(f *testing.F) {
 		if Op(op) != OpLeave && !cur.IsAdmin(actor.id.ID()) {
 			t.Fatal("admin operation by non-admin accepted")
 		}
+		removal := Op(op) == OpRemove || Op(op) == OpLeave
+		if removal && next.LastRemovalEpoch != next.Epoch || !removal && next.LastRemovalEpoch != cur.LastRemovalEpoch {
+			t.Fatalf("%v: last removal epoch %d at epoch %d", Op(op), next.LastRemovalEpoch, next.Epoch)
+		}
+		for _, admin := range next.Admins {
+			since, _ := next.adminSince(admin)
+			old, wasAdmin := cur.adminSince(admin)
+			if Op(op) == OpPromote && admin == target {
+				old, wasAdmin = next.Epoch, !wasAdmin
+			}
+			if !wasAdmin || since != old {
+				t.Fatalf("%v: admin since %d, want %d", Op(op), since, old)
+			}
+		}
 		encoded, err := next.Marshal()
 		if err != nil {
 			t.Fatalf("result invalid: %v", err)
@@ -149,6 +163,35 @@ func FuzzApply(f *testing.F) {
 			if !containsID(recipients, member) {
 				t.Fatal("Recipients misses a member")
 			}
+		}
+	})
+}
+
+func FuzzUnmarshalHistory(f *testing.F) {
+	controls, _, _ := testHistory(f)
+	for _, h := range []History{controls, controls[:1], {{}, {0x01}}} {
+		encoded, err := h.Marshal()
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(encoded)
+	}
+	f.Add([]byte{0xa2, 0x01, 0x01, 0x02, 0x80})
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		h, err := UnmarshalHistory(input)
+		if err != nil {
+			if h != nil {
+				t.Fatal("non-nil history with error")
+			}
+			return
+		}
+		if len(h) == 0 || len(h) > MaxHistoryControls {
+			t.Fatalf("accepted %d controls", len(h))
+		}
+		reencoded, err := h.Marshal()
+		if err != nil || !bytes.Equal(reencoded, input) {
+			t.Fatalf("history is not the canonical encoding of its controls: %v", err)
 		}
 	})
 }

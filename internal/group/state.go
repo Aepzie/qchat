@@ -3,6 +3,7 @@ package group
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"slices"
 	"unicode"
@@ -25,10 +26,15 @@ const (
 	MaxNameRunes = 64
 
 	// MaxStateSize is the largest encoded state [UnmarshalState] accepts.
-	// A state with MaxMembers members, all of them admins, and a name of
-	// MaxNameRunes four-byte runes is about 17.8 KiB.
+	// A state with MaxMembers members, all of them admins with nine-byte
+	// AdminSince epochs, and a name of MaxNameRunes four-byte runes is about
+	// 20.1 KiB.
 	MaxStateSize = 32 << 10
 )
+
+// bindingLabel separates [State.Binding] from every other SHA-256 value of
+// the protocol.
+const bindingLabel = "qchat group state binding v1"
 
 // ID names a group. It is chosen uniformly at random by the creator, so it
 // reveals nothing about the group and collides with negligible probability.
@@ -49,6 +55,18 @@ func (id ID) IsZero() bool {
 // after its last member left: it has neither members nor admins, and every
 // further control is rejected because nobody is a member.
 //
+// AdminSince[i] is the epoch at which Admins[i] most recently became an
+// admin: 1 for the creator, the epoch of the promote control otherwise (a
+// demoted and re-promoted admin starts over). It has the length of Admins
+// and holds pairwise distinct epochs from 1 to Epoch, since every epoch is
+// created by exactly one control and a control makes at most one admin.
+// [Resolve] uses it as admin seniority, which no actor can choose.
+//
+// LastRemovalEpoch is the epoch of the most recent remove or leave control,
+// or 0 if no member ever left. Sender keys distributed before that epoch may
+// have reached a member who is gone, so receivers reject sender keys
+// distributed for an epoch below it.
+//
 // States returned by this package are always valid and own their slices.
 // A State must be treated as a value: modifying the slices of a state
 // obtained from this package corrupts it.
@@ -58,30 +76,38 @@ type State struct {
 	Epoch   uint64
 	Members []identity.ID
 	Admins  []identity.ID
+
+	AdminSince       []uint64
+	LastRemovalEpoch uint64
 }
 
 // stateWire is the encoded state:
 //
 //	CBOR{1: version (=1), 2: group ID, 3: name, 4: epoch,
-//	     5: members, 6: admins}
+//	     5: members, 6: admins, 7: admin since, 8: last removal epoch}
 type stateWire struct {
-	Version uint8         `cbor:"1,keyasint"`
-	GroupID ID            `cbor:"2,keyasint"`
-	Name    string        `cbor:"3,keyasint"`
-	Epoch   uint64        `cbor:"4,keyasint"`
-	Members []identity.ID `cbor:"5,keyasint"`
-	Admins  []identity.ID `cbor:"6,keyasint"`
+	Version          uint8         `cbor:"1,keyasint"`
+	GroupID          ID            `cbor:"2,keyasint"`
+	Name             string        `cbor:"3,keyasint"`
+	Epoch            uint64        `cbor:"4,keyasint"`
+	Members          []identity.ID `cbor:"5,keyasint"`
+	Admins           []identity.ID `cbor:"6,keyasint"`
+	AdminSince       []uint64      `cbor:"7,keyasint"`
+	LastRemovalEpoch uint64        `cbor:"8,keyasint"`
 }
 
 func (s State) wire() stateWire {
-	return stateWire{Version: Version, GroupID: s.GroupID, Name: s.Name, Epoch: s.Epoch, Members: s.Members, Admins: s.Admins}
+	return stateWire{
+		Version: Version, GroupID: s.GroupID, Name: s.Name, Epoch: s.Epoch, Members: s.Members,
+		Admins: s.Admins, AdminSince: s.AdminSince, LastRemovalEpoch: s.LastRemovalEpoch,
+	}
 }
 
 // Hash returns the SHA-256 hash of the canonical encoding of s (the bytes
 // [State.Marshal] returns for a valid state). Controls commit to the hash of
 // the state they apply to, so a control can only be applied by a receiver
-// whose view of the group (name, epoch, members and admins) is identical to
-// the actor's.
+// whose view of the group (name, epoch, members, admins with their
+// seniority and the last removal epoch) is identical to the actor's.
 //
 // Hash does not validate s. If s cannot be encoded at all, the zero hash is
 // returned; no well-formed control carries the zero hash for an existing
@@ -92,6 +118,24 @@ func (s State) Hash() [32]byte {
 		return [32]byte{}
 	}
 	return sha256.Sum256(encoded)
+}
+
+// Binding returns the value that group messages commit to, so that members
+// whose views of the group have forked notice it:
+//
+//	SHA-256("qchat group state binding v1" || GroupID || BE64(Epoch) || Hash())
+//
+// where BE64 is the 8-byte big-endian encoding and the label is the 28 ASCII
+// bytes shown. Two members compute the same binding exactly when they hold
+// the same state. Like [State.Hash], Binding does not validate s.
+func (s State) Binding() [32]byte {
+	hash := s.Hash()
+	input := make([]byte, 0, len(bindingLabel)+len(s.GroupID)+8+len(hash))
+	input = append(input, bindingLabel...)
+	input = append(input, s.GroupID[:]...)
+	input = binary.BigEndian.AppendUint64(input, s.Epoch)
+	input = append(input, hash[:]...)
+	return sha256.Sum256(input)
 }
 
 // IsMember reports whether id is a member of s. It relies on s.Members
@@ -135,7 +179,10 @@ func UnmarshalState(b []byte) (State, error) {
 	if wire.Version != Version {
 		return State{}, fmt.Errorf("%w: state version %d", ErrMalformed, wire.Version)
 	}
-	s := State{GroupID: wire.GroupID, Name: wire.Name, Epoch: wire.Epoch, Members: wire.Members, Admins: wire.Admins}
+	s := State{
+		GroupID: wire.GroupID, Name: wire.Name, Epoch: wire.Epoch, Members: wire.Members,
+		Admins: wire.Admins, AdminSince: wire.AdminSince, LastRemovalEpoch: wire.LastRemovalEpoch,
+	}
 	if err := s.validate(); err != nil {
 		return State{}, err
 	}
@@ -167,6 +214,22 @@ func (s State) validate() error {
 			return fmt.Errorf("%w: admin is not a member", ErrMalformed)
 		}
 	}
+	if len(s.AdminSince) != len(s.Admins) {
+		return fmt.Errorf("%w: %d admin epochs for %d admins", ErrMalformed, len(s.AdminSince), len(s.Admins))
+	}
+	seen := make(map[uint64]struct{}, len(s.AdminSince))
+	for _, since := range s.AdminSince {
+		if since == 0 || since > s.Epoch {
+			return fmt.Errorf("%w: admin epoch %d at epoch %d", ErrMalformed, since, s.Epoch)
+		}
+		if _, dup := seen[since]; dup {
+			return fmt.Errorf("%w: duplicate admin epoch %d", ErrMalformed, since)
+		}
+		seen[since] = struct{}{}
+	}
+	if s.LastRemovalEpoch > s.Epoch {
+		return fmt.Errorf("%w: removal epoch %d after epoch %d", ErrMalformed, s.LastRemovalEpoch, s.Epoch)
+	}
 	return nil
 }
 
@@ -175,6 +238,39 @@ func (s State) validate() error {
 func (s State) clone() State {
 	s.Members = slices.Clone(s.Members)
 	s.Admins = slices.Clone(s.Admins)
+	s.AdminSince = slices.Clone(s.AdminSince)
+	return s
+}
+
+// adminSince returns the epoch at which id became an admin of s.
+func (s State) adminSince(id identity.ID) (uint64, bool) {
+	i, found := slices.BinarySearchFunc(s.Admins, id, compareIDs)
+	if !found || i >= len(s.AdminSince) {
+		return 0, false
+	}
+	return s.AdminSince[i], true
+}
+
+// withAdmin returns s with id added to the admins as of epoch. s must be
+// valid and id not yet an admin. The result owns its admin slices.
+func (s State) withAdmin(id identity.ID, epoch uint64) State {
+	i, _ := slices.BinarySearchFunc(s.Admins, id, compareIDs)
+	s.Admins = slices.Insert(slices.Clone(s.Admins), i, id)
+	s.AdminSince = slices.Insert(slices.Clone(s.AdminSince), i, epoch)
+	return s
+}
+
+// withoutAdmin returns s without id among the admins. s must be valid. The
+// result owns its admin slices.
+func (s State) withoutAdmin(id identity.ID) State {
+	s.Admins = slices.Clone(s.Admins)
+	s.AdminSince = slices.Clone(s.AdminSince)
+	i, found := slices.BinarySearchFunc(s.Admins, id, compareIDs)
+	if !found {
+		return s
+	}
+	s.Admins = slices.Delete(s.Admins, i, i+1)
+	s.AdminSince = slices.Delete(s.AdminSince, i, i+1)
 	return s
 }
 

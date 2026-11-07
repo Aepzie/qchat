@@ -16,6 +16,13 @@
 // enforced; [NewGroup] and [NewControl] run the same rules before signing, so
 // a client never signs a change that its peers would reject.
 //
+// Two controls built on the same state conflict. [Resolve] picks the winner
+// by a total order that ranks revocations by admin seniority, so members
+// converge whatever order the controls arrive in; [CanResolveAgainst] and
+// [ApplyOrResolve] bound and carry out the resolution. A member who is
+// added learns the group by replaying its [History] with [VerifyJoin], and
+// [State.Binding] lets group messages expose forked views.
+//
 // Encodings are canonical CBOR (RFC 8949 core deterministic encoding) and
 // decoders accept only the canonical encoding of a value, so that a control
 // or state has exactly one byte representation. This removes parser
@@ -73,4 +80,9 @@ var (
 	// runes of valid UTF-8 free of control, format (including bidirectional
 	// override) and line or paragraph separator characters.
 	ErrInvalidName = errors.New("group: invalid group name")
+
+	// ErrBadHistory reports a [History] outside the bounds
+	// [MaxHistoryControls] and [MaxHistorySize], or a verified history that
+	// does not end the way [VerifyJoin] requires.
+	ErrBadHistory = errors.New("group: invalid group history")
 )

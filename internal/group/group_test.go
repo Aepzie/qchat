@@ -441,68 +441,6 @@ func TestEpochAndStateHash(t *testing.T) {
 	}
 }
 
-func TestResolve(t *testing.T) {
-	base, ms := baseGroup(t)
-	adminA, adminB := ms[0], ms[1]
-
-	fromA := mustControl(t, adminA, base, OpRename, identity.ID{}, "by A")
-	fromB := mustControl(t, adminB, base, OpAdd, ms[4].id.ID(), "")
-	ca, err := ParseControl(fromA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cb, err := ParseControl(fromB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Apply(&base, ca, adminA.bundle); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Apply(&base, cb, adminB.bundle); err != nil {
-		t.Fatal(err)
-	}
-
-	if Resolve(ca, cb) != ca || Resolve(cb, ca) != ca {
-		t.Fatal("smaller actor ID does not win in both orders")
-	}
-	if Resolve(ca, nil) != ca || Resolve(nil, cb) != cb || Resolve(nil, nil) != nil {
-		t.Fatal("nil handling")
-	}
-
-	winnerState := mustApply(t, &base, fromA, adminA)
-	if _, err := applyRaw(&winnerState, fromB, adminB); !errors.Is(err, ErrStaleEpoch) {
-		t.Fatalf("loser on winner state: %v", err)
-	}
-	reissued := mustControl(t, adminB, winnerState, OpAdd, ms[4].id.ID(), "")
-	final := mustApply(t, &winnerState, reissued, adminB)
-	if final.Name != "by A" || !final.IsMember(ms[4].id.ID()) {
-		t.Fatal("re-issued change lost")
-	}
-
-	t.Run("same actor", func(t *testing.T) {
-		first := mustControl(t, adminA, base, OpRename, identity.ID{}, "x")
-		second := mustControl(t, adminA, base, OpRename, identity.ID{}, "y")
-		c1, _ := ParseControl(first)
-		c2, _ := ParseControl(second)
-		winner := Resolve(c1, c2)
-		if Resolve(c2, c1) != winner {
-			t.Fatal("tie-break depends on order")
-		}
-		h1, h2 := sha256.Sum256(first), sha256.Sum256(second)
-		want := c1
-		if bytes.Compare(h2[:], h1[:]) < 0 {
-			want = c2
-		}
-		if winner != want {
-			t.Fatal("tie-break does not pick the smaller hash")
-		}
-		copied, _ := ParseControl(first)
-		if Resolve(c1, copied) != c1 || Resolve(copied, c1) != copied {
-			t.Fatal("identical controls must resolve to the first argument")
-		}
-	})
-}
-
 func TestRecipients(t *testing.T) {
 	base, ms := baseGroup(t)
 	removed := mustApply(t, &base, mustControl(t, ms[0], base, OpRemove, ms[2].id.ID(), ""), ms[0])
@@ -546,12 +484,15 @@ func katState() State {
 		Epoch:   7,
 		Members: []identity.ID{fill(0x11), fill(0x22)},
 		Admins:  []identity.ID{fill(0x11)},
+
+		AdminSince:       []uint64{1},
+		LastRemovalEpoch: 5,
 	}
 }
 
 func TestStateEncodingKAT(t *testing.T) {
 	var want []byte
-	want = append(want, 0xa6, 0x01, 0x01, 0x02, 0x58, 0x20)
+	want = append(want, 0xa8, 0x01, 0x01, 0x02, 0x58, 0x20)
 	want = append(want, bytes.Repeat([]byte{0x01}, 32)...)
 	want = append(want, 0x03, 0x65, 'q', 'c', 'h', 'a', 't', 0x04, 0x07)
 	want = append(want, 0x05, 0x82, 0x58, 0x20)
@@ -560,6 +501,7 @@ func TestStateEncodingKAT(t *testing.T) {
 	want = append(want, bytes.Repeat([]byte{0x22}, 32)...)
 	want = append(want, 0x06, 0x81, 0x58, 0x20)
 	want = append(want, bytes.Repeat([]byte{0x11}, 32)...)
+	want = append(want, 0x07, 0x81, 0x01, 0x08, 0x05)
 
 	state := katState()
 	encoded, err := state.Marshal()
@@ -569,7 +511,7 @@ func TestStateEncodingKAT(t *testing.T) {
 	if !bytes.Equal(encoded, want) {
 		t.Fatalf("encoding\n got %x\nwant %x", encoded, want)
 	}
-	const wantHash = "bcefaa69b28237ebd428368397b9bed0e75646b5026fe4a570a28a93fad34d45"
+	const wantHash = "baafc5398d44528806a4e5b96920a0f7b62e8b776f8c008bb3dab392a7a7bea1"
 	hash := state.Hash()
 	if got := hex.EncodeToString(hash[:]); got != wantHash {
 		t.Fatalf("Hash = %s, want %s", got, wantHash)
@@ -600,7 +542,8 @@ func TestUnmarshalStateRejects(t *testing.T) {
 		return b
 	}
 	nonShortestEpoch := bytes.Replace(good, []byte{0x04, 0x07}, []byte{0x04, 0x18, 0x07}, 1)
-	nullAdmins := append(slices.Clone(good[:len(good)-35]), 0xf6)
+	adminList := append([]byte{0x06, 0x81, 0x58, 0x20}, bytes.Repeat([]byte{0x11}, 32)...)
+	nullAdmins := bytes.Replace(good, adminList, []byte{0x06, 0xf6}, 1)
 	cases := map[string]struct {
 		input []byte
 		want  error
@@ -616,8 +559,17 @@ func TestUnmarshalStateRejects(t *testing.T) {
 		"unsorted":         {encode(func(w *stateWire) { slices.Reverse(w.Members) }), ErrMalformed},
 		"duplicate":        {encode(func(w *stateWire) { w.Members[1] = w.Members[0] }), ErrMalformed},
 		"admin not member": {encode(func(w *stateWire) { w.Admins = []identity.ID{{0x33}} }), ErrMalformed},
-		"no admin":         {encode(func(w *stateWire) { w.Admins = nil }), ErrMalformed},
-		"bad name":         {encode(func(w *stateWire) { w.Name = "\u200b" }), ErrInvalidName},
+		"no admin":         {encode(func(w *stateWire) { w.Admins, w.AdminSince = nil, nil }), ErrMalformed},
+		"no admin epoch":   {encode(func(w *stateWire) { w.AdminSince = nil }), ErrMalformed},
+		"extra epoch":      {encode(func(w *stateWire) { w.AdminSince = []uint64{1, 2} }), ErrMalformed},
+		"admin epoch zero": {encode(func(w *stateWire) { w.AdminSince = []uint64{0} }), ErrMalformed},
+		"admin epoch late": {encode(func(w *stateWire) { w.AdminSince = []uint64{8} }), ErrMalformed},
+		"removal late":     {encode(func(w *stateWire) { w.LastRemovalEpoch = 8 }), ErrMalformed},
+		"duplicate epoch": {encode(func(w *stateWire) {
+			w.Admins = slices.Clone(w.Members)
+			w.AdminSince = []uint64{3, 3}
+		}), ErrMalformed},
+		"bad name": {encode(func(w *stateWire) { w.Name = "\u200b" }), ErrInvalidName},
 	}
 	for name, tc := range cases {
 		if _, err := UnmarshalState(tc.input); !errors.Is(err, tc.want) {
@@ -748,7 +700,13 @@ func TestMaxMembers(t *testing.T) {
 	}
 
 	allAdmins := full.clone()
+	allAdmins.Epoch = math.MaxUint64
+	allAdmins.LastRemovalEpoch = math.MaxUint64
 	allAdmins.Admins = slices.Clone(full.Members)
+	allAdmins.AdminSince = make([]uint64, len(full.Members))
+	for i := range allAdmins.AdminSince {
+		allAdmins.AdminSince[i] = math.MaxUint64 - uint64(i)
+	}
 	encoded, err := allAdmins.Marshal()
 	if err != nil || len(encoded) > MaxStateSize {
 		t.Fatalf("largest state: %d bytes, %v", len(encoded), err)

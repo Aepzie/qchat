@@ -1,8 +1,6 @@
 package group
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"fmt"
 	"math"
 	"slices"
@@ -128,8 +126,9 @@ func transition(cur *State, c *Control) (State, error) {
 		if !cur.IsMember(c.Target) {
 			return State{}, fmt.Errorf("%w: target", ErrNotMember)
 		}
+		next = next.withoutAdmin(c.Target)
 		next.Members = removeID(cur.Members, c.Target)
-		next.Admins = removeID(cur.Admins, c.Target)
+		next.LastRemovalEpoch = c.Epoch
 	case OpPromote:
 		if !cur.IsMember(c.Target) {
 			return State{}, fmt.Errorf("%w: target", ErrNotMember)
@@ -137,7 +136,7 @@ func transition(cur *State, c *Control) (State, error) {
 		if cur.IsAdmin(c.Target) {
 			return State{}, fmt.Errorf("%w: target is already an admin", ErrInvalidOp)
 		}
-		next.Admins = insertID(cur.Admins, c.Target)
+		next = next.withAdmin(c.Target, c.Epoch)
 	case OpDemote:
 		if !cur.IsMember(c.Target) {
 			return State{}, fmt.Errorf("%w: target", ErrNotMember)
@@ -148,7 +147,7 @@ func transition(cur *State, c *Control) (State, error) {
 		if len(cur.Admins) == 1 {
 			return State{}, ErrLastAdmin
 		}
-		next.Admins = removeID(cur.Admins, c.Target)
+		next = next.withoutAdmin(c.Target)
 	case OpRename:
 		next.Name = c.Name
 	default:
@@ -167,11 +166,12 @@ func create(cur *State, c *Control) (State, error) {
 		return State{}, fmt.Errorf("%w: create at epoch %d", ErrStaleEpoch, c.Epoch)
 	}
 	next := State{
-		GroupID: c.GroupID,
-		Name:    c.Name,
-		Epoch:   1,
-		Members: slices.Clone(c.Members),
-		Admins:  []identity.ID{c.Actor},
+		GroupID:    c.GroupID,
+		Name:       c.Name,
+		Epoch:      1,
+		Members:    slices.Clone(c.Members),
+		Admins:     []identity.ID{c.Actor},
+		AdminSince: []uint64{1},
 	}
 	if err := next.validate(); err != nil {
 		return State{}, err
@@ -186,40 +186,10 @@ func leave(cur *State, next State, actor identity.ID) (State, error) {
 	if cur.IsAdmin(actor) && len(cur.Admins) == 1 && len(cur.Members) > 1 {
 		return State{}, ErrLastAdmin
 	}
+	next = next.withoutAdmin(actor)
 	next.Members = removeID(cur.Members, actor)
-	next.Admins = removeID(cur.Admins, actor)
+	next.LastRemovalEpoch = next.Epoch
 	return next, nil
-}
-
-// Resolve returns the winner of two conflicting controls, that is two
-// controls accepted against the same state (same group and epoch): the one
-// whose (Actor, SHA-256 of Raw) is lexicographically smaller. The result
-// depends only on the two controls, not on their order, so every member
-// converges on the same winner without coordination; the loser's actor
-// re-issues its change on top of the winner's state.
-//
-// A nil argument loses against a non-nil one. Resolve does not check that
-// the controls actually conflict or are valid; callers pass only controls
-// that [Apply] accepted against the same state.
-func Resolve(a, b *Control) *Control {
-	if a == nil {
-		return b
-	}
-	if b == nil {
-		return a
-	}
-	if order := compareIDs(a.Actor, b.Actor); order != 0 {
-		if order < 0 {
-			return a
-		}
-		return b
-	}
-	hashA := sha256.Sum256(a.Raw)
-	hashB := sha256.Sum256(b.Raw)
-	if bytes.Compare(hashB[:], hashA[:]) < 0 {
-		return b
-	}
-	return a
 }
 
 // Recipients returns, sorted and without duplicates, the identities a

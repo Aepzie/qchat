@@ -25,8 +25,12 @@ var (
 	// empty one cannot be two encodings of the same value.
 	encMode cbor.EncMode
 
-	// decMode is the strict decoder used for every structure.
+	// decMode is the strict decoder used for controls and states.
 	decMode cbor.DecMode
+
+	// historyDecMode is decMode with room for [MaxHistoryControls] array
+	// elements, used only for the outer structure of a [History].
+	historyDecMode cbor.DecMode
 )
 
 func init() {
@@ -56,6 +60,10 @@ func init() {
 	if decMode, err = decOpts.DecMode(); err != nil {
 		panic("group: invalid CBOR decoding options: " + err.Error())
 	}
+	decOpts.MaxArrayElements = MaxHistoryControls
+	if historyDecMode, err = decOpts.DecMode(); err != nil {
+		panic("group: invalid CBOR history decoding options: " + err.Error())
+	}
 }
 
 // errNonCanonical is returned by decodeCanonical for input that decodes but
@@ -72,7 +80,12 @@ var errNonCanonical = errors.New("non-canonical encoding")
 // that every field was present, and byte strings of the wrong length for a
 // fixed-size field cannot survive the round trip.
 func decodeCanonical(b []byte, v any) error {
-	if err := decMode.Unmarshal(b, v); err != nil {
+	return decodeCanonicalWith(decMode, b, v)
+}
+
+// decodeCanonicalWith is decodeCanonical with the decoder mode dm.
+func decodeCanonicalWith(dm cbor.DecMode, b []byte, v any) error {
+	if err := dm.Unmarshal(b, v); err != nil {
 		return err
 	}
 	canonical, err := encMode.Marshal(v)
