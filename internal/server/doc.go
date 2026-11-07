@@ -23,6 +23,14 @@
 // Error frames and WebSocket close reasons are fixed ASCII strings; they
 // never echo client data.
 //
+// # Connection limits
+//
+// limits.max_connections, limits.max_connections_per_ip and
+// limits.max_pending_handshakes are enforced when a TCP connection is
+// accepted, before the TLS handshake; a connection over a limit is reset
+// at once. A connection must complete TLS and the WebSocket upgrade within
+// 10 seconds of being accepted, and carries exactly one HTTP request.
+//
 // # Privacy
 //
 // The server never writes client IP addresses, frame bodies or any other

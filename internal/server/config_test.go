@@ -30,13 +30,14 @@ func TestDefaultConfig(t *testing.T) {
 		TLSCert: "server.crt",
 		TLSKey:  "server.key",
 		Limits: Limits{
-			MaxConnections:      1000,
-			MaxConnectionsPerIP: 16,
-			MaxFrameSize:        1048576,
-			FramesPerSecond:     20,
-			Burst:               40,
-			HandshakeTimeout:    DurationOf(10 * time.Second),
-			PingInterval:        DurationOf(30 * time.Second),
+			MaxConnections:       1000,
+			MaxConnectionsPerIP:  16,
+			MaxPendingHandshakes: 64,
+			MaxFrameSize:         1048576,
+			FramesPerSecond:      20,
+			Burst:                40,
+			HandshakeTimeout:     DurationOf(10 * time.Second),
+			PingInterval:         DurationOf(30 * time.Second),
 		},
 		Log: LogConfig{Level: "info"},
 	}
@@ -57,6 +58,7 @@ tls_key  = "b.key"
 [limits]
 max_connections = 50
 max_connections_per_ip = 4
+max_pending_handshakes = 8
 max_frame_size = 65536
 frames_per_second = 2.5
 burst = 7
@@ -74,13 +76,14 @@ level = "debug"
 		TLSCert: filepath.Join(dir, "a.crt"),
 		TLSKey:  filepath.Join(dir, "b.key"),
 		Limits: Limits{
-			MaxConnections:      50,
-			MaxConnectionsPerIP: 4,
-			MaxFrameSize:        65536,
-			FramesPerSecond:     2.5,
-			Burst:               7,
-			HandshakeTimeout:    DurationOf(1500 * time.Millisecond),
-			PingInterval:        DurationOf(time.Minute),
+			MaxConnections:       50,
+			MaxConnectionsPerIP:  4,
+			MaxPendingHandshakes: 8,
+			MaxFrameSize:         65536,
+			FramesPerSecond:      2.5,
+			Burst:                7,
+			HandshakeTimeout:     DurationOf(1500 * time.Millisecond),
+			PingInterval:         DurationOf(time.Minute),
 		},
 		Log: LogConfig{Level: "debug"},
 	}
@@ -229,6 +232,9 @@ func TestValidateRejects(t *testing.T) {
 		"negative frame size":    func(c *Config) { c.Limits.MaxFrameSize = -1 },
 		"negative max per ip":    func(c *Config) { c.Limits.MaxConnectionsPerIP = -5 },
 		"negative max conns":     func(c *Config) { c.Limits.MaxConnections = -5 },
+		"zero pending":           func(c *Config) { c.Limits.MaxPendingHandshakes = 0 },
+		"negative pending":       func(c *Config) { c.Limits.MaxPendingHandshakes = -1 },
+		"huge pending":           func(c *Config) { c.Limits.MaxPendingHandshakes = maxConnectionsLimit + 1 },
 		"burst above the limit":  func(c *Config) { c.Limits.Burst = maxBurst + 1 },
 		"rate above the maximum": func(c *Config) { c.Limits.FramesPerSecond = maxFramesPerSecond + 1 },
 	}
@@ -251,6 +257,7 @@ func TestValidateAccepts(t *testing.T) {
 		"per ip equals total": func(c *Config) { c.Limits.MaxConnectionsPerIP = c.Limits.MaxConnections },
 		"fractional rate":     func(c *Config) { c.Limits.FramesPerSecond = 0.1 },
 		"each log level":      func(c *Config) { c.Log.Level = "warn" },
+		"pending above total": func(c *Config) { c.Limits.MaxPendingHandshakes = c.Limits.MaxConnections + 1 },
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -286,7 +293,7 @@ func TestWriteTOMLRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := buf.String()
-	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored"} {
+	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("WriteTOML output lacks %q:\n%s", want, text)
 		}

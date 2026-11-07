@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -293,7 +295,10 @@ func TestHelloWelcomePingPong(t *testing.T) {
 		t.Fatalf("Addr() = %v, want %s", addr, ts.addr)
 	}
 	conn.Close(websocket.StatusNormalClosure, "")
-	waitFor(t, "session to end", func() bool { return ts.srv.Stats().Connections == 0 })
+	waitFor(t, "session to end", func() bool {
+		stats := ts.srv.Stats()
+		return stats.Connections == 0 && stats.ActiveSessions == 0
+	})
 	if stats := ts.srv.Stats(); stats.ActiveSessions != 0 || stats.TotalSessions != 1 {
 		t.Fatalf("stats after close = %+v", stats)
 	}
@@ -470,9 +475,6 @@ func TestPerIPLimit(t *testing.T) {
 		conn.CloseNow()
 		t.Fatal("third connection from the same IP was accepted")
 	}
-	if !strings.Contains(err.Error(), "503") {
-		t.Errorf("dial error %q does not mention status 503", err)
-	}
 	if got := ts.srv.Stats().RejectedConnections; got != 1 {
 		t.Errorf("RejectedConnections = %d, want 1", got)
 	}
@@ -493,6 +495,230 @@ func TestGlobalLimit(t *testing.T) {
 		conn.CloseNow()
 		t.Fatal("connection above the global limit was accepted")
 	}
+}
+
+// rawDial opens a plain TCP connection to ts, optionally from a specific
+// local IP, and returns it without starting TLS.
+func rawDial(t *testing.T, ts *testServer, localIP string) (net.Conn, error) {
+	t.Helper()
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	if localIP != "" {
+		dialer.LocalAddr = &net.TCPAddr{IP: net.ParseIP(localIP)}
+	}
+	conn, err := dialer.Dial("tcp", ts.addr)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn, nil
+}
+
+func mustRawDial(t *testing.T, ts *testServer) net.Conn {
+	t.Helper()
+	conn, err := rawDial(t, ts, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+// expectClosedByServer checks that the server closes conn without sending
+// a single byte, which for a TLS server means it never started TLS.
+func expectClosedByServer(t *testing.T, conn net.Conn, within time.Duration) {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(within)); err != nil {
+		t.Fatal(err)
+	}
+	var buf [1]byte
+	n, err := conn.Read(buf[:])
+	if n != 0 || err == nil {
+		t.Fatalf("server sent %d bytes", n)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("server did not close the connection within %s", within)
+	}
+}
+
+// expectOpen checks that the server keeps conn open for a short while.
+func expectOpen(t *testing.T, conn net.Conn) {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var buf [1]byte
+	_, err := conn.Read(buf[:])
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("held connection was closed: %v", err)
+	}
+}
+
+// TestLimitsAppliedBeforeTLS holds the per-IP quota with plain TCP
+// connections that never start TLS, and checks that further connections
+// are closed by the server before any TLS processing.
+func TestLimitsAppliedBeforeTLS(t *testing.T) {
+	ts := startServer(t, serverOptions{config: func(c *Config) {
+		c.Limits.MaxConnections = 10
+		c.Limits.MaxConnectionsPerIP = 2
+	}})
+	held := []net.Conn{mustRawDial(t, ts), mustRawDial(t, ts)}
+	waitFor(t, "raw connections to be accepted", func() bool {
+		stats := ts.srv.Stats()
+		return stats.Connections == 2 && stats.PendingConnections == 2
+	})
+
+	expectClosedByServer(t, mustRawDial(t, ts), 5*time.Second)
+	if conn, err := transport.Dial(testContext(t), ts.addr, ts.pin, transport.DialOptions{}); err == nil {
+		conn.CloseNow()
+		t.Fatal("WebSocket dial above the per-IP limit succeeded")
+	}
+	if got := ts.srv.Stats().RejectedConnections; got != 2 {
+		t.Errorf("RejectedConnections = %d, want 2", got)
+	}
+	for _, conn := range held {
+		expectOpen(t, conn)
+		conn.Close()
+	}
+	waitFor(t, "slot release", func() bool { return ts.srv.Stats().Connections == 0 })
+
+	conn := dial(t, ts)
+	handshake(t, conn, 1)
+	if stats := ts.srv.Stats(); stats.Connections != 1 || stats.PendingConnections != 0 {
+		t.Fatalf("stats with one session = %+v, want 1 connection, 0 pending", stats)
+	}
+}
+
+// TestGlobalLimitAcrossAddresses uses several loopback source addresses so
+// that the global limit, not the per-IP limit, is the one that applies.
+func TestGlobalLimitAcrossAddresses(t *testing.T) {
+	ts := startServer(t, serverOptions{config: func(c *Config) {
+		c.Limits.MaxConnections = 2
+		c.Limits.MaxConnectionsPerIP = 1
+	}})
+	first, err := rawDial(t, ts, "127.0.0.2")
+	if err != nil {
+		t.Skipf("cannot dial from 127.0.0.2: %v", err)
+	}
+	second, err := rawDial(t, ts, "127.0.0.3")
+	if err != nil {
+		t.Skipf("cannot dial from 127.0.0.3: %v", err)
+	}
+	waitFor(t, "raw connections to be accepted", func() bool { return ts.srv.Stats().Connections == 2 })
+
+	third, err := rawDial(t, ts, "127.0.0.4")
+	if err != nil {
+		t.Skipf("cannot dial from 127.0.0.4: %v", err)
+	}
+	expectClosedByServer(t, third, 5*time.Second)
+	expectOpen(t, first)
+	expectOpen(t, second)
+	if got := ts.srv.Stats().RejectedConnections; got != 1 {
+		t.Errorf("RejectedConnections = %d, want 1", got)
+	}
+
+	first.Close()
+	waitFor(t, "slot release", func() bool { return ts.srv.Stats().Connections == 1 })
+	handshake(t, dial(t, ts), 1)
+}
+
+// TestPendingHandshakeCap checks that connections which have not completed
+// the upgrade are capped, and that established sessions do not count.
+func TestPendingHandshakeCap(t *testing.T) {
+	ts := startServer(t, serverOptions{config: func(c *Config) {
+		c.Limits.MaxConnections = 10
+		c.Limits.MaxConnectionsPerIP = 10
+		c.Limits.MaxPendingHandshakes = 2
+	}})
+	first := mustRawDial(t, ts)
+	mustRawDial(t, ts)
+	waitFor(t, "pending connections", func() bool { return ts.srv.Stats().PendingConnections == 2 })
+
+	expectClosedByServer(t, mustRawDial(t, ts), 5*time.Second)
+	if conn, err := transport.Dial(testContext(t), ts.addr, ts.pin, transport.DialOptions{}); err == nil {
+		conn.CloseNow()
+		t.Fatal("WebSocket dial above the pending-handshake cap succeeded")
+	}
+
+	first.Close()
+	waitFor(t, "pending slot release", func() bool { return ts.srv.Stats().PendingConnections == 1 })
+	sessions := []*websocket.Conn{dial(t, ts)}
+	handshake(t, sessions[0], 1)
+	waitFor(t, "upgrade to free its pending slot", func() bool { return ts.srv.Stats().PendingConnections == 1 })
+	mustRawDial(t, ts)
+	waitFor(t, "another pending connection", func() bool { return ts.srv.Stats().PendingConnections == 2 })
+	if stats := ts.srv.Stats(); stats.Connections != 3 || stats.ActiveSessions != 1 {
+		t.Fatalf("stats = %+v, want 3 connections and 1 session", stats)
+	}
+	sendFrame(t, sessions[0], protocol.TypePing, 2, protocol.Ping{Nonce: 9})
+	readFrame(t, sessions[0])
+}
+
+// TestSetupTimeout checks that a connection that never completes TLS is
+// dropped after the setup deadline, while an established session outlives
+// it.
+func TestSetupTimeout(t *testing.T) {
+	const setup = 300 * time.Millisecond
+	ts := startServer(t, serverOptions{tweak: func(s *Server) { s.setupTimeout = setup }})
+	session := dial(t, ts)
+	handshake(t, session, 1)
+
+	silent := mustRawDial(t, ts)
+	trickle := mustRawDial(t, ts)
+	if _, err := trickle.Write([]byte{0x16, 0x03, 0x01}); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	expectClosedByServer(t, silent, 5*time.Second)
+	expectClosedByServer(t, trickle, 5*time.Second)
+	if elapsed := time.Since(start); elapsed < setup/2 {
+		t.Fatalf("connection closed after %s, before the setup deadline", elapsed)
+	}
+	waitFor(t, "slot release", func() bool {
+		stats := ts.srv.Stats()
+		return stats.Connections == 1 && stats.PendingConnections == 0
+	})
+
+	time.Sleep(2 * setup)
+	sendFrame(t, session, protocol.TypePing, 2, protocol.Ping{Nonce: 3})
+	pong, err := protocol.DecodeBody[protocol.Pong](readFrame(t, session), protocol.TypePong)
+	if err != nil || pong.Nonce != 3 {
+		t.Fatalf("session did not survive the setup deadline: %+v, %v", pong, err)
+	}
+}
+
+// TestOneRequestPerConnection checks that a response other than an upgrade
+// closes the connection and frees its slot.
+func TestOneRequestPerConnection(t *testing.T) {
+	ts := startServer(t, serverOptions{})
+	conn, err := tls.Dial("tcp", ts.addr, transport.ClientTLSConfig(ts.pin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	const request = "GET /missing HTTP/1.1\r\nHost: qchat\r\n\r\n"
+	if _, err := io.WriteString(conn, request); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || !resp.Close {
+		t.Fatalf("status %d, close %v; want 404 with Connection: close", resp.StatusCode, resp.Close)
+	}
+	_, _ = io.WriteString(conn, request)
+	if second, err := http.ReadResponse(reader, nil); err == nil {
+		second.Body.Close()
+		t.Fatal("server answered a second request on the same connection")
+	}
+	waitFor(t, "slot release", func() bool { return ts.srv.Stats().Connections == 0 })
 }
 
 func pinnedHTTPClient(pin transport.Fingerprint) *http.Client {

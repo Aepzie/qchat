@@ -136,6 +136,23 @@ func (s *session) armIdleTimer() {
 
 // nextFrame reads, rate-limits and decodes the next message. On any failure
 // it terminates the session and returns false.
+//
+// Only data messages reach the token bucket. WebSocket control frames are
+// consumed inside conn.Read: client Pings are answered with a Pong and
+// Pongs are dropped, without passing through this code. That is an
+// accepted residual risk:
+//
+//   - there is no amplification: a Pong echoes at most the 125-byte Ping
+//     payload, and the client's masked Ping is larger than the Pong it
+//     gets back;
+//   - the cost is bounded by the client's own bandwidth, the per-IP
+//     connection limit and the frame write timeout;
+//   - control frames do not count as activity, so a client that sends
+//     only control frames is still closed by the handshake or idle timer.
+//
+// coder/websocket offers AcceptOptions.OnPingReceived, which would let
+// Pings spend tokens here, but the options are fixed inside
+// transport.Accept, so wiring it in needs a change to that function.
 func (s *session) nextFrame() (protocol.Frame, bool) {
 	msgType, msg, err := s.conn.Read(context.Background())
 	if err != nil {

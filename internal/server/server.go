@@ -33,13 +33,18 @@ const (
 type Stats struct {
 	// ActiveSessions is the number of upgraded WebSocket sessions.
 	ActiveSessions int
-	// Connections is the number of connection slots in use, including
-	// requests that have not completed the WebSocket upgrade yet.
+	// Connections is the number of open accepted TCP connections, whether
+	// still in the TLS handshake, sending the upgrade request or carrying
+	// an established session.
 	Connections int
+	// PendingConnections is the number of open connections that have not
+	// completed the WebSocket upgrade yet.
+	PendingConnections int
 	// TotalSessions counts every session accepted since the server started.
 	TotalSessions uint64
-	// RejectedConnections counts requests refused by a connection limit or
-	// because the server was shutting down.
+	// RejectedConnections counts connections refused by a connection limit
+	// or the pending-handshake cap, and requests refused because the server
+	// was shutting down.
 	RejectedConnections uint64
 }
 
@@ -54,7 +59,9 @@ type Server struct {
 	tlsConfig *tls.Config
 	logger    *slog.Logger
 	limiter   *connLimiter
+	pending   chan struct{}
 
+	setupTimeout     time.Duration
 	handshakeTimeout time.Duration
 	idleTimeout      time.Duration
 	shutdownTimeout  time.Duration
@@ -87,6 +94,8 @@ func New(cfg Config, cert tls.Certificate, logger *slog.Logger) (*Server, error)
 		tlsConfig:        transport.ServerTLSConfig(cert),
 		logger:           logger,
 		limiter:          newConnLimiter(cfg.Limits.MaxConnections, cfg.Limits.MaxConnectionsPerIP),
+		pending:          make(chan struct{}, cfg.Limits.MaxPendingHandshakes),
+		setupTimeout:     connSetupTimeout,
 		handshakeTimeout: cfg.Limits.HandshakeTimeout.Std(),
 		idleTimeout:      cfg.Limits.idleTimeout(),
 		shutdownTimeout:  shutdownTimeout,
@@ -110,7 +119,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // a bounded time. It returns nil after a shutdown triggered by ctx, and an
 // error if the listener fails. Serve takes ownership of ln and closes it.
 //
-// Only transport.WebSocketPath is served; every other path gets 404.
+// Only transport.WebSocketPath is served; every other path gets 404. Each
+// connection carries a single request.
+//
+// Connection limits are enforced on ln itself, before TLS (see
+// guardedListener): connections over limits.max_connections,
+// limits.max_connections_per_ip or limits.max_pending_handshakes are reset
+// immediately, and a connection that has not completed the WebSocket
+// upgrade within connSetupTimeout of being accepted is closed.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if !s.started.CompareAndSwap(false, true) {
 		_ = ln.Close()
@@ -120,9 +136,17 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	s.addr = ln.Addr()
 	s.mu.Unlock()
 
+	guarded := &guardedListener{
+		Listener:     ln,
+		limiter:      s.limiter,
+		pending:      s.pending,
+		setupTimeout: s.setupTimeout,
+		onReject:     s.reject,
+	}
 	httpServer := transport.NewHTTPServer(ln.Addr().String(), http.HandlerFunc(s.handle), s.tlsConfig)
+	httpServer.ConnState = trackConnState
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- httpServer.ServeTLS(ln, "", "") }()
+	go func() { serveErr <- httpServer.ServeTLS(guarded, "", "") }()
 
 	s.logger.Info("server listening", "port", portOf(ln.Addr()))
 
@@ -158,6 +182,7 @@ func (s *Server) Stats() Stats {
 	return Stats{
 		ActiveSessions:      active,
 		Connections:         connections,
+		PendingConnections:  len(s.pending),
 		TotalSessions:       s.total.Load(),
 		RejectedConnections: s.rejected.Load(),
 	}
@@ -202,20 +227,21 @@ func (s *Server) shutdown(httpServer *http.Server) {
 }
 
 // handle serves one HTTP request.
+//
+// Connection limits are not checked here: they were applied when the
+// connection was accepted, and since keep-alives are disabled every request
+// has a connection, and its slot, of its own. Acquiring a second slot per
+// request would count each connection twice.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != transport.WebSocketPath {
 		http.NotFound(w, r)
 		return
 	}
-
-	key, ok := clientKey(r.RemoteAddr)
-	if !ok || s.isClosing() || !s.limiter.acquire(key) {
-		s.rejected.Add(1)
-		s.logger.Debug("connection rejected")
+	if s.isClosing() {
+		s.reject()
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
-	defer s.limiter.release(key)
 
 	conn, err := transport.Accept(w, r, int64(s.cfg.Limits.MaxFrameSize))
 	if err != nil {
@@ -232,6 +258,13 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.unregister(sess)
 	sess.run()
+}
+
+// reject counts a refused connection or request. Nothing about the client
+// is logged.
+func (s *Server) reject() {
+	s.rejected.Add(1)
+	s.logger.Debug("connection rejected")
 }
 
 func (s *Server) isClosing() bool {
@@ -262,9 +295,10 @@ func (s *Server) unregister(sess *session) {
 	s.wg.Done()
 }
 
-// clientKey derives the connection-limit key from r.RemoteAddr. Only the
-// TCP peer address is used: forwarding headers such as X-Forwarded-For are
-// client-controlled and would let anyone bypass the per-IP limit.
+// clientKey derives the connection-limit key from a "host:port" peer
+// address. Only the TCP peer address is ever used: forwarding headers such
+// as X-Forwarded-For are client-controlled and would let anyone bypass the
+// per-IP limit.
 func clientKey(remoteAddr string) (netip.Addr, bool) {
 	addrPort, err := netip.ParseAddrPort(remoteAddr)
 	if err != nil {

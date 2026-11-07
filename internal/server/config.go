@@ -21,17 +21,18 @@ import (
 
 // Default configuration values. They are also written by "qchat-server init".
 const (
-	DefaultListen              = "0.0.0.0:7443"
-	DefaultTLSCert             = "server.crt"
-	DefaultTLSKey              = "server.key"
-	DefaultMaxConnections      = 1000
-	DefaultMaxConnectionsPerIP = 16
-	DefaultMaxFrameSize        = protocol.MaxFrameSize
-	DefaultFramesPerSecond     = 20.0
-	DefaultBurst               = 40
-	DefaultHandshakeTimeout    = 10 * time.Second
-	DefaultPingInterval        = 30 * time.Second
-	DefaultLogLevel            = "info"
+	DefaultListen               = "0.0.0.0:7443"
+	DefaultTLSCert              = "server.crt"
+	DefaultTLSKey               = "server.key"
+	DefaultMaxConnections       = 1000
+	DefaultMaxConnectionsPerIP  = 16
+	DefaultMaxPendingHandshakes = 64
+	DefaultMaxFrameSize         = protocol.MaxFrameSize
+	DefaultFramesPerSecond      = 20.0
+	DefaultBurst                = 40
+	DefaultHandshakeTimeout     = 10 * time.Second
+	DefaultPingInterval         = 30 * time.Second
+	DefaultLogLevel             = "info"
 )
 
 // Bounds enforced by Config.Validate.
@@ -103,6 +104,12 @@ type Limits struct {
 	// from one IPv4 address or one IPv6 /64 prefix. Addresses are held in
 	// memory only for this counter, and never logged or stored.
 	MaxConnectionsPerIP int `toml:"max_connections_per_ip" comment:"Maximum simultaneous connections per IPv4 address or IPv6 /64.\nAddresses are held in memory only for this counter, never logged or stored."`
+	// MaxPendingHandshakes is the maximum number of connections that are
+	// still in the TLS handshake or have not completed the WebSocket
+	// upgrade. It bounds the CPU and memory spent on handshakes at any one
+	// time; connections beyond it are refused at once, before TLS. It may
+	// exceed MaxConnections, in which case it has no effect.
+	MaxPendingHandshakes int `toml:"max_pending_handshakes" comment:"Maximum connections still in the TLS handshake or WebSocket upgrade.\nFurther connections are refused immediately, before TLS."`
 	// MaxFrameSize is the largest accepted WebSocket message in bytes. It
 	// must not exceed protocol.MaxFrameSize.
 	MaxFrameSize int `toml:"max_frame_size" comment:"Largest accepted frame in bytes (at most 1048576)."`
@@ -132,13 +139,14 @@ func DefaultConfig() Config {
 		TLSCert: DefaultTLSCert,
 		TLSKey:  DefaultTLSKey,
 		Limits: Limits{
-			MaxConnections:      DefaultMaxConnections,
-			MaxConnectionsPerIP: DefaultMaxConnectionsPerIP,
-			MaxFrameSize:        DefaultMaxFrameSize,
-			FramesPerSecond:     DefaultFramesPerSecond,
-			Burst:               DefaultBurst,
-			HandshakeTimeout:    DurationOf(DefaultHandshakeTimeout),
-			PingInterval:        DurationOf(DefaultPingInterval),
+			MaxConnections:       DefaultMaxConnections,
+			MaxConnectionsPerIP:  DefaultMaxConnectionsPerIP,
+			MaxPendingHandshakes: DefaultMaxPendingHandshakes,
+			MaxFrameSize:         DefaultMaxFrameSize,
+			FramesPerSecond:      DefaultFramesPerSecond,
+			Burst:                DefaultBurst,
+			HandshakeTimeout:     DurationOf(DefaultHandshakeTimeout),
+			PingInterval:         DurationOf(DefaultPingInterval),
 		},
 		Log: LogConfig{Level: DefaultLogLevel},
 	}
@@ -250,6 +258,8 @@ func (l Limits) validate() error {
 		return fmt.Errorf("config: limits.max_connections must be between 1 and %d", maxConnectionsLimit)
 	case l.MaxConnectionsPerIP < 1 || l.MaxConnectionsPerIP > l.MaxConnections:
 		return errors.New("config: limits.max_connections_per_ip must be between 1 and limits.max_connections")
+	case l.MaxPendingHandshakes < 1 || l.MaxPendingHandshakes > maxConnectionsLimit:
+		return fmt.Errorf("config: limits.max_pending_handshakes must be between 1 and %d", maxConnectionsLimit)
 	case l.MaxFrameSize < minFrameSize || l.MaxFrameSize > protocol.MaxFrameSize:
 		return fmt.Errorf("config: limits.max_frame_size must be between %d and %d", minFrameSize, protocol.MaxFrameSize)
 	case math.IsNaN(l.FramesPerSecond) || l.FramesPerSecond <= 0 || l.FramesPerSecond > maxFramesPerSecond:
