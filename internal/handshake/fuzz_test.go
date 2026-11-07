@@ -9,7 +9,7 @@ func FuzzAccept(f *testing.F) {
 	alice, bob := newTestParty(f), newTestParty(f)
 	var seeds [][]byte
 	for _, opk := range []int{-1, 0} {
-		initiation, err := Initiate(alice, alice.bundleRaw, bob.prekeyBundle(f, opk))
+		initiation, err := InitiateAt(alice, alice.bundleRaw, bob.prekeyBundle(f, opk), testNow)
 		if err != nil {
 			f.Fatal(err)
 		}
@@ -18,7 +18,7 @@ func FuzzAccept(f *testing.F) {
 	}
 	f.Add([]byte{0xa0})
 	f.Fuzz(func(t *testing.T, init []byte) {
-		accepted, err := Accept(bob, alice.ID(), init, bob.lookupSPK, bob.lookupOPK)
+		accepted, err := AcceptAt(bob, alice.ID(), init, bob.lookupSPK, bob.lookupOPK, testNow)
 		if err != nil {
 			return
 		}

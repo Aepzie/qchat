@@ -53,17 +53,17 @@ func TestSessionWithRealIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initiate: %v", err)
 	}
-	spkLookup := func(id uint32) (*sealbox.PrivateKey, error) {
+	spkLookup := func(id uint32) (*sealbox.PrivateKey, []byte, error) {
 		if id != spk.Public.KeyID {
-			return nil, errors.New("unknown")
+			return nil, nil, errors.New("unknown")
 		}
-		return spk.Private, nil
+		return spk.Private, spk.Public.Raw, nil
 	}
-	opkLookup := func(id uint32) (*sealbox.PrivateKey, error) {
+	opkLookup := func(id uint32) (*sealbox.PrivateKey, []byte, error) {
 		if id != opks[0].Public.KeyID {
-			return nil, errors.New("unknown")
+			return nil, nil, errors.New("unknown")
 		}
-		return opks[0].Private, nil
+		return opks[0].Private, opks[0].Public.Raw, nil
 	}
 	acc, err := Accept(bob, alice.ID(), init.Init, spkLookup, opkLookup)
 	if err != nil {

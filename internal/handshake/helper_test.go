@@ -94,19 +94,19 @@ func (p *testParty) Decapsulate(enc, info []byte) ([sealbox.SharedSecretSize]byt
 
 var errNoSuchKey = errors.New("no such key")
 
-func (p *testParty) lookupSPK(keyID uint32) (*sealbox.PrivateKey, error) {
+func (p *testParty) lookupSPK(keyID uint32) (*sealbox.PrivateKey, []byte, error) {
 	if keyID != p.spk.Public.KeyID {
-		return nil, errNoSuchKey
+		return nil, nil, errNoSuchKey
 	}
-	return p.spk.Private, nil
+	return p.spk.Private, p.spk.Public.Raw, nil
 }
 
-func (p *testParty) lookupOPK(keyID uint32) (*sealbox.PrivateKey, error) {
+func (p *testParty) lookupOPK(keyID uint32) (*sealbox.PrivateKey, []byte, error) {
 	pair, ok := p.opks[keyID]
 	if !ok {
-		return nil, errNoSuchKey
+		return nil, nil, errNoSuchKey
 	}
-	return pair.Private, nil
+	return pair.Private, pair.Public.Raw, nil
 }
 
 // prekeyBundle returns p's verified prekey bundle, with the one-time prekey
