@@ -69,8 +69,10 @@ type Authenticator interface {
 	// Invite returns the invite code to register with, or "" for none.
 	Invite() string
 	// SignAuth signs the relay's authentication challenge nonce, bound to
-	// the relay fingerprint serverFP.
-	SignAuth(serverFP transport.Fingerprint, nonce []byte) ([]byte, error)
+	// the relay fingerprint serverFP and to binding, the TLS channel
+	// binding (transport.AuthBinding) of the connection the proof is sent
+	// on. identity.Identity.SignAuth has this signature.
+	SignAuth(serverFP transport.Fingerprint, nonce, binding []byte) ([]byte, error)
 }
 
 // Default timing parameters.

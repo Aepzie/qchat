@@ -209,61 +209,79 @@ func TestAuthProof(t *testing.T) {
 	bundle := mustBundle(t, identity, 1)
 	server := transport.Fingerprint{0x01, 0x02, 0x03}
 	nonce := bytes.Repeat([]byte{0x5a}, NonceSize)
+	binding := bytes.Repeat([]byte{0x3c}, BindingSize)
 
-	sig, err := identity.SignAuth(server, nonce)
+	sig, err := identity.SignAuth(server, nonce, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyAuth(bundle, server, nonce, sig); err != nil {
+	if err := VerifyAuth(bundle, server, nonce, binding, sig); err != nil {
 		t.Fatalf("valid proof rejected: %v", err)
 	}
 
 	otherNonce := bytes.Repeat([]byte{0x5b}, NonceSize)
 	otherServer := transport.Fingerprint{0x09}
+	otherBinding := bytes.Repeat([]byte{0x3d}, BindingSize)
 	otherBundle := mustBundle(t, generate(t), 1)
 	forged := *bundle
 	forged.ID = otherBundle.ID
 
 	cases := []struct {
-		name   string
-		bundle *Bundle
-		server transport.Fingerprint
-		nonce  []byte
-		sig    []byte
-		want   error
+		name    string
+		bundle  *Bundle
+		server  transport.Fingerprint
+		nonce   []byte
+		binding []byte
+		sig     []byte
+		want    error
 	}{
-		{"wrong nonce", bundle, server, otherNonce, sig, ErrInvalidAuth},
-		{"wrong server fingerprint", bundle, otherServer, nonce, sig, ErrInvalidAuth},
-		{"wrong key", otherBundle, server, nonce, sig, ErrInvalidAuth},
-		{"ID field disagrees with key", &forged, server, nonce, sig, ErrInvalidAuth},
-		{"truncated signature", bundle, server, nonce, sig[1:], ErrInvalidAuth},
-		{"short nonce", bundle, server, nonce[1:], sig, ErrInvalidArgument},
-		{"zero fingerprint", bundle, transport.Fingerprint{}, nonce, sig, ErrInvalidArgument},
-		{"nil bundle", nil, server, nonce, sig, ErrInvalidArgument},
+		{"wrong nonce", bundle, server, otherNonce, binding, sig, ErrInvalidAuth},
+		{"wrong server fingerprint", bundle, otherServer, nonce, binding, sig, ErrInvalidAuth},
+		{"wrong channel binding", bundle, server, nonce, otherBinding, sig, ErrInvalidAuth},
+		{"wrong key", otherBundle, server, nonce, binding, sig, ErrInvalidAuth},
+		{"ID field disagrees with key", &forged, server, nonce, binding, sig, ErrInvalidAuth},
+		{"truncated signature", bundle, server, nonce, binding, sig[1:], ErrInvalidAuth},
+		{"short nonce", bundle, server, nonce[1:], binding, sig, ErrInvalidArgument},
+		{"short channel binding", bundle, server, nonce, binding[1:], sig, ErrInvalidArgument},
+		{"long channel binding", bundle, server, nonce, append(bytes.Clone(binding), 0), sig, ErrInvalidArgument},
+		{"missing channel binding", bundle, server, nonce, nil, sig, ErrInvalidArgument},
+		{"zero fingerprint", bundle, transport.Fingerprint{}, nonce, binding, sig, ErrInvalidArgument},
+		{"nil bundle", nil, server, nonce, binding, sig, ErrInvalidArgument},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := VerifyAuth(tc.bundle, tc.server, tc.nonce, tc.sig); !errors.Is(err, tc.want) {
+			if err := VerifyAuth(tc.bundle, tc.server, tc.nonce, tc.binding, tc.sig); !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
 		})
 	}
 
-	bundleSig, err := identity.sign(ContextBundle, mustAuthMessage(t, server, nonce, identity.ID()))
+	msg := mustAuthMessage(t, server, nonce, binding, identity.ID())
+	bundleSig, err := identity.sign(ContextBundle, msg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyAuth(bundle, server, nonce, bundleSig); !errors.Is(err, ErrInvalidAuth) {
+	if err := VerifyAuth(bundle, server, nonce, binding, bundleSig); !errors.Is(err, ErrInvalidAuth) {
 		t.Errorf("signature under another context accepted: %v", err)
 	}
-	if _, err := identity.SignAuth(server, nonce[1:]); !errors.Is(err, ErrInvalidArgument) {
+	legacySig, err := identity.sign("qchat/v1/auth", msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyAuth(bundle, server, nonce, binding, legacySig); !errors.Is(err, ErrInvalidAuth) {
+		t.Errorf("signature under the unbound auth context accepted: %v", err)
+	}
+	if _, err := identity.SignAuth(server, nonce[1:], binding); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("SignAuth short nonce: %v", err)
+	}
+	if _, err := identity.SignAuth(server, nonce, binding[1:]); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("SignAuth short channel binding: %v", err)
 	}
 }
 
-func mustAuthMessage(t *testing.T, server transport.Fingerprint, nonce []byte, id ID) []byte {
+func mustAuthMessage(t *testing.T, server transport.Fingerprint, nonce, binding []byte, id ID) []byte {
 	t.Helper()
-	msg, err := authMessage(server, nonce, id)
+	msg, err := authMessage(server, nonce, binding, id)
 	if err != nil {
 		t.Fatal(err)
 	}

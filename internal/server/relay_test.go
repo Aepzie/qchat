@@ -121,9 +121,9 @@ func beginAuth(t *testing.T, conn *websocket.Conn, id []byte) []byte {
 	return expectBody[protocol.AuthChallenge](t, conn, protocol.TypeAuthChallenge, 20).Nonce
 }
 
-func signAuth(t *testing.T, ident *identity.Identity, fp transport.Fingerprint, nonce []byte) []byte {
+func signAuth(t *testing.T, ident *identity.Identity, fp transport.Fingerprint, nonce, binding []byte) []byte {
 	t.Helper()
-	sig, err := ident.SignAuth(fp, nonce)
+	sig, err := ident.SignAuth(fp, nonce, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func signAuth(t *testing.T, ident *identity.Identity, fp transport.Fingerprint, 
 func authenticate(t *testing.T, ts *testServer, conn *websocket.Conn, u testUser) {
 	t.Helper()
 	nonce := beginAuth(t, conn, u.id())
-	sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, u.ident, ts.pin, nonce)})
+	sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, u.ident, ts.pin, nonce, bindingOf(t, conn))})
 	expectBody[protocol.AuthOK](t, conn, protocol.TypeAuthOK, 21)
 }
 
@@ -267,22 +267,27 @@ func TestAuthFailures(t *testing.T) {
 	})
 	cases := []struct {
 		name string
-		sig  func(nonce []byte) []byte
+		sig  func(nonce, binding []byte) []byte
 	}{
-		{"wrong key", func(nonce []byte) []byte { return signAuth(t, mallory.ident, ts.pin, nonce) }},
-		{"wrong nonce", func(nonce []byte) []byte {
+		{"wrong key", func(nonce, binding []byte) []byte { return signAuth(t, mallory.ident, ts.pin, nonce, binding) }},
+		{"wrong nonce", func(nonce, binding []byte) []byte {
 			other := bytes.Clone(nonce)
 			other[0] ^= 1
-			return signAuth(t, alice.ident, ts.pin, other)
+			return signAuth(t, alice.ident, ts.pin, other, binding)
 		}},
-		{"wrong server", func(nonce []byte) []byte { return signAuth(t, alice.ident, otherFP, nonce) }},
-		{"garbage", func([]byte) []byte { return []byte("signature") }},
+		{"wrong server", func(nonce, binding []byte) []byte { return signAuth(t, alice.ident, otherFP, nonce, binding) }},
+		{"wrong channel binding", func(nonce, binding []byte) []byte {
+			other := bytes.Clone(binding)
+			other[0] ^= 1
+			return signAuth(t, alice.ident, ts.pin, nonce, other)
+		}},
+		{"garbage", func([]byte, []byte) []byte { return []byte("signature") }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := openSession(t, ts)
 			nonce := beginAuth(t, conn, alice.id())
-			sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: tc.sig(nonce)})
+			sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: tc.sig(nonce, bindingOf(t, conn))})
 			expectFatal(t, conn, protocol.ErrCodeUnauthorized)
 		})
 	}
@@ -290,13 +295,13 @@ func TestAuthFailures(t *testing.T) {
 		conn := openSession(t, ts)
 		first := beginAuth(t, conn, alice.id())
 		beginAuth(t, conn, alice.id())
-		sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, alice.ident, ts.pin, first)})
+		sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, alice.ident, ts.pin, first, bindingOf(t, conn))})
 		expectFatal(t, conn, protocol.ErrCodeUnauthorized)
 	})
 	t.Run("proof reused", func(t *testing.T) {
 		conn := openSession(t, ts)
 		nonce := beginAuth(t, conn, alice.id())
-		sig := signAuth(t, alice.ident, ts.pin, nonce)
+		sig := signAuth(t, alice.ident, ts.pin, nonce, bindingOf(t, conn))
 		sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: sig})
 		expectBody[protocol.AuthOK](t, conn, protocol.TypeAuthOK, 21)
 		sendFrame(t, conn, protocol.TypeAuthProof, 22, protocol.AuthProof{Sig: sig})
@@ -309,6 +314,30 @@ func TestAuthFailures(t *testing.T) {
 	})
 }
 
+// TestAuthProofBoundToConnection models a party that terminates the
+// victim's TLS connection with the relay's own certificate key and forwards
+// the challenge the relay issued on a second connection of its own. The
+// victim signs that nonce over the binding of the connection it sees, which
+// the relay does not accept on the forwarding connection.
+func TestAuthProofBoundToConnection(t *testing.T) {
+	ts := startServer(t, serverOptions{config: openMode})
+	alice := newUser(t)
+	setup := openSession(t, ts)
+	mustRegister(t, setup, alice.bundle, "")
+
+	victim := openSession(t, ts)
+	forwarder := openSession(t, ts)
+	if bytes.Equal(bindingOf(t, victim), bindingOf(t, forwarder)) {
+		t.Fatal("two TLS connections share a channel binding")
+	}
+	nonce := beginAuth(t, forwarder, alice.id())
+	relayed := signAuth(t, alice.ident, ts.pin, nonce, bindingOf(t, victim))
+	sendFrame(t, forwarder, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: relayed})
+	expectFatal(t, forwarder, protocol.ErrCodeUnauthorized)
+
+	authenticate(t, ts, victim, alice)
+}
+
 func TestAuthChallengeExpires(t *testing.T) {
 	ts := startServer(t, serverOptions{config: openMode, tweak: func(s *Server) { s.challengeTTL = 50 * time.Millisecond }})
 	alice := newUser(t)
@@ -316,7 +345,7 @@ func TestAuthChallengeExpires(t *testing.T) {
 	mustRegister(t, conn, alice.bundle, "")
 	nonce := beginAuth(t, conn, alice.id())
 	time.Sleep(100 * time.Millisecond)
-	sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, alice.ident, ts.pin, nonce)})
+	sendFrame(t, conn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, alice.ident, ts.pin, nonce, bindingOf(t, conn))})
 	expectFatal(t, conn, protocol.ErrCodeUnauthorized)
 }
 
@@ -558,7 +587,7 @@ func TestSessionsPerIdentityLimit(t *testing.T) {
 
 	second := openSession(t, ts)
 	nonce := beginAuth(t, second, alice.id())
-	sendFrame(t, second, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, alice.ident, ts.pin, nonce)})
+	sendFrame(t, second, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, alice.ident, ts.pin, nonce, bindingOf(t, second))})
 	expectFatal(t, second, protocol.ErrCodeRateLimited)
 
 	first.Close(websocket.StatusNormalClosure, "")
@@ -606,7 +635,7 @@ func TestRelayLogsContainNoClientData(t *testing.T) {
 	bobConn := openSession(t, ts)
 	mustRegister(t, bobConn, bob.bundle, code)
 	nonce := beginAuth(t, bobConn, bob.id())
-	sendFrame(t, bobConn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, bob.ident, ts.pin, nonce)})
+	sendFrame(t, bobConn, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, bob.ident, ts.pin, nonce, bindingOf(t, bobConn))})
 	expectBody[protocol.AuthOK](t, bobConn, protocol.TypeAuthOK, 21)
 
 	sendMessage(t, aliceConn, 2, bob.id(), payload)
@@ -635,6 +664,9 @@ func TestRelayLogsContainNoClientData(t *testing.T) {
 		forbidden = append(forbidden, hex.EncodeToString(id[:]), id.String(), id.ShortString(), hex.EncodeToString(u.bundle[:16]))
 	}
 	forbidden = append(forbidden, string(payload), hex.EncodeToString(payload), hex.EncodeToString(nonce), code, strings.ReplaceAll(code, "-", ""))
+	for _, conn := range []*websocket.Conn{aliceConn, bobConn, failing} {
+		forbidden = append(forbidden, hex.EncodeToString(bindingOf(t, conn)))
+	}
 	for _, s := range forbidden {
 		if s != "" && strings.Contains(output, s) {
 			t.Errorf("log contains %q:\n%s", s, output)

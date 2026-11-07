@@ -36,7 +36,9 @@
 //     AuthBegin replaces it. The challenge expires after 30 seconds and is
 //     consumed by the next AuthProof, whatever its outcome.
 //   - AuthProof{Sig} must be a signature, made with identity.SignAuth, over
-//     this relay's TLS fingerprint, the nonce and the ID. On success the
+//     this relay's TLS fingerprint, the nonce, the ID and the TLS exporter
+//     channel binding of this connection (transport.AuthBinding), so a proof
+//     made on one TLS connection is useless on any other. On success the
 //     session is bound to that ID for its lifetime and answered with AuthOK.
 //   - KeyRequest{ID} returns the stored bundle exactly as registered.
 //   - Send{To, Payload} pushes Deliver{From, Payload} to every live

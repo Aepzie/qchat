@@ -342,7 +342,7 @@ func TestDestroy(t *testing.T) {
 	if _, err := identity.MarshalSecret(); !errors.Is(err, ErrDestroyed) {
 		t.Errorf("MarshalSecret after Destroy: %v", err)
 	}
-	if _, err := identity.SignAuth(transport.Fingerprint{1}, make([]byte, NonceSize)); !errors.Is(err, ErrDestroyed) {
+	if _, err := identity.SignAuth(transport.Fingerprint{1}, make([]byte, NonceSize), make([]byte, BindingSize)); !errors.Is(err, ErrDestroyed) {
 		t.Errorf("SignAuth after Destroy: %v", err)
 	}
 	if _, err := identity.SignMessage([]byte("x")); !errors.Is(err, ErrDestroyed) {

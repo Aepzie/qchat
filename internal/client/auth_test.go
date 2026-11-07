@@ -22,8 +22,9 @@ type fakeAuth struct {
 	bundle []byte
 	invite string
 
-	mu     sync.Mutex
-	signFP transport.Fingerprint
+	mu          sync.Mutex
+	signFP      transport.Fingerprint
+	signBinding []byte
 }
 
 func newFakeAuth() *fakeAuth {
@@ -38,9 +39,10 @@ func (a *fakeAuth) ID() [32]byte   { return a.id }
 func (a *fakeAuth) Bundle() []byte { return a.bundle }
 func (a *fakeAuth) Invite() string { return a.invite }
 
-func (a *fakeAuth) SignAuth(serverFP transport.Fingerprint, nonce []byte) ([]byte, error) {
+func (a *fakeAuth) SignAuth(serverFP transport.Fingerprint, nonce, binding []byte) ([]byte, error) {
 	a.mu.Lock()
 	a.signFP = serverFP
+	a.signBinding = binding
 	a.mu.Unlock()
 	return expectedSig(nonce), nil
 }
@@ -214,10 +216,13 @@ func TestAuthenticateFlow(t *testing.T) {
 		t.Fatalf("events = %s, want %s", got, want)
 	}
 	a.mu.Lock()
-	fp := a.signFP
+	fp, binding := a.signFP, a.signBinding
 	a.mu.Unlock()
 	if fp != fs.pin {
 		t.Errorf("SignAuth fingerprint = %v, want the pin", fp)
+	}
+	if len(binding) != transport.AuthBindingSize || !bytes.Equal(binding, fs.lastBinding()) {
+		t.Error("SignAuth channel binding differs from the server's binding of the connection")
 	}
 	if _, ok := s.Info(); !ok {
 		t.Error("Info reports no connection")

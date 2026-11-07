@@ -130,6 +130,14 @@ func (a *App) Authenticator() client.Authenticator {
 	return authenticator{ident: a.prof.Identity, bundle: a.selfRaw, invite: a.invite}
 }
 
+// AuthOnly returns credentials that authenticate ident but carry no bundle
+// to register. They are meant for a session that authenticates without
+// registering, such as the one that looks up the relay's copy of the own
+// bundle while a profile is recovered.
+func AuthOnly(ident *identity.Identity) client.Authenticator {
+	return authenticator{ident: ident}
+}
+
 // TUIEvents returns the session events for tui.Config.Events. Run forwards
 // every session event except deliveries, which it handles itself, and
 // closes the channel when it returns.
@@ -243,6 +251,6 @@ type authenticator struct {
 func (a authenticator) ID() [32]byte   { return a.ident.ID() }
 func (a authenticator) Bundle() []byte { return a.bundle }
 func (a authenticator) Invite() string { return a.invite }
-func (a authenticator) SignAuth(serverFP transport.Fingerprint, nonce []byte) ([]byte, error) {
-	return a.ident.SignAuth(serverFP, nonce)
+func (a authenticator) SignAuth(serverFP transport.Fingerprint, nonce, binding []byte) ([]byte, error) {
+	return a.ident.SignAuth(serverFP, nonce, binding)
 }

@@ -142,10 +142,16 @@ New error codes: 6 Unauthorized, 7 NotFound, 8 RegistrationDenied, 9 Conflict.
 
 Responses echo the request frame ID.
 
-Authentication proof: hybridsig with ctx `qchat/v1/auth` over
-`CBOR{1: server SPKI fingerprint (32), 2: nonce (32), 3: ID (32)}`. Binding the
-server fingerprint prevents a proof from being replayed against another
-server. A connection is authenticated for exactly one ID.
+Authentication proof: hybridsig with ctx `qchat/v1/auth-tls` over
+`CBOR{1: server SPKI fingerprint (32), 2: nonce (32), 3: ID (32), 4: binding (32)}`
+where `binding` is the TLS 1.3 exporter value
+`ExportKeyingMaterial("EXPORTER-qchat-auth-v1", nil, 32)` of the connection
+(channel binding in the style of RFC 9266). The server fingerprint prevents a
+proof from being replayed against another server; the exporter binds the proof
+to this one TLS connection, so even an attacker holding the relay's TLS key
+cannot forward a challenge from a MITM'd connection and authenticate as the
+victim. A connection is authenticated for exactly one ID, and an identity may
+hold at most `limits.max_sessions_per_identity` sessions.
 
 Rules:
 

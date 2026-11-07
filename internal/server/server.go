@@ -292,7 +292,14 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess := newSession(s, conn)
+	binding, err := transport.AuthBinding(r.TLS)
+	if err != nil {
+		s.logger.Debug("no channel binding for connection")
+		_ = conn.Close(websocket.StatusInternalError, "")
+		return
+	}
+
+	sess := newSession(s, conn, binding)
 	if !s.register(sess) {
 		_ = conn.Close(websocket.StatusGoingAway, closeTextShutdown)
 		return

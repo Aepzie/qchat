@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,19 @@ type fakeServer struct {
 	addr  string
 	pin   transport.Fingerprint
 	conns atomic.Int32
+
+	mu sync.Mutex
+	// binding is the server side TLS channel binding of the most recently
+	// accepted connection.
+	binding []byte
+}
+
+// lastBinding returns the server side channel binding of the most recently
+// accepted connection.
+func (fs *fakeServer) lastBinding() []byte {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return fs.binding
 }
 
 // serverHandler runs one accepted connection. n is the 1-based connection
@@ -47,11 +61,19 @@ func startFakeServer(t *testing.T, handle serverHandler) *fakeServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	mux := http.NewServeMux()
 	mux.HandleFunc(transport.WebSocketPath, func(w http.ResponseWriter, r *http.Request) {
+		binding, err := transport.AuthBinding(r.TLS)
+		if err != nil {
+			t.Errorf("AuthBinding: %v", err)
+			return
+		}
 		conn, err := transport.Accept(w, r, 0)
 		if err != nil {
 			return
 		}
 		defer conn.CloseNow()
+		fs.mu.Lock()
+		fs.binding = binding
+		fs.mu.Unlock()
 		handle(ctx, conn, int(fs.conns.Add(1)))
 	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

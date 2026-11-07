@@ -21,7 +21,7 @@ const (
 	ContextMessage = "qchat/v1/message"
 
 	// ContextAuth labels the relay authentication proof.
-	ContextAuth = "qchat/v1/auth"
+	ContextAuth = "qchat/v1/auth-tls"
 )
 
 // SecretVersion is the format version of the record produced by

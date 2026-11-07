@@ -39,7 +39,7 @@ type pendingPing struct {
 // connectOnce runs a single connection from dial to teardown.
 func (s *Session) connectOnce(ctx context.Context) outcome {
 	dialCtx, cancelDial := context.WithTimeout(ctx, dialTimeout)
-	conn, err := transport.Dial(dialCtx, s.opts.Addr, s.opts.Pin, transport.DialOptions{
+	conn, state, err := transport.DialWithState(dialCtx, s.opts.Addr, s.opts.Pin, transport.DialOptions{
 		NetDialContext: s.opts.Dialer,
 		ReadLimit:      protocol.MaxFrameSize,
 	})
@@ -48,6 +48,10 @@ func (s *Session) connectOnce(ctx context.Context) outcome {
 		return outcome{err: err}
 	}
 	defer conn.CloseNow()
+	binding, err := transport.AuthBinding(&state)
+	if err != nil {
+		return outcome{err: err}
+	}
 
 	// The reader uses its own context: cancelling the context passed to
 	// Read tears the connection down immediately, which would prevent the
@@ -62,6 +66,7 @@ func (s *Session) connectOnce(ctx context.Context) outcome {
 	c := &liveConn{
 		session: s,
 		conn:    conn,
+		binding: binding,
 		frames:  frames,
 		life:    lifeCtx,
 		nextID:  helloID + 1,
@@ -107,6 +112,9 @@ func readLoop(ctx context.Context, conn *websocket.Conn, out chan<- readResult) 
 type liveConn struct {
 	session *Session
 	conn    *websocket.Conn
+	// binding is the TLS channel binding of this connection, signed into
+	// the authentication proof. It is secret and never logged.
+	binding []byte
 	frames  <-chan readResult
 	// life ends when the connection does; it bounds writes made on behalf
 	// of Request, whose own context must not tear the connection down.
@@ -204,7 +212,7 @@ func (c *liveConn) authenticate(ctx context.Context, timer *time.Timer, auth Aut
 	if err != nil {
 		return fmt.Errorf("%w: invalid AuthChallenge: %w", ErrProtocolViolation, err)
 	}
-	sig, err := auth.SignAuth(c.session.opts.Pin, bytes.Clone(challenge.Nonce))
+	sig, err := auth.SignAuth(c.session.opts.Pin, bytes.Clone(challenge.Nonce), bytes.Clone(c.binding))
 	if err != nil {
 		return fmt.Errorf("%w: sign challenge: %w", ErrAuthFailed, err)
 	}

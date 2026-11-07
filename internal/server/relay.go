@@ -92,7 +92,7 @@ func (s *session) handleAuthProof(frame protocol.Frame) bool {
 	if pending == nil || s.srv.now().After(pending.expires) {
 		return s.fail(frame.ID, protocol.ErrCodeUnauthorized)
 	}
-	if err := identity.VerifyAuth(pending.bundle, s.srv.fingerprint, pending.nonce, req.Sig); err != nil {
+	if err := identity.VerifyAuth(pending.bundle, s.srv.fingerprint, pending.nonce, s.binding, req.Sig); err != nil {
 		return s.fail(frame.ID, protocol.ErrCodeUnauthorized)
 	}
 	if !s.srv.route(s, pending.bundle.ID) {

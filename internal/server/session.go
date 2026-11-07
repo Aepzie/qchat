@@ -123,17 +123,22 @@ type session struct {
 	closed    chan struct{}
 	reason    closeReason
 
+	// binding is the TLS channel binding of this connection, which every
+	// authentication proof on it must sign. It is secret and never logged.
+	binding []byte
+
 	pendingClose  *closeRequest
 	challenge     *challenge
 	authenticated bool
 	id            identity.ID
 }
 
-func newSession(srv *Server, conn *websocket.Conn) *session {
+func newSession(srv *Server, conn *websocket.Conn, binding []byte) *session {
 	limits := srv.cfg.Limits
 	return &session{
 		srv:         srv,
 		conn:        conn,
+		binding:     binding,
 		number:      rand.Uint64(),
 		limiter:     rate.NewLimiter(rate.Limit(limits.FramesPerSecond), limits.Burst),
 		authLimiter: rate.NewLimiter(srv.authRate, srv.authBurst),

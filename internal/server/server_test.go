@@ -147,14 +147,36 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
+// bindings maps every connection opened by dial to its TLS channel binding.
+var bindings sync.Map
+
 func dial(t *testing.T, ts *testServer) *websocket.Conn {
 	t.Helper()
-	conn, err := transport.Dial(testContext(t), ts.addr, ts.pin, transport.DialOptions{})
+	conn, state, err := transport.DialWithState(testContext(t), ts.addr, ts.pin, transport.DialOptions{})
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	t.Cleanup(func() { conn.CloseNow() })
+	binding, err := transport.AuthBinding(&state)
+	if err != nil {
+		t.Fatalf("AuthBinding: %v", err)
+	}
+	bindings.Store(conn, binding)
+	t.Cleanup(func() {
+		bindings.Delete(conn)
+		conn.CloseNow()
+	})
 	return conn
+}
+
+// bindingOf returns the client side channel binding of a connection opened
+// by dial.
+func bindingOf(t *testing.T, conn *websocket.Conn) []byte {
+	t.Helper()
+	binding, ok := bindings.Load(conn)
+	if !ok {
+		t.Fatal("connection was not opened by dial")
+	}
+	return binding.([]byte)
 }
 
 func sendFrame[T any](t *testing.T, conn *websocket.Conn, frameType protocol.FrameType, id uint64, body T) {
