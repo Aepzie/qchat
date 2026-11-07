@@ -4,12 +4,19 @@ import (
 	"github.com/fxamacker/cbor/v2"
 )
 
-// Limits applied by the strict decoder. They are far above what any frame or
-// body defined by this package needs, yet small enough that hostile input
-// cannot make the decoder allocate or recurse without bound.
+// Limits applied by the strict decoder. They are above what any frame or body
+// defined by this package needs, yet small enough that hostile input cannot
+// make the decoder allocate or recurse without bound.
+//
+// The only array in any body is [PrekeyUpload.OneTimePrekeys], which holds at
+// most MaxOneTimePrekeysPerUpload byte strings. maxArrayElements leaves
+// headroom above that, so that the body's own validation rather than the
+// decoder reports an oversized upload. The elements of such an array are byte
+// strings whose total size is bounded by MaxFrameSize, so the larger limit
+// cannot amplify allocation; maps stay small.
 const (
 	maxNestedLevels  = 8
-	maxArrayElements = 16
+	maxArrayElements = 128
 	maxMapPairs      = 16
 )
 

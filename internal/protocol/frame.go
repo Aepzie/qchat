@@ -76,6 +76,21 @@ const (
 	// TypeDeliver pushes a routed ciphertext to its recipient, server to
 	// client; body [Deliver].
 	TypeDeliver FrameType = 16
+	// TypePrekeyUpload uploads a signed prekey and one-time prekeys, client to
+	// server; body [PrekeyUpload].
+	TypePrekeyUpload FrameType = 17
+	// TypePrekeyStatus reports the prekeys the relay holds for the
+	// authenticated identity, server to client; body [PrekeyStatus].
+	TypePrekeyStatus FrameType = 18
+	// TypePrekeyRequest asks for the prekey bundle of an ID, client to server;
+	// body [PrekeyRequest].
+	TypePrekeyRequest FrameType = 19
+	// TypePrekeyResponse returns the requested prekey bundle, server to
+	// client; body [PrekeyResponse].
+	TypePrekeyResponse FrameType = 20
+	// TypeAck acknowledges a delivered message so that the relay deletes it,
+	// client to server; body [Ack].
+	TypeAck FrameType = 21
 )
 
 // String returns the name of the frame type, or "FrameType(n)" for values
@@ -114,6 +129,16 @@ func (t FrameType) String() string {
 		return "SendResult"
 	case TypeDeliver:
 		return "Deliver"
+	case TypePrekeyUpload:
+		return "PrekeyUpload"
+	case TypePrekeyStatus:
+		return "PrekeyStatus"
+	case TypePrekeyRequest:
+		return "PrekeyRequest"
+	case TypePrekeyResponse:
+		return "PrekeyResponse"
+	case TypeAck:
+		return "Ack"
 	default:
 		return fmt.Sprintf("FrameType(%d)", uint8(t))
 	}
@@ -122,7 +147,7 @@ func (t FrameType) String() string {
 // Valid reports whether t is a frame type defined by this version of the
 // protocol.
 func (t FrameType) Valid() bool {
-	return t >= TypeHello && t <= TypeDeliver
+	return t >= TypeHello && t <= TypeAck
 }
 
 // Frame is the unit of transmission: each WebSocket binary message carries

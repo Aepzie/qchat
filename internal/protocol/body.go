@@ -115,6 +115,10 @@ const (
 	// ErrCodeConflict means the request contradicts state held by the relay,
 	// such as a different bundle already registered for the same ID.
 	ErrCodeConflict ErrorCode = 9
+	// ErrCodeQueueFull means the relay refused to store a message because the
+	// recipient's offline queue has reached its message or byte limit. It is
+	// not fatal to the connection.
+	ErrCodeQueueFull ErrorCode = 10
 )
 
 // String returns the name of the error code, or "ErrorCode(n)" for values
@@ -139,6 +143,8 @@ func (c ErrorCode) String() string {
 		return "RegistrationDenied"
 	case ErrCodeConflict:
 		return "Conflict"
+	case ErrCodeQueueFull:
+		return "QueueFull"
 	default:
 		return fmt.Sprintf("ErrorCode(%d)", uint16(c))
 	}
@@ -147,15 +153,15 @@ func (c ErrorCode) String() string {
 // Valid reports whether c is an error code defined by this version of the
 // protocol.
 func (c ErrorCode) Valid() bool {
-	return c >= ErrCodeBadRequest && c <= ErrCodeConflict
+	return c >= ErrCodeBadRequest && c <= ErrCodeQueueFull
 }
 
 // ErrorCodeFor maps an error returned by this package to the code a peer
 // should be told about. Errors not produced by this package map to
 // ErrCodeInternal. The codes ErrCodeUnauthorized, ErrCodeNotFound,
-// ErrCodeRegistrationDenied and ErrCodeConflict describe relay state rather
-// than wire format violations, so this package never produces them; the
-// relay chooses them itself.
+// ErrCodeRegistrationDenied, ErrCodeConflict and ErrCodeQueueFull describe
+// relay state rather than wire format violations, so this package never
+// produces them; the relay chooses them itself.
 func ErrorCodeFor(err error) ErrorCode {
 	switch {
 	case errors.Is(err, ErrFrameTooLarge):

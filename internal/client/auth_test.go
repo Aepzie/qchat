@@ -478,7 +478,7 @@ func TestDeliverAndUnknownResponses(t *testing.T) {
 		if writeFrame(ctx, conn, protocol.TypeSendResult, 0, protocol.SendResult{Status: protocol.SendDelivered}) != nil {
 			return
 		}
-		if writeFrame(ctx, conn, protocol.TypeDeliver, 0, protocol.Deliver{From: idOf(9), Payload: []byte("hello")}) != nil {
+		if writeFrame(ctx, conn, protocol.TypeDeliver, 0, protocol.Deliver{From: idOf(9), Payload: []byte("hello"), QueueID: 1}) != nil {
 			return
 		}
 		serveFrames(ctx, conn, keyResponder(ctx, t, conn))

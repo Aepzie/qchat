@@ -148,11 +148,18 @@ type SendStatus uint8
 // Send outcomes defined by wire version 1.
 const (
 	// SendDelivered means the payload was pushed to at least one connection
-	// of the recipient.
+	// of the recipient. Relays that store messages for offline recipients
+	// answer SendAccepted instead.
 	SendDelivered SendStatus = 1
 	// SendRecipientOffline means the recipient has no authenticated
-	// connection; the relay does not store the payload.
+	// connection and the relay did not store the payload. Relays that store
+	// messages for offline recipients answer SendAccepted instead.
 	SendRecipientOffline SendStatus = 2
+	// SendAccepted means the relay stored the payload for the recipient. The
+	// relay pushes it to the recipient's connections until it is
+	// acknowledged or expires. The status deliberately does not reveal
+	// whether the recipient is online.
+	SendAccepted SendStatus = 3
 )
 
 // String returns the name of the status, or "SendStatus(n)" for values that
@@ -163,6 +170,8 @@ func (s SendStatus) String() string {
 		return "Delivered"
 	case SendRecipientOffline:
 		return "RecipientOffline"
+	case SendAccepted:
+		return "Accepted"
 	default:
 		return fmt.Sprintf("SendStatus(%d)", uint8(s))
 	}
@@ -171,7 +180,7 @@ func (s SendStatus) String() string {
 // Valid reports whether s is a send status defined by this version of the
 // protocol.
 func (s SendStatus) Valid() bool {
-	return s >= SendDelivered && s <= SendRecipientOffline
+	return s >= SendDelivered && s <= SendAccepted
 }
 
 // SendResult reports the outcome of a [Send].
@@ -189,13 +198,20 @@ func (s SendResult) validate() error {
 	return nil
 }
 
-// Deliver pushes a payload routed by the relay to its recipient.
+// Deliver pushes a payload routed by the relay to its recipient. The
+// recipient answers with an [Ack] carrying QueueID once it has processed the
+// payload; until then the relay may deliver the same message again, for
+// example after the next authentication, so recipients must tolerate
+// duplicates.
 type Deliver struct {
 	// From is the authenticated identity of the sender, exactly IDSize bytes.
 	From []byte `cbor:"1,keyasint"`
 	// Payload is the end-to-end encrypted ciphertext exactly as sent, between
 	// 1 and MaxPayloadSize bytes.
 	Payload []byte `cbor:"2,keyasint"`
+	// QueueID identifies the stored message on the relay; it is at least 1.
+	// Queue IDs increase in the order in which the relay accepted messages.
+	QueueID uint64 `cbor:"3,keyasint"`
 }
 
 func (Deliver) frameType() FrameType { return TypeDeliver }
@@ -204,7 +220,18 @@ func (d Deliver) validate() error {
 	if err := checkFixed("sender ID", d.From, IDSize); err != nil {
 		return err
 	}
-	return checkBounded("payload", d.Payload, MaxPayloadSize)
+	if err := checkBounded("payload", d.Payload, MaxPayloadSize); err != nil {
+		return err
+	}
+	return checkQueueID(d.QueueID)
+}
+
+// checkQueueID reports ErrMalformed for the reserved queue ID 0.
+func checkQueueID(id uint64) error {
+	if id == 0 {
+		return fmt.Errorf("%w: queue ID is 0", ErrMalformed)
+	}
+	return nil
 }
 
 // checkFixed reports ErrMalformed unless b is exactly size bytes long.
