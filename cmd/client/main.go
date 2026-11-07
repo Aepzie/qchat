@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	qchat --server host:port --pin sha256:<64 hex digits> [--profile DIR] [--invite CODE]
+//	qchat --server host:port --pin sha256:<64 hex digits> [--profile DIR] [--invite CODE] [--recover]
 //	qchat --version
 //
 // On first start qchat creates a profile (identity keys and an encrypted
@@ -10,6 +10,14 @@
 // profile.DefaultDir, and asks for a display name and a passphrase. Later
 // starts ask for the passphrase. Relays that restrict registration need an
 // invite code from their operator once, passed with --invite.
+//
+// If the profile's key file is intact but its database is gone, qchat
+// explains what was lost and exits. Restoring the database from a backup
+// keeps everything; otherwise --recover creates a new, empty database for
+// the same identity, after looking up the bundle the relay holds for it so
+// that the relay keeps accepting the identity. Contacts, verifications, the
+// display name and message history are not recovered. --recover has no
+// effect while the database exists.
 //
 // The pin is the SHA-256 fingerprint of the server's public key, obtained
 // from the server operator over a channel you trust. The client refuses to
@@ -21,6 +29,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -60,6 +69,7 @@ type options struct {
 	showVersion       bool
 	profileDir        string
 	invite            string
+	recoverDB         bool
 }
 
 // parseFlags parses the command line. Flags may be written with one or two
@@ -73,8 +83,9 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.BoolVar(&o.showVersion, "version", false, "print the version and exit")
 	fs.StringVar(&o.profileDir, "profile", "", "profile directory (default: the per-user qchat directory)")
 	fs.StringVar(&o.invite, "invite", "", "invite code for registering with the server")
+	fs.BoolVar(&o.recoverDB, "recover", false, "if the local database is missing, create a new, empty one (contacts and history are lost)")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: qchat --server host:port --pin sha256:<fingerprint> [--profile DIR] [--invite CODE]")
+		fmt.Fprintln(stderr, "usage: qchat --server host:port --pin sha256:<fingerprint> [--profile DIR] [--invite CODE] [--recover]")
 		fmt.Fprintln(stderr, "       qchat --version")
 		fs.PrintDefaults()
 	}
@@ -204,10 +215,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	p, err := openProfile(dir)
+	opened, err := openProfile(dir, o.recoverDB)
+	defer clear(opened.passphrase)
 	if err != nil {
 		fmt.Fprintln(stderr, "qchat:", err)
 		return 1
+	}
+	p := opened.profile
+	if opened.dbMissing {
+		if !o.recoverDB {
+			fmt.Fprintln(stderr, databaseMissingHint(dir))
+			return 1
+		}
+		if p, err = recoverProfile(t, dir, opened.passphrase); err != nil {
+			var mismatch *transport.PinMismatchError
+			if errors.As(err, &mismatch) {
+				printPinMismatch(stderr, mismatch)
+				return 3
+			}
+			fmt.Fprintln(stderr, "qchat: recovery failed:", err)
+			return 1
+		}
+		fmt.Fprintln(stderr, recoveredNotice)
 	}
 	if p == nil {
 		return 0
@@ -216,14 +245,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runInterface(t, p, o.invite, stderr)
 }
 
+// openedProfile is the result of openProfile.
+type openedProfile struct {
+	// profile is the created or unlocked profile, nil if the user
+	// cancelled or the database is missing.
+	profile *profile.Profile
+	// dbMissing reports that the passphrase opened the key file but the
+	// database does not exist (profile.ErrDatabaseMissing).
+	dbMissing bool
+	// passphrase is a copy of the verified passphrase, kept only when
+	// dbMissing is set and recovery was requested. The caller zeroes it.
+	passphrase []byte
+}
+
 // openProfile creates the profile in dir on first start and unlocks it
-// otherwise, each with its own full-screen form. It returns nil and no
-// error when the user cancels.
-func openProfile(dir string) (*profile.Profile, error) {
+// otherwise, each with its own full-screen form. The profile is nil and the
+// error nil when the user cancels. A missing database ends the unlock form
+// with dbMissing set; keepPassphrase keeps a copy of the passphrase for
+// recovery then.
+func openProfile(dir string, keepPassphrase bool) (openedProfile, error) {
 	if !profile.Exists(dir) {
-		return createProfile(dir)
+		p, err := createProfile(dir)
+		return openedProfile{profile: p}, err
 	}
-	var unlocked *profile.Profile
+	var opened openedProfile
 	model := tui.NewUnlock(tui.UnlockConfig{
 		Hint:         dir,
 		QuitWhenDone: true,
@@ -232,20 +277,28 @@ func openProfile(dir string) (*profile.Profile, error) {
 			if errors.Is(err, profile.ErrWrongPassphrase) {
 				return tui.ErrWrongPassphrase
 			}
+			if errors.Is(err, profile.ErrDatabaseMissing) {
+				opened.dbMissing = true
+				if keepPassphrase {
+					opened.passphrase = bytes.Clone(passphrase)
+				}
+				return nil
+			}
 			if err != nil {
 				return err
 			}
-			unlocked = p
+			opened.profile = p
 			return nil
 		},
 	})
 	if _, err := tea.NewProgram(model).Run(); err != nil {
-		if unlocked != nil {
-			unlocked.Close()
+		if opened.profile != nil {
+			opened.profile.Close()
 		}
-		return nil, err
+		clear(opened.passphrase)
+		return openedProfile{}, err
 	}
-	return unlocked, nil
+	return opened, nil
 }
 
 // createProfile asks for a display name and passphrase and creates the
@@ -281,6 +334,14 @@ func registrationHint(denied client.RegistrationDenied, hadInvite bool) string {
 	default:
 		return line + ".\n  This server requires an invite code: ask its operator for one and start qchat with --invite CODE."
 	}
+}
+
+// printPinMismatch reports a server whose key does not match the pin.
+func printPinMismatch(stderr io.Writer, mismatch *transport.PinMismatchError) {
+	fmt.Fprintln(stderr, "qchat: SECURITY ALERT: the server's public key does not match the pinned fingerprint.")
+	fmt.Fprintln(stderr, "  expected: ", mismatch.Expected.Grouped())
+	fmt.Fprintln(stderr, "  presented:", mismatch.Presented.Grouped())
+	fmt.Fprintln(stderr, "  qchat did not connect. Verify the fingerprint with the server operator over a channel you trust.")
 }
 
 func versionLine(emb embedded) string {
@@ -339,10 +400,7 @@ func runInterface(t target, p *profile.Profile, invite string, stderr io.Writer)
 
 	var mismatch *transport.PinMismatchError
 	if errors.As(sessionErr, &mismatch) {
-		fmt.Fprintln(stderr, "qchat: SECURITY ALERT: the server's public key does not match the pinned fingerprint.")
-		fmt.Fprintln(stderr, "  expected: ", mismatch.Expected.Grouped())
-		fmt.Fprintln(stderr, "  presented:", mismatch.Presented.Grouped())
-		fmt.Fprintln(stderr, "  qchat did not connect. Verify the fingerprint with the server operator over a channel you trust.")
+		printPinMismatch(stderr, mismatch)
 		return 3
 	}
 	if denied, ok := backend.RegistrationDenied(); ok {
