@@ -2,7 +2,7 @@
 
 An open-source, end-to-end-encrypted, post-quantum-hybrid terminal chat written in Go.
 
-> **Warning: pre-alpha, unaudited.** qchat is under early development and has not been reviewed by an independent security auditor. Do not use it for anything sensitive until an independent security audit has been completed. Since v0.2.0 1:1 messages are end-to-end encrypted, but there is **no forward secrecy yet** and no offline delivery. See [SECURITY.md](SECURITY.md) for exactly what is and is not protected.
+> **Warning: pre-alpha, unaudited.** qchat is under early development and has not been reviewed by an independent security auditor. Do not use it for anything sensitive until an independent security audit has been completed. Since v0.3.0 1:1 messages use forward-secret sessions built from a KEM-based handshake and double ratchet that are composed from standard primitives but **not independently analysed**. See [SECURITY.md](SECURITY.md) for exactly what is and is not protected.
 
 ## Overview
 
@@ -26,16 +26,21 @@ Implemented (Phase 2, v0.2.0):
 
 - Hybrid identity signatures: Ed25519 + ML-DSA-65, both required
 - Self-authenticating IDs (`qc1-…`) and self-signed key bundles
-- 1:1 end-to-end encrypted, signed messages: HPKE with the hybrid KEM MLKEM768-X25519
 - Passphrase-protected profile (Argon2id) and encrypted local database
 - Safety numbers with terminal QR codes, key-change warnings
-- Relay registration with invite codes, authentication bound to the TLS connection, online-only delivery
+- Relay registration with invite codes, authentication bound to the TLS connection
 - Terminal UI with contacts, conversations, message requests and delivery status
+
+Implemented (Phase 3, v0.3.0):
+
+- Signed hybrid prekeys (MLKEM768-X25519), rotated and topped up automatically
+- KEM-based asynchronous session start inspired by PQXDH, with a signed, timestamped and replay-checked Init
+- Per-direction hybrid KEM double ratchet: forward secrecy and post-compromise security
+- Offline delivery: the relay stores only ciphertext until the recipient acknowledges it (default TTL 7 days)
+- Send results no longer reveal whether a recipient is online
 
 Planned:
 
-- PQXDH-style initial key agreement and Double Ratchet (forward secrecy)
-- Offline delivery with prekeys; the relay stores only ciphertext until delivery
 - Group chats with key rotation on member removal
 - Metadata protection: sealed sender, padding to size buckets, optional Tor onion service
 - Client installer builder with embedded server configuration
@@ -51,12 +56,13 @@ Planned:
 +----------+                                         +----------+
                                                           |
                                                           v
-                                                 SQLite (planned, Phase 3)
+                                   SQLite: identity bundles, prekeys,
+                                   invite hashes, undelivered ciphertext
 ```
 
-Frames on the wire are versioned CBOR messages. The relay never logs client IP addresses and, once end-to-end encryption is implemented, only handles ciphertext.
+Frames on the wire are versioned CBOR messages. The relay never logs client IP addresses and only handles ciphertext.
 
-Planned cryptographic building blocks (established libraries only): Go standard library (`crypto/ecdh`, `crypto/mlkem`), `cloudflare/circl` (ML-DSA-65), XChaCha20-Poly1305, Argon2id, and `modernc.org/sqlite` (no CGO).
+Cryptographic building blocks (established libraries only): Go standard library (`crypto/tls`, `crypto/hpke`, `crypto/mldsa`, `crypto/ed25519`, `crypto/hkdf`, `crypto/hmac`), `golang.org/x/crypto` (XChaCha20-Poly1305, ChaCha20-Poly1305, Argon2id) and `modernc.org/sqlite` (no CGO). Details in [SECURITY.md](SECURITY.md) and [docs/design](docs/design).
 
 ## Roadmap
 
@@ -64,7 +70,7 @@ Planned cryptographic building blocks (established libraries only): Go standard 
 |-------|-------|--------|
 | 1 | Repository, skeleton, pinned TLS 1.3 server/client connection, simple TUI (v0.1.0) | Done |
 | 2 | Identities, hybrid keys, 1:1 end-to-end messages (v0.2.0) | Done |
-| 3 | Forward secrecy (ratchet), prekeys, offline delivery | Planned |
+| 3 | Forward secrecy (ratchet), prekeys, offline delivery (v0.3.0) | Done |
 | 4 | Groups, including key rotation | Planned |
 | 5 | Metadata protection: sealed sender, padding, Tor | Planned |
 | 6 | Client installer builder with embedded server config | Planned |
@@ -108,7 +114,7 @@ Then, inside the client:
 - `/add <qc1-id> <name>` adds a contact; type to send end-to-end encrypted messages.
 - `/verify` shows the 60-digit safety number and QR code; compare it with your contact and press `v`.
 
-Messages are only delivered while the recipient is online (offline delivery comes in Phase 3).
+Messages to offline contacts are stored by the relay as ciphertext until the recipient comes online and acknowledges them (default up to 7 days).
 
 Deployment guides: [`deploy/systemd`](deploy/systemd/README.md) (Linux) and [`deploy/windows`](deploy/windows/README.md) (Windows service). A hardened systemd unit is provided in [`deploy/systemd/qchat-server.service`](deploy/systemd/qchat-server.service).
 

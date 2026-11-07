@@ -5,7 +5,7 @@ with `ProtectSystem=strict`: the whole file system, `/etc` included, is
 read-only for the server except its state directory `/var/lib/qchat`. The
 key and configuration live in `/etc/qchat`, so even a compromised server
 process cannot alter them. The database of identity bundles and invite code
-hashes (never messages) must be writable, together with the `-wal` and
+hashes and undelivered ciphertext must be writable, together with the `-wal` and
 `-shm` files SQLite creates next to it, so it lives in `/var/lib/qchat`.
 
 All commands run as root.

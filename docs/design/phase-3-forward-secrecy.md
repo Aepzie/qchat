@@ -116,11 +116,15 @@ sending never makes the two sides diverge:
 - Header (version 2; every message carries the epoch's KEM ciphertext so any
   single message of an epoch can start it): epoch, sender's current ratchet
   public key, target (SHA-256 of the recipient key encapsulated to), KEM
-  ciphertext, PN, N and a 16-byte random Salt.
+  ciphertext, PN, N, a 16-byte random Salt and `RecvEpoch` (the sender's
+  current receiving epoch).
 - A side announces a fresh own ratchet key on its first send after any
-  receive and keeps the private keys of up to 4 announced, unconsumed keys;
-  a key is deleted once a message of an epoch targeting it has been
-  decrypted. Skipped message keys are stored for out-of-order delivery, at
+  receive, but starts a new epoch only after the peer has acknowledged its
+  current one via `RecvEpoch`, so epochs are never skipped and a lost epoch
+  cannot dead-lock the session. It holds at most 4 announced, unconsumed own
+  keys (it stops generating new ones rather than evicting, since an evicted
+  key could be the target of a pending peer epoch); keys are deleted once a
+  message of an epoch targeting them has been decrypted. Skipped message keys are stored for out-of-order delivery, at
   most 1000 per session and 1000 per step, and are deleted once they are more
   than 2 epochs old (messages that late are lost), so a withheld message
   cannot keep its key alive indefinitely.
