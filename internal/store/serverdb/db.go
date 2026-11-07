@@ -15,8 +15,12 @@ import (
 
 // Errors returned by DB methods. Callers compare them with errors.Is.
 var (
-	// ErrNotFound reports that no identity with the requested ID exists.
+	// ErrNotFound reports that no identity with the requested ID exists, or
+	// that the requested prekey bundle or queued message does not exist.
 	ErrNotFound = errors.New("serverdb: not found")
+	// ErrQueueFull reports that storing a message would exceed the
+	// recipient's queue limits.
+	ErrQueueFull = errors.New("serverdb: queue full")
 	// ErrConflict reports that an identity with the same ID but a different
 	// bundle and a serial that is not higher is already stored.
 	ErrConflict = errors.New("serverdb: conflicting identity")
