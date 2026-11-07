@@ -104,6 +104,17 @@ const (
 	ErrCodeTooLarge ErrorCode = 4
 	// ErrCodeInternal means the sender failed for reasons unrelated to the peer.
 	ErrCodeInternal ErrorCode = 5
+	// ErrCodeUnauthorized means the request requires an authenticated
+	// connection, or an authentication attempt failed.
+	ErrCodeUnauthorized ErrorCode = 6
+	// ErrCodeNotFound means the requested identity is not known to the relay.
+	ErrCodeNotFound ErrorCode = 7
+	// ErrCodeRegistrationDenied means the relay refused to register a new
+	// identity, for example because the invite code is missing or invalid.
+	ErrCodeRegistrationDenied ErrorCode = 8
+	// ErrCodeConflict means the request contradicts state held by the relay,
+	// such as a different bundle already registered for the same ID.
+	ErrCodeConflict ErrorCode = 9
 )
 
 // String returns the name of the error code, or "ErrorCode(n)" for values
@@ -120,6 +131,14 @@ func (c ErrorCode) String() string {
 		return "TooLarge"
 	case ErrCodeInternal:
 		return "Internal"
+	case ErrCodeUnauthorized:
+		return "Unauthorized"
+	case ErrCodeNotFound:
+		return "NotFound"
+	case ErrCodeRegistrationDenied:
+		return "RegistrationDenied"
+	case ErrCodeConflict:
+		return "Conflict"
 	default:
 		return fmt.Sprintf("ErrorCode(%d)", uint16(c))
 	}
@@ -128,12 +147,15 @@ func (c ErrorCode) String() string {
 // Valid reports whether c is an error code defined by this version of the
 // protocol.
 func (c ErrorCode) Valid() bool {
-	return c >= ErrCodeBadRequest && c <= ErrCodeInternal
+	return c >= ErrCodeBadRequest && c <= ErrCodeConflict
 }
 
 // ErrorCodeFor maps an error returned by this package to the code a peer
 // should be told about. Errors not produced by this package map to
-// ErrCodeInternal.
+// ErrCodeInternal. The codes ErrCodeUnauthorized, ErrCodeNotFound,
+// ErrCodeRegistrationDenied and ErrCodeConflict describe relay state rather
+// than wire format violations, so this package never produces them; the
+// relay chooses them itself.
 func ErrorCodeFor(err error) ErrorCode {
 	switch {
 	case errors.Is(err, ErrFrameTooLarge):
@@ -166,9 +188,15 @@ func (e ErrorBody) validate() error {
 	if len(e.Message) > MaxErrorMessageLen {
 		return fmt.Errorf("%w: error message is %d bytes", ErrMalformed, len(e.Message))
 	}
-	for i := 0; i < len(e.Message); i++ {
-		if c := e.Message[i]; c < 0x20 || c > 0x7e {
-			return fmt.Errorf("%w: error message contains byte 0x%02x", ErrMalformed, c)
+	return checkPrintableASCII("error message", e.Message)
+}
+
+// checkPrintableASCII reports ErrMalformed unless every byte of s is printable
+// ASCII (0x20 to 0x7e).
+func checkPrintableASCII(field, s string) error {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c > 0x7e {
+			return fmt.Errorf("%w: %s contains byte 0x%02x", ErrMalformed, field, c)
 		}
 	}
 	return nil

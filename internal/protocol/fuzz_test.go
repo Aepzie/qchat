@@ -15,12 +15,14 @@ func seedFrames(f *testing.F) {
 		mustFrame(f, TypeError, 7, ErrorBody{Code: ErrCodeRateLimited, Message: "slow down"}),
 		{Version: Version, Type: TypePing},
 	}
+	frames = append(frames, relaySeedFrames(f)...)
 	for _, fr := range frames {
 		f.Add(mustEncode(f, fr))
 	}
 	for _, s := range []string{
 		"", "a0", "a2 01 02 02 03", "a3 01 01 02 03 02 03", "bf 01 01 02 03 ff",
 		"a3 01 01 02 03 05 00", "a2 02 03 01 01", "a3 01 01 02 03 04 5a ff ff ff ff",
+		"a2 01 01 02 11", "a3 01 01 02 07 04 41 a0", "a3 01 01 02 07 04 40",
 	} {
 		f.Add(mustHex(f, s))
 	}
@@ -72,6 +74,27 @@ func checkBodyRoundTrip[T any](t *testing.T, typ FrameType, body []byte) {
 	}
 }
 
+// relaySeedFrames returns one valid frame of every identity, authentication
+// and messaging type.
+func relaySeedFrames(f *testing.F) []Frame {
+	id := bytes.Repeat([]byte{0x11}, IDSize)
+	return []Frame{
+		mustFrame(f, TypeRegister, 1, Register{Bundle: []byte("bundle"), Invite: "INVITE234567"}),
+		mustFrame(f, TypeRegister, 1, Register{Bundle: []byte{0x01}}),
+		mustFrame(f, TypeRegistered, 1, Registered{}),
+		mustFrame(f, TypeAuthBegin, 2, AuthBegin{ID: id}),
+		mustFrame(f, TypeAuthChallenge, 2, AuthChallenge{Nonce: bytes.Repeat([]byte{0x22}, NonceSize)}),
+		mustFrame(f, TypeAuthProof, 3, AuthProof{Sig: []byte("signature")}),
+		mustFrame(f, TypeAuthOK, 3, AuthOK{}),
+		mustFrame(f, TypeKeyRequest, 4, KeyRequest{ID: id}),
+		mustFrame(f, TypeKeyResponse, 4, KeyResponse{Bundle: []byte("bundle")}),
+		mustFrame(f, TypeSend, 5, Send{To: id, Payload: []byte("ciphertext")}),
+		mustFrame(f, TypeSendResult, 5, SendResult{Status: SendDelivered}),
+		mustFrame(f, TypeSendResult, 6, SendResult{Status: SendRecipientOffline}),
+		mustFrame(f, TypeDeliver, 0, Deliver{From: id, Payload: []byte("ciphertext")}),
+	}
+}
+
 // FuzzDecodeBody feeds arbitrary bytes to DecodeBody for every body type,
 // including deliberately mismatched and pointer types. It must never panic,
 // and accepted bodies must be canonical and valid.
@@ -89,24 +112,62 @@ func FuzzDecodeBody(f *testing.F) {
 	for _, b := range bodies {
 		f.Add(uint8(b.typ), mustFrame(f, b.typ, 0, b.body).Body)
 	}
+	for _, fr := range relaySeedFrames(f) {
+		f.Add(uint8(fr.Type), fr.Body)
+	}
 	f.Add(uint8(TypePing), []byte{0xf6})
 	f.Add(uint8(TypeError), mustHex(f, "a2 01 01 02 61 ff"))
+	f.Add(uint8(TypeRegistered), []byte{0xf6})
+	f.Add(uint8(TypeRegister), mustHex(f, "a2 01 41 01 02 60"))
+	f.Add(uint8(TypeSendResult), mustHex(f, "a1 01 03"))
+	f.Add(uint8(0), mustFrame(f, TypePing, 0, Ping{Nonce: 7}).Body)
 
 	f.Fuzz(func(t *testing.T, sel uint8, body []byte) {
-		switch sel % 6 {
-		case 0:
+		switch FrameType(sel % 17) {
+		case TypeHello:
 			checkBodyRoundTrip[Hello](t, TypeHello, body)
-		case 1:
+		case TypeWelcome:
 			checkBodyRoundTrip[Welcome](t, TypeWelcome, body)
-		case 2:
+		case TypePing:
 			checkBodyRoundTrip[Ping](t, TypePing, body)
 			checkBodyRoundTrip[*Ping](t, TypePing, body)
-		case 3:
+		case TypePong:
 			checkBodyRoundTrip[Pong](t, TypePong, body)
-		case 4:
+		case TypeError:
 			checkBodyRoundTrip[ErrorBody](t, TypeError, body)
 			checkBodyRoundTrip[*ErrorBody](t, TypeError, body)
-		case 5:
+		case TypeRegister:
+			checkBodyRoundTrip[Register](t, TypeRegister, body)
+			checkBodyRoundTrip[*Register](t, TypeRegister, body)
+		case TypeRegistered:
+			checkBodyRoundTrip[Registered](t, TypeRegistered, body)
+			checkBodyRoundTrip[*Registered](t, TypeRegistered, body)
+		case TypeAuthBegin:
+			checkBodyRoundTrip[AuthBegin](t, TypeAuthBegin, body)
+			if _, err := DecodeBody[KeyRequest](rawFrame(TypeAuthBegin, body), TypeAuthBegin); err == nil {
+				t.Fatal("KeyRequest body accepted for AuthBegin frame")
+			}
+		case TypeAuthChallenge:
+			checkBodyRoundTrip[AuthChallenge](t, TypeAuthChallenge, body)
+		case TypeAuthProof:
+			checkBodyRoundTrip[AuthProof](t, TypeAuthProof, body)
+		case TypeAuthOK:
+			checkBodyRoundTrip[AuthOK](t, TypeAuthOK, body)
+		case TypeKeyRequest:
+			checkBodyRoundTrip[KeyRequest](t, TypeKeyRequest, body)
+		case TypeKeyResponse:
+			checkBodyRoundTrip[KeyResponse](t, TypeKeyResponse, body)
+		case TypeSend:
+			checkBodyRoundTrip[Send](t, TypeSend, body)
+			if _, err := DecodeBody[Deliver](rawFrame(TypeSend, body), TypeSend); err == nil {
+				t.Fatal("Deliver body accepted for Send frame")
+			}
+		case TypeSendResult:
+			checkBodyRoundTrip[SendResult](t, TypeSendResult, body)
+		case TypeDeliver:
+			checkBodyRoundTrip[Deliver](t, TypeDeliver, body)
+			checkBodyRoundTrip[*Deliver](t, TypeDeliver, body)
+		default:
 			if _, err := DecodeBody[Pong](rawFrame(TypePing, body), TypePing); err == nil {
 				t.Fatal("Pong body accepted for Ping frame")
 			}

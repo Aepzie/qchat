@@ -161,7 +161,7 @@ func TestDecodeRejects(t *testing.T) {
 		{"VersionAsText", "a2 01 61 31 02 03", ErrMalformed},
 		{"TypeZero", "a2 01 01 02 00", ErrUnknownType},
 		{"TypeMissing", "a1 01 01", ErrUnknownType},
-		{"TypeUnknown", "a2 01 01 02 09", ErrUnknownType},
+		{"TypeUnknown", "a2 01 01 02 11", ErrUnknownType},
 		{"TypeOverflow", "a2 01 01 02 19 01 03", ErrMalformed},
 		{"TrailingByte", "a2 01 01 02 03 00", ErrMalformed},
 		{"TrailingFrame", "a2 01 01 02 03 a2 01 01 02 03", ErrMalformed},
@@ -249,7 +249,7 @@ func TestEncodeRejects(t *testing.T) {
 		{"VersionZero", Frame{Type: TypePing}, ErrUnsupportedVersion},
 		{"VersionTwo", Frame{Version: 2, Type: TypePing}, ErrUnsupportedVersion},
 		{"TypeZero", Frame{Version: Version}, ErrUnknownType},
-		{"TypeUnknown", Frame{Version: Version, Type: 6}, ErrUnknownType},
+		{"TypeUnknown", Frame{Version: Version, Type: 17}, ErrUnknownType},
 		{"BodyTooLarge", Frame{Version: Version, Type: TypePing, Body: make([]byte, MaxFrameSize+1)}, ErrFrameTooLarge},
 		{"FrameTooLarge", Frame{Version: Version, Type: TypePing, Body: make([]byte, MaxFrameSize)}, ErrFrameTooLarge},
 	}
@@ -265,7 +265,11 @@ func TestEncodeRejects(t *testing.T) {
 func TestFrameTypeString(t *testing.T) {
 	want := map[FrameType]string{
 		TypeHello: "Hello", TypeWelcome: "Welcome", TypePing: "Ping",
-		TypePong: "Pong", TypeError: "Error", 0: "FrameType(0)", 200: "FrameType(200)",
+		TypePong: "Pong", TypeError: "Error", TypeRegister: "Register", TypeRegistered: "Registered",
+		TypeAuthBegin: "AuthBegin", TypeAuthChallenge: "AuthChallenge", TypeAuthProof: "AuthProof",
+		TypeAuthOK: "AuthOK", TypeKeyRequest: "KeyRequest", TypeKeyResponse: "KeyResponse",
+		TypeSend: "Send", TypeSendResult: "SendResult", TypeDeliver: "Deliver",
+		0: "FrameType(0)", 17: "FrameType(17)", 200: "FrameType(200)",
 	}
 	for typ, s := range want {
 		if got := typ.String(); got != s {
@@ -273,7 +277,7 @@ func TestFrameTypeString(t *testing.T) {
 		}
 	}
 	for typ := 0; typ < 256; typ++ {
-		valid := typ >= 1 && typ <= 5
+		valid := typ >= 1 && typ <= 16
 		if got := FrameType(typ).Valid(); got != valid {
 			t.Errorf("FrameType(%d).Valid() = %v, want %v", typ, got, valid)
 		}

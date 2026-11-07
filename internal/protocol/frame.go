@@ -44,6 +44,38 @@ const (
 	TypePong FrameType = 4
 	// TypeError reports a failure to the peer; body [ErrorBody].
 	TypeError FrameType = 5
+	// TypeRegister uploads an identity bundle to the relay, client to server;
+	// body [Register].
+	TypeRegister FrameType = 6
+	// TypeRegistered confirms a Register, server to client; body [Registered].
+	TypeRegistered FrameType = 7
+	// TypeAuthBegin starts authentication as an identity, client to server;
+	// body [AuthBegin].
+	TypeAuthBegin FrameType = 8
+	// TypeAuthChallenge carries the nonce the client must sign, server to
+	// client; body [AuthChallenge].
+	TypeAuthChallenge FrameType = 9
+	// TypeAuthProof answers an AuthChallenge, client to server; body
+	// [AuthProof].
+	TypeAuthProof FrameType = 10
+	// TypeAuthOK confirms a successful authentication, server to client; body
+	// [AuthOK].
+	TypeAuthOK FrameType = 11
+	// TypeKeyRequest asks for the identity bundle of an ID, client to server;
+	// body [KeyRequest].
+	TypeKeyRequest FrameType = 12
+	// TypeKeyResponse returns the requested identity bundle, server to client;
+	// body [KeyResponse].
+	TypeKeyResponse FrameType = 13
+	// TypeSend asks the relay to route a ciphertext to an ID, client to
+	// server; body [Send].
+	TypeSend FrameType = 14
+	// TypeSendResult reports the outcome of a Send, server to client; body
+	// [SendResult].
+	TypeSendResult FrameType = 15
+	// TypeDeliver pushes a routed ciphertext to its recipient, server to
+	// client; body [Deliver].
+	TypeDeliver FrameType = 16
 )
 
 // String returns the name of the frame type, or "FrameType(n)" for values
@@ -60,6 +92,28 @@ func (t FrameType) String() string {
 		return "Pong"
 	case TypeError:
 		return "Error"
+	case TypeRegister:
+		return "Register"
+	case TypeRegistered:
+		return "Registered"
+	case TypeAuthBegin:
+		return "AuthBegin"
+	case TypeAuthChallenge:
+		return "AuthChallenge"
+	case TypeAuthProof:
+		return "AuthProof"
+	case TypeAuthOK:
+		return "AuthOK"
+	case TypeKeyRequest:
+		return "KeyRequest"
+	case TypeKeyResponse:
+		return "KeyResponse"
+	case TypeSend:
+		return "Send"
+	case TypeSendResult:
+		return "SendResult"
+	case TypeDeliver:
+		return "Deliver"
 	default:
 		return fmt.Sprintf("FrameType(%d)", uint8(t))
 	}
@@ -68,7 +122,7 @@ func (t FrameType) String() string {
 // Valid reports whether t is a frame type defined by this version of the
 // protocol.
 func (t FrameType) Valid() bool {
-	return t >= TypeHello && t <= TypeError
+	return t >= TypeHello && t <= TypeDeliver
 }
 
 // Frame is the unit of transmission: each WebSocket binary message carries
