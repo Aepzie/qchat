@@ -28,6 +28,12 @@ const (
 	labelSession  = "qchat/clientdb/v1/session\x00"
 	labelPrekey   = "qchat/clientdb/v1/prekey\x00"
 	labelSeenInit = "qchat/clientdb/v1/seen-init\x00"
+
+	labelGroup           = "qchat/clientdb/v1/group\x00"
+	labelGroupMember     = "qchat/clientdb/v1/group-member\x00"
+	labelGroupMessage    = "qchat/clientdb/v1/group-message\x00"
+	labelOwnSenderKey    = "qchat/clientdb/v1/own-sender-key\x00"
+	labelMemberSenderKey = "qchat/clientdb/v1/member-sender-key\x00"
 )
 
 // lookupSize is the length of every lookup column (HMAC-SHA256 output).
@@ -144,4 +150,35 @@ func (k *keys) open(sealed, aad []byte) ([]byte, error) {
 		return nil, ErrCorrupt
 	}
 	return plaintext, nil
+}
+
+// groupLookup returns the lookup key of the group with the given ID. It is
+// also the peer column of the group's messages and the grp column of its
+// sender keys.
+func (k *keys) groupLookup(group [32]byte) []byte {
+	return k.lookup(labelGroup, group[:])
+}
+
+// groupMemberLookup returns the member column of the sender keys of member
+// in group. It depends on the group, so the rows of one member cannot be
+// linked across groups.
+func (k *keys) groupMemberLookup(group, member [32]byte) []byte {
+	return k.lookup(labelGroupMember, group[:], member[:])
+}
+
+// groupMessageLookup returns the lookup key of a group message.
+func (k *keys) groupMessageLookup(group, sender [32]byte, msgID [16]byte) []byte {
+	return k.lookup(labelGroupMessage, group[:], sender[:], msgID[:])
+}
+
+// ownSenderKeyLookup returns the lookup key of the own sender key state in
+// group.
+func (k *keys) ownSenderKeyLookup(group [32]byte) []byte {
+	return k.lookup(labelOwnSenderKey, group[:])
+}
+
+// memberSenderKeyLookup returns the lookup key of the receiver state for one
+// sender key generation of member in group.
+func (k *keys) memberSenderKeyLookup(group, member [32]byte, generation uint32) []byte {
+	return k.lookup(labelMemberSenderKey, group[:], member[:], binary.BigEndian.AppendUint32(nil, generation))
 }
