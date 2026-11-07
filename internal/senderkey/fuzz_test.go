@@ -2,13 +2,15 @@ package senderkey
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
 // FuzzDecrypt feeds arbitrary bytes into a receiver that already holds
 // skipped keys. Decrypt must never panic, must accept nothing but the
-// genuine envelopes (signatures cannot be forged), and whatever it did, the
-// receiver must still decrypt the genuine next message afterwards.
+// genuine envelopes (signatures cannot be forged), must agree with
+// OpenHeader on routing, and whatever it did, the receiver must still
+// decrypt the genuine next message afterwards.
 func FuzzDecrypt(f *testing.F) {
 	s, r := newPair(f)
 	genuine := map[string]string{}
@@ -24,27 +26,28 @@ func FuzzDecrypt(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	other, _ := newPair(f)
+	candidates := []HeaderCandidate{candidate(other), candidate(s)}
 
 	for _, env := range envs {
 		f.Add(env)
 	}
 	f.Add(check)
 	f.Add([]byte{})
-	f.Add([]byte{0xa4, 0x01, 0x03, 0x02})
-	other, _ := newPair(f)
+	f.Add(cloneBytes(envelopePrefix))
 	f.Add(encrypt(f, other, "other"))
 
 	f.Fuzz(func(t *testing.T, input []byte) {
-		group, sender, generation, iteration, parseErr := ParseEnvelopeHeader(input)
-		if parseErr == nil && !IsGroupEnvelope(input) {
-			t.Fatal("parsable envelope not recognised by IsGroupEnvelope")
+		idx, routed, openErr := OpenHeader(input, candidates)
+		if !errors.Is(openErr, ErrMalformed) && !IsGroupEnvelope(input) {
+			t.Fatal("well-formed envelope not recognised by IsGroupEnvelope")
 		}
 		recv, err := UnmarshalReceiver(base)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer recv.Destroy()
-		plaintext, err := recv.Decrypt(input)
+		plaintext, h, err := recv.Decrypt(input)
 		if err == nil {
 			want, ok := genuine[string(input)]
 			if !ok && bytes.Equal(input, check) {
@@ -53,8 +56,8 @@ func FuzzDecrypt(f *testing.F) {
 			if !ok || string(plaintext) != want {
 				t.Fatalf("accepted a non-genuine envelope: %q", plaintext)
 			}
-			if parseErr != nil || group != s.Group() || sender != s.Owner() || generation != s.Generation() || iteration >= s.Iteration() {
-				t.Fatal("ParseEnvelopeHeader disagrees with a successful Decrypt")
+			if openErr != nil || idx != 1 || routed != h || h.Group != s.Group() || h.Sender != s.Owner() || h.Iteration >= s.Iteration() {
+				t.Fatal("OpenHeader disagrees with a successful Decrypt")
 			}
 			if bytes.Equal(input, check) {
 				return
@@ -75,7 +78,7 @@ func FuzzParseDistribution(f *testing.F) {
 	from := randomID(f)
 	f.Add(dist)
 	f.Add([]byte{})
-	f.Add([]byte{0xa7, 0x01, 0x01})
+	f.Add([]byte{0xa8, 0x01, 0x02})
 	f.Add(encrypt(f, s, "not a distribution"))
 
 	f.Fuzz(func(t *testing.T, input []byte) {

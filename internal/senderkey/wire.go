@@ -2,6 +2,7 @@ package senderkey
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"math"
 	"time"
@@ -20,18 +21,29 @@ const (
 	// EnvelopeVersion is the top-level version of a group envelope. The
 	// pairwise envelope of internal/e2e uses version 2, so the value alone
 	// tells the two apart.
-	EnvelopeVersion = 3
+	EnvelopeVersion = 4
 
 	// HeaderVersion is the only group message header version this package
 	// produces and accepts.
-	HeaderVersion = 1
+	HeaderVersion = 2
 
 	// DistributionVersion is the only distribution message version this
 	// package produces and accepts.
-	DistributionVersion = 1
+	DistributionVersion = 2
 
 	// SaltSize is the size of the per-message header salt.
 	SaltSize = 16
+
+	// HeaderKeySize is the size of a generation's header key.
+	HeaderKeySize = 32
+
+	// HeaderNonceSize is the size of the random XChaCha20-Poly1305 nonce of
+	// the encrypted header.
+	HeaderNonceSize = chacha20poly1305.NonceSizeX
+
+	// StateBindingSize is the size of the group state binding carried in
+	// every header.
+	StateBindingSize = 32
 
 	// MaxPlaintextSize is the largest plaintext Encrypt accepts and,
 	// correspondingly, bounds the ciphertext Decrypt looks at.
@@ -64,41 +76,55 @@ const (
 
 // Errors returned by this package. Callers should compare with [errors.Is].
 // None of them reveals anything secret: they depend only on public envelope
-// fields, on the signature, or on whether the AEAD tag verified.
+// fields, on whether a header key opened the header, on the signature, or on
+// whether the commitment and the AEAD tag verified.
 var (
 	// ErrMalformed reports input that is not the canonical encoding of a
 	// valid envelope, header or distribution message.
 	ErrMalformed = errors.New("senderkey: malformed message")
 
+	// ErrNoHeaderKey reports an envelope whose header opens under none of
+	// the header keys tried: it belongs to a group, sender or generation
+	// whose distribution the caller does not hold, or it is not genuine.
+	ErrNoHeaderKey = errors.New("senderkey: no known header key opens the envelope")
+
 	// ErrBadSignature reports an envelope whose signature does not verify
 	// under the receiver's signing key for that generation.
 	ErrBadSignature = errors.New("senderkey: bad signature")
 
-	// ErrWrongGroup reports an envelope for another group.
+	// ErrWrongGroup reports an envelope whose header, although it opened
+	// under the receiver's header key, names another group. Only a holder of
+	// that header key can produce one.
 	ErrWrongGroup = errors.New("senderkey: envelope belongs to another group")
 
-	// ErrWrongSender reports an envelope from another sender.
+	// ErrWrongSender reports an envelope whose header names another sender
+	// than the receiver's.
 	ErrWrongSender = errors.New("senderkey: envelope from another sender")
 
-	// ErrOldGeneration reports an envelope of an older generation than the
-	// receiver's.
+	// ErrOldGeneration reports an envelope whose header names an older
+	// generation than the receiver's.
 	ErrOldGeneration = errors.New("senderkey: envelope of an old generation")
 
-	// ErrUnknownGeneration reports an envelope of a newer generation than
-	// the receiver's: its distribution message has not been received yet.
+	// ErrUnknownGeneration reports an envelope whose header names a newer
+	// generation than the receiver's.
 	ErrUnknownGeneration = errors.New("senderkey: envelope of an unknown generation")
+
+	// ErrFrozen reports an envelope at or beyond the chain position of a
+	// frozen receiver: its generation has been superseded, so only messages
+	// whose skipped keys are still stored can be decrypted.
+	ErrFrozen = errors.New("senderkey: generation is frozen")
 
 	// ErrTooManySkipped reports an envelope whose iteration is more than
 	// MaxSkip ahead of the receiver's chain.
 	ErrTooManySkipped = errors.New("senderkey: too many skipped messages")
 
 	// ErrReplay reports an envelope whose message key is no longer held: it
-	// was already decrypted, its skipped key was evicted, or it precedes the
-	// iteration at which the receiver was created.
+	// was already decrypted, its skipped key was evicted or pruned, or it
+	// precedes the iteration at which the receiver was created.
 	ErrReplay = errors.New("senderkey: message key already used or unavailable")
 
-	// ErrDecrypt reports that a correctly signed envelope failed AEAD
-	// authentication.
+	// ErrDecrypt reports that a correctly signed envelope failed the key
+	// commitment check or AEAD authentication.
 	ErrDecrypt = errors.New("senderkey: message authentication failed")
 
 	// ErrPlaintextTooLarge reports a plaintext longer than MaxPlaintextSize.
@@ -109,7 +135,7 @@ var (
 	ErrChainExhausted = errors.New("senderkey: sender chain exhausted")
 
 	// ErrInvalidState reports a serialised sender or receiver state that is
-	// not canonical or violates an invariant.
+	// not canonical, is of another format version, or violates an invariant.
 	ErrInvalidState = errors.New("senderkey: invalid serialised state")
 
 	// ErrDestroyed reports use of a sender or receiver after Destroy.
@@ -120,34 +146,36 @@ var (
 	ErrInvalidArgument = errors.New("senderkey: invalid argument")
 )
 
+// Sizes of the fixed-length header and its encryption.
+const (
+	// headerSize is the length of an encoded header:
+	//
+	//	Version(1) || GroupID(32) || Sender(32) || Generation(4) ||
+	//	Iteration(4) || GroupEpoch(8) || StateBinding(32) || Salt(16) ||
+	//	Commitment(32)
+	//
+	// with integers in big-endian order.
+	headerSize = 1 + len(GroupID{}) + identity.IDSize + 4 + 4 + 8 + StateBindingSize + SaltSize + commitmentSize
+
+	// encHeaderSize is the length of an encrypted header.
+	encHeaderSize = headerSize + chacha20poly1305.Overhead
+)
+
 // Size bounds applied before decoding, so hostile input cannot make the
 // decoder do work proportional to an unbounded length.
 const (
-	maxHeaderSize       = 128
-	maxEnvelopeSize     = MaxPlaintextSize + chacha20poly1305.Overhead + hybridsig.SignatureSize + maxHeaderSize + 32
-	maxDistributionSize = hybridsig.PublicKeySize + 128
+	maxEnvelopeSize     = MaxPlaintextSize + chacha20poly1305.Overhead + hybridsig.SignatureSize + HeaderNonceSize + encHeaderSize + 32
+	maxDistributionSize = hybridsig.PublicKeySize + HeaderKeySize + 128
 )
 
-// headerWire is the group message header: canonical CBOR with integer keys.
-// Its exact encoding is the AEAD associated data and the first part of the
-// signed payload.
-type headerWire struct {
-	Version    uint8  `cbor:"1,keyasint"`
-	GroupID    []byte `cbor:"2,keyasint"`
-	Sender     []byte `cbor:"3,keyasint"`
-	Generation uint32 `cbor:"4,keyasint"`
-	Iteration  uint32 `cbor:"5,keyasint"`
-	Salt       []byte `cbor:"6,keyasint"`
-}
-
-// envelopeWire is the group envelope. Header holds the canonical header
-// encoding as a byte string, so the receiver verifies and authenticates
-// exactly the bytes the sender signed.
+// envelopeWire is the group envelope. Apart from the version, every field is
+// random-looking or of a length that depends only on the plaintext length.
 type envelopeWire struct {
-	Version    uint8  `cbor:"1,keyasint"`
-	Header     []byte `cbor:"2,keyasint"`
-	Ciphertext []byte `cbor:"3,keyasint"`
-	Sig        []byte `cbor:"4,keyasint"`
+	Version     uint8  `cbor:"1,keyasint"`
+	HeaderNonce []byte `cbor:"2,keyasint"`
+	EncHeader   []byte `cbor:"3,keyasint"`
+	Ciphertext  []byte `cbor:"4,keyasint"`
+	Sig         []byte `cbor:"5,keyasint"`
 }
 
 // distributionWire is the sender key distribution message.
@@ -159,6 +187,28 @@ type distributionWire struct {
 	ChainKey   []byte `cbor:"5,keyasint"`
 	SigningPub []byte `cbor:"6,keyasint"`
 	GroupEpoch uint64 `cbor:"7,keyasint"`
+	HeaderKey  []byte `cbor:"8,keyasint"`
+}
+
+// Header is the decrypted header of a group envelope. It is authenticated
+// only once [Receiver.Decrypt] has verified the signature; the result of
+// [OpenHeader] is good for routing and nothing else.
+type Header struct {
+	// Group is the group the message was sent to.
+	Group GroupID
+	// Sender is the member that sent the message.
+	Sender identity.ID
+	// Generation is the sender key generation of the message.
+	Generation uint32
+	// Iteration is the chain index of the message.
+	Iteration uint32
+	// GroupEpoch is the group epoch the sender was at when it sent the
+	// message.
+	GroupEpoch uint64
+	// StateBinding is the binding of the sender's group state when it sent
+	// the message. Receivers compare it with their own state's binding to
+	// detect a fork.
+	StateBinding [StateBindingSize]byte
 }
 
 // header is a validated group message header.
@@ -167,75 +217,88 @@ type header struct {
 	sender     identity.ID
 	generation uint32
 	iteration  uint32
+	groupEpoch uint64
+	binding    [StateBindingSize]byte
 	salt       [SaltSize]byte
+	commitment [commitmentSize]byte
 }
 
-// envelope is a validated group envelope with its parsed header.
+// public returns the fields of h the caller may see.
+func (h header) public() Header {
+	return Header{
+		Group:        h.group,
+		Sender:       h.sender,
+		Generation:   h.generation,
+		Iteration:    h.iteration,
+		GroupEpoch:   h.groupEpoch,
+		StateBinding: h.binding,
+	}
+}
+
+// envelope is a group envelope whose shape and sizes have been checked. Its
+// header is still encrypted.
 type envelope struct {
-	headerBytes []byte
-	ciphertext  []byte
-	sig         []byte
-	header      header
+	nonce      []byte
+	encHeader  []byte
+	ciphertext []byte
+	sig        []byte
 }
 
-// encodeHeader returns the canonical encoding of h.
-func encodeHeader(h header) ([]byte, error) {
-	return encMode.Marshal(headerWire{
-		Version:    HeaderVersion,
-		GroupID:    h.group[:],
-		Sender:     h.sender[:],
-		Generation: h.generation,
-		Iteration:  h.iteration,
-		Salt:       h.salt[:],
-	})
+// encodeHeader returns the fixed-length encoding of h. A fixed length keeps
+// the size of the encrypted header independent of the generation, iteration
+// and epoch, which a variable-length integer encoding would reveal.
+func encodeHeader(h header) []byte {
+	b := make([]byte, 0, headerSize)
+	b = append(b, HeaderVersion)
+	b = append(b, h.group[:]...)
+	b = append(b, h.sender[:]...)
+	b = binary.BigEndian.AppendUint32(b, h.generation)
+	b = binary.BigEndian.AppendUint32(b, h.iteration)
+	b = binary.BigEndian.AppendUint64(b, h.groupEpoch)
+	b = append(b, h.binding[:]...)
+	b = append(b, h.salt[:]...)
+	return append(b, h.commitment[:]...)
 }
 
-// parseHeader decodes and validates a header, accepting only its canonical
-// encoding so that the signed and authenticated bytes are the only
-// representation of a given header. The iteration math.MaxUint32 is never
-// produced and is rejected, so a receiver's next-iteration counter cannot
-// wrap.
+// parseHeader decodes and validates a header. Every input of headerSize
+// bytes with the right version encodes exactly one header and vice versa, so
+// the encoding is canonical by construction. The iteration math.MaxUint32 is
+// never produced and is rejected, so a receiver's next-iteration counter
+// cannot wrap.
 func parseHeader(encoded []byte) (header, error) {
-	if len(encoded) > maxHeaderSize {
-		return header{}, ErrMalformed
-	}
-	var w headerWire
-	if err := strictDecMode.Unmarshal(encoded, &w); err != nil {
-		return header{}, ErrMalformed
-	}
-	switch {
-	case w.Version != HeaderVersion,
-		len(w.GroupID) != len(GroupID{}),
-		len(w.Sender) != identity.IDSize,
-		len(w.Salt) != SaltSize,
-		w.Iteration == math.MaxUint32:
-		return header{}, ErrMalformed
-	}
-	canonical, err := encMode.Marshal(w)
-	if err != nil || !bytes.Equal(canonical, encoded) {
+	if len(encoded) != headerSize || encoded[0] != HeaderVersion {
 		return header{}, ErrMalformed
 	}
 	var h header
-	copy(h.group[:], w.GroupID)
-	copy(h.sender[:], w.Sender)
-	h.generation = w.Generation
-	h.iteration = w.Iteration
-	copy(h.salt[:], w.Salt)
+	rest := encoded[1:]
+	rest = rest[copy(h.group[:], rest):]
+	rest = rest[copy(h.sender[:], rest):]
+	h.generation = binary.BigEndian.Uint32(rest)
+	h.iteration = binary.BigEndian.Uint32(rest[4:])
+	h.groupEpoch = binary.BigEndian.Uint64(rest[8:])
+	rest = rest[16:]
+	rest = rest[copy(h.binding[:], rest):]
+	rest = rest[copy(h.salt[:], rest):]
+	copy(h.commitment[:], rest)
+	if h.iteration == math.MaxUint32 {
+		return header{}, ErrMalformed
+	}
 	return h, nil
 }
 
 // encodeEnvelope returns the canonical encoding of an envelope.
-func encodeEnvelope(headerBytes, ciphertext, sig []byte) ([]byte, error) {
+func encodeEnvelope(env envelope) ([]byte, error) {
 	return encMode.Marshal(envelopeWire{
-		Version:    EnvelopeVersion,
-		Header:     headerBytes,
-		Ciphertext: ciphertext,
-		Sig:        sig,
+		Version:     EnvelopeVersion,
+		HeaderNonce: env.nonce,
+		EncHeader:   env.encHeader,
+		Ciphertext:  env.ciphertext,
+		Sig:         env.sig,
 	})
 }
 
-// parseEnvelope decodes and validates an envelope and its header. It checks
-// only shape and size; the signature is left to the receiver.
+// parseEnvelope decodes an envelope and checks its shape and sizes. It
+// accepts only the canonical encoding and uses no key.
 func parseEnvelope(encoded []byte) (envelope, error) {
 	if len(encoded) > maxEnvelopeSize {
 		return envelope{}, ErrMalformed
@@ -246,46 +309,33 @@ func parseEnvelope(encoded []byte) (envelope, error) {
 	}
 	switch {
 	case w.Version != EnvelopeVersion,
+		len(w.HeaderNonce) != HeaderNonceSize,
+		len(w.EncHeader) != encHeaderSize,
 		len(w.Sig) != hybridsig.SignatureSize,
 		len(w.Ciphertext) < chacha20poly1305.Overhead,
 		len(w.Ciphertext) > MaxPlaintextSize+chacha20poly1305.Overhead:
 		return envelope{}, ErrMalformed
 	}
-	h, err := parseHeader(w.Header)
-	if err != nil {
-		return envelope{}, err
-	}
 	canonical, err := encMode.Marshal(w)
 	if err != nil || !bytes.Equal(canonical, encoded) {
 		return envelope{}, ErrMalformed
 	}
-	return envelope{headerBytes: w.Header, ciphertext: w.Ciphertext, sig: w.Sig, header: h}, nil
+	return envelope{nonce: w.HeaderNonce, encHeader: w.EncHeader, ciphertext: w.Ciphertext, sig: w.Sig}, nil
 }
 
-// envelopePrefix is how every canonical group envelope starts: a map of four
-// pairs (0xa4) whose first key is 1 (0x01) with value EnvelopeVersion,
-// followed by key 2 (0x02).
-var envelopePrefix = []byte{0xa4, 0x01, EnvelopeVersion, 0x02}
+// envelopePrefix is how every canonical group envelope starts: a map of five
+// pairs (0xa5) whose first key is 1 (0x01) with value EnvelopeVersion,
+// followed by key 2 (0x02) and the head of a 24-byte byte string (0x58 0x18).
+var envelopePrefix = []byte{0xa5, 0x01, EnvelopeVersion, 0x02, 0x58, HeaderNonceSize}
 
 // IsGroupEnvelope reports whether b has the shape of a group envelope, as
 // opposed to a pairwise envelope of internal/e2e (whose version is 2). It
-// only inspects the first bytes and is meant for routing; a true result does
-// not mean that b is well-formed.
+// inspects only the first bytes, which are identical for every group
+// envelope, so it reveals nothing beyond "this is a group message". It is
+// meant for routing; a true result does not mean that b is well-formed.
+// Envelopes of earlier group formats are not recognised.
 func IsGroupEnvelope(b []byte) bool {
 	return bytes.HasPrefix(b, envelopePrefix)
-}
-
-// ParseEnvelopeHeader returns the routing fields of a group envelope without
-// any keys, so the caller can find the [Receiver] for it. The fields are not
-// authenticated until [Receiver.Decrypt] succeeds. All failures are
-// [ErrMalformed].
-func ParseEnvelopeHeader(encoded []byte) (group GroupID, sender identity.ID, generation, iteration uint32, err error) {
-	env, err := parseEnvelope(encoded)
-	if err != nil {
-		return group, sender, 0, 0, err
-	}
-	h := env.header
-	return h.group, h.sender, h.generation, h.iteration, nil
 }
 
 // DistributionInfo is the public metadata of a distribution message.
@@ -306,7 +356,14 @@ type DistributionInfo struct {
 type distribution struct {
 	info       DistributionInfo
 	chain      [keySize]byte
+	headerKey  [HeaderKeySize]byte
 	signingPub *hybridsig.PublicKey
+}
+
+// destroy clears the secrets of d.
+func (d *distribution) destroy() {
+	clear(d.chain[:])
+	clear(d.headerKey[:])
 }
 
 // ParseDistribution validates a distribution message and returns its public
@@ -317,7 +374,7 @@ func ParseDistribution(encoded []byte) (DistributionInfo, error) {
 	if err != nil {
 		return DistributionInfo{}, err
 	}
-	clear(d.chain[:])
+	d.destroy()
 	return d.info, nil
 }
 
@@ -334,10 +391,12 @@ func parseDistribution(encoded []byte) (distribution, error) {
 		return distribution{}, ErrMalformed
 	}
 	defer clear(w.ChainKey)
+	defer clear(w.HeaderKey)
 	switch {
 	case w.Version != DistributionVersion,
 		len(w.GroupID) != len(GroupID{}),
 		len(w.ChainKey) != keySize,
+		len(w.HeaderKey) != HeaderKeySize,
 		len(w.SigningPub) != hybridsig.PublicKeySize,
 		w.Iteration == math.MaxUint32:
 		return distribution{}, ErrMalformed
@@ -361,6 +420,7 @@ func parseDistribution(encoded []byte) (distribution, error) {
 	d.info.Iteration = w.Iteration
 	d.info.GroupEpoch = w.GroupEpoch
 	copy(d.chain[:], w.ChainKey)
+	copy(d.headerKey[:], w.HeaderKey)
 	d.signingPub = pub
 	return d, nil
 }
@@ -370,12 +430,12 @@ var (
 	// encodings, sorted map keys, no indefinite-length items and no tags.
 	encMode cbor.EncMode
 
-	// strictDecMode decodes envelopes, headers and distribution messages: no
-	// duplicate or unknown keys, no indefinite lengths, no tags, small
-	// nesting and collection limits.
+	// strictDecMode decodes envelopes, distribution messages and sender
+	// states: no duplicate or unknown keys, no indefinite lengths, no tags,
+	// small nesting and collection limits.
 	strictDecMode cbor.DecMode
 
-	// stateDecMode decodes serialised states. It differs from strictDecMode
+	// stateDecMode decodes receiver states. It differs from strictDecMode
 	// only in allowing arrays long enough for the stored skipped keys.
 	stateDecMode cbor.DecMode
 )

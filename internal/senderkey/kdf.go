@@ -106,12 +106,78 @@ func openMessage(mk [keySize]byte, salt, ciphertext, ad []byte) ([]byte, error) 
 	return plaintext, nil
 }
 
+// labelCommit is the HMAC input of the message key commitment.
+const labelCommit = "qchat/v1/group-commit"
+
+// labelHeader is the associated data of the header encryption.
+const labelHeader = "qchat/v1/group-header"
+
+// commitmentSize is the size of a message key commitment.
+const commitmentSize = 32
+
+// commitMessageKey returns the commitment to message key mk:
+//
+//	commitment = HMAC-SHA256(MK, "qchat/v1/group-commit").
+//
+// The commitment travels in the encrypted header, which is signed. HMAC-SHA256
+// with a 32-byte key is collision resistant in the key, so every receiver
+// that accepts an envelope has derived the same message key, and therefore
+// the same AEAD key and nonce, even if a malicious sender distributed
+// different chain keys to different members. ChaCha20-Poly1305 is not
+// key-committing; without this check one ciphertext could be made to open
+// to different plaintexts under different keys.
+func commitMessageKey(mk [keySize]byte) [commitmentSize]byte {
+	mac := hmac.New(sha256.New, mk[:])
+	mac.Write([]byte(labelCommit))
+	var c [commitmentSize]byte
+	mac.Sum(c[:0])
+	return c
+}
+
+// sealHeader encrypts an encoded header with XChaCha20-Poly1305 under the
+// generation's header key and a random 24-byte nonce, with the associated
+// data "qchat/v1/group-header". The nonce is large enough to be drawn at
+// random for every message of a generation.
+func sealHeader(key *[HeaderKeySize]byte, nonce, encoded []byte) ([]byte, error) {
+	aead, err := chacha20poly1305.NewX(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("senderkey: creating header AEAD: %w", err)
+	}
+	return aead.Seal(nil, nonce, encoded, []byte(labelHeader)), nil
+}
+
+// openHeader decrypts an encrypted header under one candidate header key. A
+// failure only means that the key does not fit; it reports false and costs
+// one HChaCha20, one ChaCha20 block and Poly1305 over encHeaderSize bytes.
+func openHeader(key *[HeaderKeySize]byte, nonce, sealed []byte) ([]byte, bool) {
+	aead, err := chacha20poly1305.NewX(key[:])
+	if err != nil {
+		return nil, false
+	}
+	encoded, err := aead.Open(nil, nonce, sealed, []byte(labelHeader))
+	if err != nil {
+		return nil, false
+	}
+	return encoded, true
+}
+
 // signedPayload is the message covered by an envelope signature:
-// CBOR(header) || ciphertext. The header is a single canonical CBOR item, and
-// CBOR items are self-delimiting, so the boundary between the two parts is
-// unambiguous: no other split of the same bytes yields a valid header.
-func signedPayload(header, ciphertext []byte) []byte {
-	msg := make([]byte, 0, len(header)+len(ciphertext))
-	msg = append(msg, header...)
-	return append(msg, ciphertext...)
+//
+//	EnvelopeVersion || HeaderNonce || EncHeader || Ciphertext || Header
+//
+// where Header is the plaintext header (which carries the message key
+// commitment). Every part except the ciphertext has a fixed length, so the
+// concatenation is unambiguous. The encrypted parts are signed so that
+// nobody without the signing key can make a receiver do more than the
+// header decryption; the plaintext header is signed as well because
+// XChaCha20-Poly1305 is not key-committing: a sender that handed different
+// header keys to different members could otherwise craft one EncHeader that
+// opens to different headers for them.
+func signedPayload(nonce, encHeader, ciphertext, headerBytes []byte) []byte {
+	msg := make([]byte, 0, 1+len(nonce)+len(encHeader)+len(ciphertext)+len(headerBytes))
+	msg = append(msg, EnvelopeVersion)
+	msg = append(msg, nonce...)
+	msg = append(msg, encHeader...)
+	msg = append(msg, ciphertext...)
+	return append(msg, headerBytes...)
 }
