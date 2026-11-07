@@ -40,7 +40,7 @@
 // authenticates before it counts as Connected: Hello/Welcome, then
 // Register/Registered, AuthBegin/AuthChallenge and AuthProof/AuthOK, all
 // within one handshake timeout. While connected, Request sends KeyRequest,
-// Send, Register, PrekeyUpload or PrekeyRequest frames and returns the
+// Send, SendMulti, Register, PrekeyUpload or PrekeyRequest frames and returns the
 // matching response, payloads routed to the local identity arrive as
 // Delivery events, and Ack tells the relay that a delivered payload has
 // been processed and may be deleted. The session carries ciphertext only;
@@ -306,7 +306,8 @@ func (s *Session) setDisconnected() {
 
 // Request sends one request frame of type t with the given body and waits
 // for the response with the same frame ID. t must be TypeKeyRequest,
-// TypeSend, TypeRegister, TypePrekeyUpload or TypePrekeyRequest. Request is only allowed while the session is
+// TypeSend, TypeSendMulti, TypeRegister, TypePrekeyUpload or
+// TypePrekeyRequest. Request is only allowed while the session is
 // authenticated; otherwise it returns ErrNotConnected. An Error frame in
 // reply is returned as a *RemoteError. If ctx ends or the connection is lost
 // first, Request returns an error and does not resend the request; whether
@@ -351,6 +352,8 @@ func responseType(t protocol.FrameType) (protocol.FrameType, bool) {
 		return protocol.TypeKeyResponse, true
 	case protocol.TypeSend:
 		return protocol.TypeSendResult, true
+	case protocol.TypeSendMulti:
+		return protocol.TypeSendMultiResult, true
 	case protocol.TypeRegister:
 		return protocol.TypeRegistered, true
 	case protocol.TypePrekeyUpload:

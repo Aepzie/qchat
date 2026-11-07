@@ -369,7 +369,7 @@ func (c *liveConn) handleFrame(ctx context.Context, r readResult) error {
 		c.session.emit(Delivery{From: [protocol.IDSize]byte(deliver.From), Payload: bytes.Clone(deliver.Payload), QueueID: deliver.QueueID})
 		return nil
 	case protocol.TypeRegistered, protocol.TypeAuthChallenge, protocol.TypeAuthOK,
-		protocol.TypeKeyResponse, protocol.TypeSendResult, protocol.TypePrekeyStatus, protocol.TypePrekeyResponse:
+		protocol.TypeKeyResponse, protocol.TypeSendResult, protocol.TypeSendMultiResult, protocol.TypePrekeyStatus, protocol.TypePrekeyResponse:
 		c.resolve(f)
 		return nil
 	case protocol.TypeError:
