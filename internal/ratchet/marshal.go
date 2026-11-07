@@ -7,8 +7,9 @@ import (
 	"github.com/craguS/qchat/internal/crypto/sealbox"
 )
 
-// StateVersion is the version of the serialised state format.
-const StateVersion = 1
+// StateVersion is the version of the serialised state format. Version 1
+// states are rejected: their sessions must be started again.
+const StateVersion = 2
 
 // stateWire is the serialised form of a [State]: canonical CBOR with integer
 // keys. Optional fields are omitted when zero, so every state has exactly one
@@ -34,8 +35,10 @@ type stateWire struct {
 	RecvN         uint32        `cbor:"18,keyasint,omitempty"`
 	RecvTarget    []byte        `cbor:"19,keyasint,omitempty"`
 	RecvKEMCTHash []byte        `cbor:"20,keyasint,omitempty"`
-	OwnKeys       [][]byte      `cbor:"21,keyasint"`
+	OwnKeys       [][]byte      `cbor:"21,keyasint,omitempty"`
 	Skipped       []skippedWire `cbor:"22,keyasint,omitempty"`
+	Rotate        bool          `cbor:"23,keyasint,omitempty"`
+	PeerAck       uint32        `cbor:"24,keyasint,omitempty"`
 }
 
 type skippedWire struct {
@@ -64,6 +67,8 @@ func (s *State) Marshal() ([]byte, error) {
 		Peer:     s.peer[:],
 		RootSend: s.rootSend[:],
 		RootRecv: s.rootRecv[:],
+		Rotate:   s.rotate,
+		PeerAck:  s.peerAck,
 	}
 	if s.send.epoch > 0 {
 		w.SendEpoch = s.send.epoch
@@ -190,9 +195,15 @@ func stateFromWire(w *stateWire) (*State, error) {
 		copy(s.recv.kemCTHash[:], w.RecvKEMCTHash)
 	}
 
-	if len(w.OwnKeys) == 0 || len(w.OwnKeys) > MaxUnconsumedOwnKeys {
+	if len(w.OwnKeys) > MaxUnconsumedOwnKeys || (len(w.OwnKeys) == 0 && !w.Rotate) || (w.Rotate && s.recv.epoch == 0) {
 		return nil, ErrInvalidState
 	}
+	s.rotate = w.Rotate
+	if w.PeerAck > s.send.epoch {
+		s.Destroy()
+		return nil, ErrInvalidState
+	}
+	s.peerAck = w.PeerAck
 	for _, seed := range w.OwnKeys {
 		own, err := sealbox.NewPrivateKey(seed)
 		if err != nil {
@@ -211,7 +222,7 @@ func stateFromWire(w *stateWire) (*State, error) {
 		pos := position{sk.Epoch, sk.N}
 		_, dup := seen[pos]
 		current := sk.Epoch == s.recv.epoch && sk.N >= s.recv.n
-		if dup || sk.Epoch == 0 || sk.Epoch > s.recv.epoch || current || len(sk.Key) != keySize {
+		if dup || sk.Epoch == 0 || sk.Epoch > s.recv.epoch || current || skippedTooOld(sk.Epoch, s.recv.epoch) || len(sk.Key) != keySize {
 			s.Destroy()
 			return nil, ErrInvalidState
 		}

@@ -2,6 +2,7 @@ package ratchet
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -28,8 +29,17 @@ const (
 	// the bound is also a bound on that exposure.
 	MaxStoredSkipped = 1000
 
+	// MaxSkippedEpochAge is how many receiving epochs a skipped message key
+	// survives: a key of epoch e is deleted as soon as the receiving epoch
+	// exceeds e + MaxSkippedEpochAge. Since both sides start a new epoch
+	// about once per round trip, a withheld message cannot keep its key
+	// alive for long.
+	MaxSkippedEpochAge = 2
+
 	// MaxUnconsumedOwnKeys is the largest number of own ratchet private keys
 	// a session keeps while waiting for the peer to encapsulate to them.
+	// While that many are held, no further key is generated: deleting one
+	// instead could delete the key a peer epoch already in flight targets.
 	MaxUnconsumedOwnKeys = 4
 )
 
@@ -58,7 +68,7 @@ var (
 
 	// ErrReplay reports a message from an epoch or position whose key is no
 	// longer held: it was already decrypted (a replay), or it arrived so late
-	// that its skipped key was evicted.
+	// that its skipped key was deleted.
 	ErrReplay = errors.New("ratchet: message key already used or discarded")
 
 	// ErrNoPeerKey reports Encrypt on a responder state that has not yet
@@ -116,8 +126,7 @@ type Params struct {
 // Its methods are safe for concurrent use, but a session's persistence order
 // is the caller's responsibility: the state must be written back after every
 // Encrypt before the ciphertext is handed to the relay, and after every
-// Decrypt before the plaintext is shown. Reusing an older copy of a state for
-// Encrypt would reuse message keys.
+// Decrypt before the plaintext is shown.
 type State struct {
 	mu        sync.Mutex
 	destroyed bool
@@ -136,9 +145,18 @@ type State struct {
 	peerPub *sealbox.PublicKey
 	peerPos position
 
+	// peerAck is the highest RecvEpoch the peer has reported, the newest
+	// sending epoch of this side the peer has decrypted from.
+	peerAck uint32
+
 	// ownKeys are this side's unconsumed ratchet private keys, oldest
-	// first. The last one is announced in every header.
+	// first. The last one is announced in every header. It is empty only
+	// between a decryption that consumed every key and the next Encrypt.
 	ownKeys []*sealbox.PrivateKey
+
+	// rotate is set by every successful decryption: the next Encrypt
+	// generates and announces a fresh own key.
+	rotate bool
 
 	// skipped are stored message keys of messages that have not arrived,
 	// oldest first.
@@ -191,6 +209,8 @@ func New(p Params) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer clear(ab[:])
+	defer clear(ba[:])
 	switch p.Role {
 	case Initiator:
 		if p.PeerInitialPub == nil || p.OwnInitialKey != nil {
@@ -219,8 +239,6 @@ func New(p Params) (*State, error) {
 		s.rootSend, s.rootRecv = ba, ab
 		s.ownKeys = []*sealbox.PrivateKey{own}
 	}
-	clear(ab[:])
-	clear(ba[:])
 	return s, nil
 }
 
@@ -236,11 +254,15 @@ func (s *State) ReceivedAny() bool {
 // Encrypt encrypts plaintext as the next message to the peer and returns the
 // encoded header and the ciphertext (plaintext plus a 16-byte tag).
 //
-// If the peer has announced a ratchet key newer than the one the current
-// sending epoch targets (or no epoch has started), Encrypt first starts a new
-// epoch by encapsulating to that key and mixing the shared secret into the
-// sending root chain. This is the step that provides post-compromise
-// security. On error the state is unchanged.
+// If no epoch has started, or the peer has announced a ratchet key newer than
+// the one the current sending epoch targets and has acknowledged the current
+// epoch (see [Header.RecvEpoch]), Encrypt first starts a new epoch by
+// encapsulating to that key and mixing the shared secret into the sending
+// root chain. If a message has been decrypted since the last own key was
+// generated, and fewer than MaxUnconsumedOwnKeys are held, it also generates
+// a fresh own ratchet key and announces it from this message on, so that the
+// peer's next epoch targets a key that did not exist before. These two steps
+// provide post-compromise security. On error the state is unchanged.
 func (s *State) Encrypt(plaintext []byte) (header, ciphertext []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -257,7 +279,7 @@ func (s *State) Encrypt(plaintext []byte) (header, ciphertext []byte, err error)
 	defer clear(root[:])
 
 	target := targetOf(s.peerPub)
-	if next.epoch == 0 || target != next.target {
+	if next.epoch == 0 || (target != next.target && s.peerAck >= next.epoch) {
 		if next.epoch == math.MaxUint32 {
 			return nil, nil, ErrExhausted
 		}
@@ -280,22 +302,45 @@ func (s *State) Encrypt(plaintext []byte) (header, ciphertext []byte, err error)
 		return nil, nil, ErrExhausted
 	}
 
+	var fresh *sealbox.PrivateKey
+	if (s.rotate && len(s.ownKeys) < MaxUnconsumedOwnKeys) || len(s.ownKeys) == 0 {
+		if fresh, err = sealbox.GenerateKey(); err != nil {
+			return nil, nil, fmt.Errorf("ratchet: generating ratchet key: %w", err)
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed && fresh != nil {
+			fresh.Destroy()
+		}
+	}()
+	announced := fresh
+	if announced == nil {
+		announced = s.ownKeys[len(s.ownKeys)-1]
+	}
+	salt := make([]byte, SaltSize)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, nil, fmt.Errorf("ratchet: generating salt: %w", err)
+	}
+
 	mk, nextChain := chainStep(next.chain)
 	defer clear(mk[:])
 	defer clear(nextChain[:])
 	header, err = encodeHeader(Header{
 		Version:    HeaderVersion,
 		Epoch:      next.epoch,
-		RatchetPub: s.ownKeys[len(s.ownKeys)-1].Public().Bytes(),
+		RatchetPub: announced.Public().Bytes(),
 		Target:     next.target[:],
 		KEMCT:      next.kemCT,
 		PN:         next.pn,
 		N:          next.n,
+		Salt:       salt,
+		RecvEpoch:  s.recv.epoch,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("ratchet: encoding header: %w", err)
 	}
-	ciphertext, err = sealMessage(mk, plaintext, associatedData(header, s.self, s.peer))
+	ciphertext, err = sealMessage(mk, salt, plaintext, associatedData(header, s.self, s.peer))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -304,7 +349,22 @@ func (s *State) Encrypt(plaintext []byte) (header, ciphertext []byte, err error)
 	next.n++
 	s.send = next
 	s.rootSend = root
+	if fresh != nil {
+		s.ownKeys = append(s.ownKeys, fresh)
+		s.rotate = false
+	}
+	committed = true
 	return header, ciphertext, nil
+}
+
+// dropOwnKeys destroys and removes the k oldest own keys.
+func (s *State) dropOwnKeys(k int) {
+	for _, own := range s.ownKeys[:k] {
+		own.Destroy()
+	}
+	kept := copy(s.ownKeys, s.ownKeys[k:])
+	clear(s.ownKeys[kept:])
+	s.ownKeys = s.ownKeys[:kept]
 }
 
 // pendingDecrypt collects every state change of a decryption. Nothing is
@@ -318,7 +378,6 @@ type pendingDecrypt struct {
 	recv        *recvChain
 	rootRecv    *[keySize]byte
 	consumedKey int
-	freshKey    *sealbox.PrivateKey
 	peerPub     *sealbox.PublicKey
 }
 
@@ -331,9 +390,6 @@ func (p *pendingDecrypt) wipe() {
 	}
 	if p.rootRecv != nil {
 		clear(p.rootRecv[:])
-	}
-	if p.freshKey != nil {
-		p.freshKey.Destroy()
 	}
 }
 
@@ -350,6 +406,9 @@ func (s *State) Decrypt(header, ciphertext []byte) (plaintext []byte, err error)
 	h, err := ParseHeader(header)
 	if err != nil {
 		return nil, err
+	}
+	if h.RecvEpoch > s.send.epoch {
+		return nil, ErrMalformedHeader
 	}
 	if len(ciphertext) < chacha20poly1305.Overhead {
 		return nil, ErrDecrypt
@@ -371,12 +430,6 @@ func (s *State) Decrypt(header, ciphertext []byte) (plaintext []byte, err error)
 	if err == nil {
 		err = s.preparePeerKey(pending, pos)
 	}
-	if err == nil && pending.consumedKey == len(s.ownKeys)-1 {
-		pending.freshKey, err = sealbox.GenerateKey()
-		if err != nil {
-			err = fmt.Errorf("ratchet: generating ratchet key: %w", err)
-		}
-	}
 	if err != nil {
 		clear(plaintext)
 		pending.wipe()
@@ -393,7 +446,7 @@ func (s *State) decryptSkipped(p *pendingDecrypt, pos position, ciphertext, ad [
 		if s.skipped[i].pos != pos {
 			continue
 		}
-		plaintext, err := openMessage(s.skipped[i].key, ciphertext, ad)
+		plaintext, err := openMessage(s.skipped[i].key, p.header.Salt, ciphertext, ad)
 		if err != nil {
 			return nil, err
 		}
@@ -419,7 +472,8 @@ func (s *State) decryptCurrent(p *pendingDecrypt, ciphertext, ad []byte) ([]byte
 }
 
 // decryptNewEpoch handles the first message to arrive from the peer's next
-// epoch. It checks all counters before doing any KEM work.
+// epoch. It checks all counters before doing any KEM work. The epoch may
+// target any of the own keys still held.
 func (s *State) decryptNewEpoch(p *pendingDecrypt, ciphertext, ad []byte) ([]byte, error) {
 	h := p.header
 	previousGap := uint64(0)
@@ -488,7 +542,7 @@ func (s *State) advanceAndOpen(p *pendingDecrypt, epoch uint32, ciphertext, ad [
 	}
 	mk, next := chainStep(p.recv.chain)
 	defer clear(mk[:])
-	plaintext, err := openMessage(mk, ciphertext, ad)
+	plaintext, err := openMessage(mk, p.header.Salt, ciphertext, ad)
 	if err != nil {
 		clear(next[:])
 		return nil, err
@@ -532,25 +586,16 @@ func (s *State) commit(p *pendingDecrypt, pos position) {
 		for i := range p.newSkipped {
 			clear(p.newSkipped[i].key[:])
 		}
-		if excess := len(s.skipped) - MaxStoredSkipped; excess > 0 {
-			s.dropOldestSkipped(excess)
-		}
+	}
+	s.dropAgedSkipped()
+	if excess := len(s.skipped) - MaxStoredSkipped; excess > 0 {
+		s.dropOldestSkipped(excess)
 	}
 	if p.consumedKey >= 0 {
-		for _, own := range s.ownKeys[:p.consumedKey+1] {
-			own.Destroy()
-		}
-		s.ownKeys = append([]*sealbox.PrivateKey(nil), s.ownKeys[p.consumedKey+1:]...)
+		s.dropOwnKeys(p.consumedKey + 1)
 	}
-	if p.freshKey != nil {
-		s.ownKeys = append(s.ownKeys, p.freshKey)
-		if excess := len(s.ownKeys) - MaxUnconsumedOwnKeys; excess > 0 {
-			for _, own := range s.ownKeys[:excess] {
-				own.Destroy()
-			}
-			s.ownKeys = append([]*sealbox.PrivateKey(nil), s.ownKeys[excess:]...)
-		}
-	}
+	s.rotate = true
+	s.peerAck = max(s.peerAck, p.header.RecvEpoch)
 	if s.peerPub == nil || pos.after(s.peerPos) {
 		if p.peerPub != nil {
 			s.peerPub = p.peerPub
@@ -579,6 +624,30 @@ func (s *State) dropOldestSkipped(k int) {
 		clear(s.skipped[i].key[:])
 	}
 	s.skipped = s.skipped[:kept]
+}
+
+// dropAgedSkipped deletes every stored skipped key of an epoch more than
+// MaxSkippedEpochAge epochs before the current receiving epoch.
+func (s *State) dropAgedSkipped() {
+	kept := 0
+	for i := range s.skipped {
+		if skippedTooOld(s.skipped[i].pos.epoch, s.recv.epoch) {
+			clear(s.skipped[i].key[:])
+			continue
+		}
+		s.skipped[kept] = s.skipped[i]
+		kept++
+	}
+	for i := kept; i < len(s.skipped); i++ {
+		clear(s.skipped[i].key[:])
+	}
+	s.skipped = s.skipped[:kept]
+}
+
+// skippedTooOld reports whether a skipped key of epoch must be deleted while
+// the receiving epoch is current. epoch never exceeds current.
+func skippedTooOld(epoch, current uint32) bool {
+	return current-epoch > MaxSkippedEpochAge
 }
 
 // Destroy clears every secret held by s and makes all later calls fail with

@@ -10,10 +10,14 @@ import (
 )
 
 // HeaderVersion is the only header version this package produces and accepts.
-const HeaderVersion = 1
+// Version 1 headers (without Salt) are rejected.
+const HeaderVersion = 2
 
 // TargetSize is the size of [Header.Target], a SHA-256 digest.
 const TargetSize = sha256.Size
+
+// SaltSize is the size of [Header.Salt].
+const SaltSize = 16
 
 // Header is the cleartext header sent with every ratchet message, encoded as
 // canonical CBOR with integer keys. It is not encrypted (header encryption is
@@ -41,6 +45,17 @@ type Header struct {
 	// value math.MaxUint32 is never produced and is rejected, so that the
 	// receiver's next-index counter cannot wrap.
 	N uint32 `cbor:"7,keyasint"`
+	// Salt is SaltSize fresh random bytes chosen for every message. It is the
+	// HKDF salt of the message's AEAD key and nonce, so that a sender whose
+	// state was rolled back, and which therefore uses a message key a second
+	// time, still never reuses a key and nonce pair.
+	Salt []byte `cbor:"8,keyasint"`
+	// RecvEpoch is the sender's receiving epoch: the newest epoch of the
+	// recipient's direction from which the sender has decrypted a message,
+	// or 0. The recipient starts its next sending epoch only once the peer
+	// has acknowledged the current one this way, so its epochs never get
+	// more than one ahead of what the peer can decrypt.
+	RecvEpoch uint32 `cbor:"9,keyasint"`
 }
 
 // encodeHeader returns the canonical encoding of h.
@@ -67,7 +82,8 @@ func ParseHeader(encoded []byte) (Header, error) {
 		h.N == math.MaxUint32,
 		len(h.RatchetPub) != sealbox.PublicKeySize,
 		len(h.Target) != TargetSize,
-		len(h.KEMCT) != sealbox.EncapsulatedKeySize:
+		len(h.KEMCT) != sealbox.EncapsulatedKeySize,
+		len(h.Salt) != SaltSize:
 		return Header{}, ErrMalformedHeader
 	}
 	canonical, err := encodeHeader(h)

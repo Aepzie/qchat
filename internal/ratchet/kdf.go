@@ -91,11 +91,22 @@ func chainStep(ck [keySize]byte) (messageKey, next [keySize]byte) {
 }
 
 // messageAEADKey expands a message key into the ChaCha20-Poly1305 key and
-// nonce: key || nonce = HKDF-SHA256(MK, info = "qchat/v1/message-key"),
-// 32 + 12 bytes. Every message key is used for exactly one message, so the
-// deterministic nonce is never reused under the same key.
-func messageAEADKey(mk [keySize]byte) (key [chacha20poly1305.KeySize]byte, nonce [chacha20poly1305.NonceSize]byte, err error) {
-	out, err := hkdf.Key(sha256.New, mk[:], nil, labelMessageKey, len(key)+len(nonce))
+// nonce:
+//
+//	key || nonce = HKDF-SHA256(salt = header Salt, ikm = MK,
+//	                           info = "qchat/v1/message-key"), 32 + 12 bytes.
+//
+// An honest sender uses every message key for exactly one message. The
+// fresh random salt additionally covers a sender whose state was rolled back
+// (a restored backup, a lost write) and that therefore reuses a message key:
+// the two messages still get independent AEAD keys and nonces, so neither
+// the ChaCha20 keystream nor the Poly1305 key repeats (except with
+// probability about 2^-128 per pair).
+func messageAEADKey(mk [keySize]byte, salt []byte) (key [chacha20poly1305.KeySize]byte, nonce [chacha20poly1305.NonceSize]byte, err error) {
+	if len(salt) != SaltSize {
+		return key, nonce, fmt.Errorf("ratchet: message salt of %d bytes", len(salt))
+	}
+	out, err := hkdf.Key(sha256.New, mk[:], salt, labelMessageKey, len(key)+len(nonce))
 	if err != nil {
 		return key, nonce, fmt.Errorf("ratchet: deriving message key: %w", err)
 	}
@@ -105,9 +116,10 @@ func messageAEADKey(mk [keySize]byte) (key [chacha20poly1305.KeySize]byte, nonce
 	return key, nonce, nil
 }
 
-// sealMessage encrypts plaintext under message key mk with associated data ad.
-func sealMessage(mk [keySize]byte, plaintext, ad []byte) ([]byte, error) {
-	key, nonce, err := messageAEADKey(mk)
+// sealMessage encrypts plaintext under message key mk and the header salt
+// with associated data ad.
+func sealMessage(mk [keySize]byte, salt, plaintext, ad []byte) ([]byte, error) {
+	key, nonce, err := messageAEADKey(mk, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -119,10 +131,11 @@ func sealMessage(mk [keySize]byte, plaintext, ad []byte) ([]byte, error) {
 	return aead.Seal(nil, nonce[:], plaintext, ad), nil
 }
 
-// openMessage decrypts and authenticates ciphertext under message key mk with
-// associated data ad. Every failure is reported as [ErrDecrypt].
-func openMessage(mk [keySize]byte, ciphertext, ad []byte) ([]byte, error) {
-	key, nonce, err := messageAEADKey(mk)
+// openMessage decrypts and authenticates ciphertext under message key mk and
+// the header salt with associated data ad. Every failure is reported as
+// [ErrDecrypt].
+func openMessage(mk [keySize]byte, salt, ciphertext, ad []byte) ([]byte, error) {
+	key, nonce, err := messageAEADKey(mk, salt)
 	if err != nil {
 		return nil, ErrDecrypt
 	}

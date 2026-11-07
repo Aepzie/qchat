@@ -49,12 +49,16 @@ func TestKnownAnswers(t *testing.T) {
 	checkHex(t, "message key", mk[:], "01156abd78ef59f755f1e6945e5d1e2d7ddd1f1e5fe0a164b2f5fa8ad500bfba")
 	checkHex(t, "next chain key", next[:], "f0bdefbbad3cf097dccb03f2c87159f7608e2480543eef7741c8f2e7f226e78f")
 
-	key, nonce, err := messageAEADKey(sequence(0x60))
+	salt := sequence(0x80)
+	key, nonce, err := messageAEADKey(sequence(0x60), salt[:SaltSize])
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkHex(t, "AEAD key", key[:], "e685fec03d10c6e702fe3c1cbb6360397ec3987136550bbd57650683b7036ca0")
-	checkHex(t, "AEAD nonce", nonce[:], "efada88c63350bf966b65bcf")
+	checkHex(t, "AEAD key", key[:], "54c39e0c45ac134d3eed514d65b241e6f54effef57a31a74e4c6464de58b3f36")
+	checkHex(t, "AEAD nonce", nonce[:], "571f6c20017ba43d442806e3")
+	if _, _, err := messageAEADKey(sequence(0x60), salt[:SaltSize-1]); err == nil {
+		t.Error("messageAEADKey accepted a short salt")
+	}
 
 	info := ratchetInfo(aliceID, bobID, 0x01020304)
 	wantInfo := append(append(append([]byte("qchat/v1/ratchet"), aliceID[:]...), bobID[:]...), 1, 2, 3, 4)
@@ -131,7 +135,7 @@ func TestInitialEpoch(t *testing.T) {
 
 	deliver(t, s.b, m1)
 	deliver(t, s.b, m0)
-	if len(s.b.ownKeys) != 1 || s.b.ownKeys[0].Public().Equal(s.spk.Public()) {
+	if len(s.b.ownKeys) != 0 || !s.b.rotate {
 		t.Fatal("responder still holds the signed prekey after it was used")
 	}
 	if s.spk.Bytes() == nil {
@@ -167,10 +171,13 @@ func TestEpochAdvanceRules(t *testing.T) {
 	}
 
 	deliver(t, s.a, b0)
-	if len(s.a.ownKeys) != 1 || ownTarget(s.a) == ka1 {
-		t.Fatal("initiator did not replace its consumed ratchet key")
+	if len(s.a.ownKeys) != 0 {
+		t.Fatal("initiator kept its consumed ratchet key")
 	}
 	a3 := send(t, s.a, "a3")
+	if len(s.a.ownKeys) != 1 || ownTarget(s.a) == ka1 {
+		t.Fatal("initiator did not announce a fresh ratchet key")
+	}
 	h3 := parse(t, a3.header)
 	if h3.Epoch != 2 || h3.N != 0 || h3.PN != 3 || !bytes.Equal(h3.Target, sha256Of(hb0.RatchetPub)) {
 		t.Fatalf("new epoch header: epoch %d n %d pn %d", h3.Epoch, h3.N, h3.PN)
@@ -398,11 +405,12 @@ func TestHostileHeaders(t *testing.T) {
 		bad.RatchetPub = bytes.Clone(h.RatchetPub)
 		bad.Target = bytes.Clone(h.Target)
 		bad.KEMCT = bytes.Clone(h.KEMCT)
+		bad.Salt = bytes.Clone(h.Salt)
 		change(&bad)
 		return reencode(t, bad)
 	}
-	unknownField := append([]byte{0xa8}, m1.header[1:]...)
-	unknownField = append(unknownField, 0x08, 0x00)
+	unknownField := append([]byte{0xa9}, m1.header[1:]...)
+	unknownField = append(unknownField, 0x09, 0x00)
 
 	cases := []struct {
 		name   string
@@ -414,7 +422,12 @@ func TestHostileHeaders(t *testing.T) {
 		{"oversized", make([]byte, maxHeaderSize+1), ErrMalformedHeader},
 		{"trailing byte", append(bytes.Clone(m1.header), 0), ErrMalformedHeader},
 		{"unknown field", unknownField, ErrMalformedHeader},
-		{"version 2", mutate(func(b *Header) { b.Version = 2 }), ErrMalformedHeader},
+		{"version 1", mutate(func(b *Header) { b.Version = 1 }), ErrMalformedHeader},
+		{"version 3", mutate(func(b *Header) { b.Version = 3 }), ErrMalformedHeader},
+		{"missing salt", mutate(func(b *Header) { b.Salt = nil }), ErrMalformedHeader},
+		{"short salt", mutate(func(b *Header) { b.Salt = b.Salt[:SaltSize-1] }), ErrMalformedHeader},
+		{"long salt", mutate(func(b *Header) { b.Salt = append(b.Salt, 0) }), ErrMalformedHeader},
+		{"other salt", mutate(func(b *Header) { b.Salt[3] ^= 1 }), ErrDecrypt},
 		{"epoch 0", mutate(func(b *Header) { b.Epoch = 0 }), ErrMalformedHeader},
 		{"short pub", mutate(func(b *Header) { b.RatchetPub = b.RatchetPub[:100] }), ErrMalformedHeader},
 		{"long pub", mutate(func(b *Header) { b.RatchetPub = append(b.RatchetPub, 0) }), ErrMalformedHeader},
@@ -477,7 +490,8 @@ func TestMarshalRoundTrip(t *testing.T) {
 		}
 	}
 	invalid := map[string]func(*stateWire){
-		"version":     func(w *stateWire) { w.Version = 2 },
+		"version 1":   func(w *stateWire) { w.Version = 1 },
+		"version 3":   func(w *stateWire) { w.Version = 3 },
 		"role":        func(w *stateWire) { w.Role = 0 },
 		"short root":  func(w *stateWire) { w.RootSend = w.RootSend[:31] },
 		"no own keys": func(w *stateWire) { w.OwnKeys = nil },
@@ -491,7 +505,6 @@ func TestMarshalRoundTrip(t *testing.T) {
 		"dup skipped": func(w *stateWire) {
 			w.Skipped = []skippedWire{{Epoch: 1, N: 0, Key: make([]byte, 32)}, {Epoch: 1, N: 0, Key: make([]byte, 32)}}
 		},
-		"send without chain": func(w *stateWire) { w.SendChain = nil },
 	}
 	for name, change := range invalid {
 		var copyWire stateWire
@@ -500,6 +513,25 @@ func TestMarshalRoundTrip(t *testing.T) {
 		}
 		change(&copyWire)
 		bad, err := encMode.Marshal(copyWire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Unmarshal(bad); !errors.Is(err, ErrInvalidState) {
+			t.Errorf("%s: Unmarshal = %v, want ErrInvalidState", name, err)
+		}
+	}
+
+	var fresh stateWire
+	if err := stateDecMode.Unmarshal(snapshot(t, newSession(t).a), &fresh); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*stateWire){
+		"rotate before receiving":  func(w *stateWire) { w.Rotate = true },
+		"no own keys, no rotation": func(w *stateWire) { w.OwnKeys = nil },
+	} {
+		w := fresh
+		change(&w)
+		bad, err := encMode.Marshal(w)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -592,15 +624,24 @@ func TestRandomizedConversation(t *testing.T) {
 		nextID++
 		sent++
 	}
+	lost := 0
 	receive := func(to, index int) {
 		f := queues[to][index]
 		queues[to] = append(queues[to][:index], queues[to][index+1:]...)
+		loss := expectedLoss(states[to], parse(t, f.header))
 		got, err := states[to].Decrypt(f.header, f.ciphertext)
 		if delivered[f.id] {
-			if !errors.Is(err, ErrReplay) {
+			if !errors.Is(err, ErrReplay) && !errors.Is(err, loss) {
 				t.Fatalf("duplicate of message %d: err = %v, want ErrReplay", f.id, err)
 			}
 			replays++
+			return
+		}
+		if loss != nil {
+			if !errors.Is(err, loss) {
+				t.Fatalf("message %d to side %d: err = %v, want %v", f.id, to, err, loss)
+			}
+			lost++
 			return
 		}
 		if err != nil {
@@ -649,14 +690,277 @@ func TestRandomizedConversation(t *testing.T) {
 	}
 	deliver(t, states[1], send(t, states[0], "final a"))
 	deliver(t, states[0], send(t, states[1], "final b"))
-	if sent == 0 || received == 0 || replays == 0 || states[0].send.epoch < 10 || states[1].send.epoch < 10 {
-		t.Fatalf("weak run: sent %d received %d replays %d epochs %d/%d",
-			sent, received, replays, states[0].send.epoch, states[1].send.epoch)
+	if sent == 0 || received == 0 || replays == 0 || lost*2 > received || states[0].send.epoch < 10 || states[1].send.epoch < 10 {
+		t.Fatalf("weak run: sent %d received %d replays %d lost %d epochs %d/%d",
+			sent, received, replays, lost, states[0].send.epoch, states[1].send.epoch)
 	}
-	t.Logf("sent %d received %d replays %d epochs %d/%d", sent, received, replays, states[0].send.epoch, states[1].send.epoch)
+	t.Logf("sent %d received %d replays %d lost %d epochs %d/%d", sent, received, replays, lost, states[0].send.epoch, states[1].send.epoch)
 	for side, st := range states {
 		if len(st.skipped) > MaxStoredSkipped || len(st.ownKeys) > MaxUnconsumedOwnKeys {
 			t.Fatalf("side %d exceeds bounds: %d skipped, %d own keys", side, len(st.skipped), len(st.ownKeys))
 		}
 	}
+}
+
+// expectedLoss returns ErrReplay if st must reject a message with header h
+// even on first delivery because the message's skipped key aged out, and nil
+// if the message must decrypt. Thanks to the epoch acknowledgements no other
+// loss is possible, however messages are reordered or dropped.
+func expectedLoss(st *State, h Header) error {
+	if h.Epoch <= st.recv.epoch && skippedTooOld(h.Epoch, st.recv.epoch) {
+		return ErrReplay
+	}
+	return nil
+}
+
+// TestRolledBackSenderDoesNotReuseKeystream encrypts twice from the same
+// state, as a sender whose state was restored from an old copy would. Both
+// messages use the same message key, but the per-message salt gives them
+// different AEAD keys and nonces.
+func TestRolledBackSenderDoesNotReuseKeystream(t *testing.T) {
+	s := newSession(t)
+	deliver(t, s.b, send(t, s.a, "m0"))
+	saved := snapshot(t, s.a)
+	plaintext := bytes.Repeat([]byte{0}, 64)
+	first := send(t, s.a, string(plaintext))
+	rolledBack, err := Unmarshal(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := send(t, rolledBack, string(plaintext))
+
+	h1, h2 := parse(t, first.header), parse(t, second.header)
+	if h1.Epoch != h2.Epoch || h1.N != h2.N {
+		t.Fatal("rolled-back state did not reuse the message position")
+	}
+	if bytes.Equal(h1.Salt, h2.Salt) {
+		t.Fatal("two messages share a salt")
+	}
+	if bytes.Equal(first.ciphertext[:len(plaintext)], second.ciphertext[:len(plaintext)]) {
+		t.Fatal("keystream reused after rollback")
+	}
+	if bytes.Equal(first.ciphertext[len(plaintext):], second.ciphertext[len(plaintext):]) {
+		t.Fatal("identical tags after rollback")
+	}
+	deliver(t, s.b, first)
+	deliverErr(t, s.b, second, ErrReplay)
+}
+
+// TestOwnKeyRotation checks that a side announces a fresh own key on its
+// first send after receiving, holds at most MaxUnconsumedOwnKeys of them,
+// accepts an epoch targeting any key it holds, and that the peer starts a new
+// epoch only once its current one has been acknowledged.
+func TestOwnKeyRotation(t *testing.T) {
+	s := newSession(t)
+	deliver(t, s.b, send(t, s.a, "a0"))
+	deliver(t, s.a, send(t, s.b, "b0"))
+
+	var announced [][TargetSize]byte
+	var held []message
+	for i := range MaxUnconsumedOwnKeys + 1 {
+		deliver(t, s.a, send(t, s.b, fmt.Sprintf("b%d", i+1)))
+		m := send(t, s.a, fmt.Sprintf("a%d", i+1))
+		target := sha256.Sum256(parse(t, m.header).RatchetPub)
+		fresh := len(announced) == 0 || target != announced[len(announced)-1]
+		if fresh != (i < MaxUnconsumedOwnKeys) {
+			t.Fatalf("send %d after a receive: fresh key %v with %d keys held", i+1, fresh, len(s.a.ownKeys))
+		}
+		again := send(t, s.a, fmt.Sprintf("a%d bis", i+1))
+		if sha256.Sum256(parse(t, again.header).RatchetPub) != target {
+			t.Fatalf("send %d without a receive rotated the key", i+1)
+		}
+		if fresh {
+			announced = append(announced, target)
+		}
+		held = append(held, m, again)
+	}
+	if len(s.a.ownKeys) != MaxUnconsumedOwnKeys || targetOf(s.a.ownKeys[0].Public()) != announced[0] {
+		t.Fatalf("own keys = %d, want the %d announced ones", len(s.a.ownKeys), MaxUnconsumedOwnKeys)
+	}
+
+	deliver(t, s.b, held[2])
+	toSecond := send(t, s.b, "to second key")
+	h := parse(t, toSecond.header)
+	if h.Epoch != 2 || !bytes.Equal(h.Target, announced[1][:]) {
+		t.Fatalf("responder's new epoch %d does not target the key it received", h.Epoch)
+	}
+	deliver(t, s.a, toSecond)
+	if len(s.a.ownKeys) != MaxUnconsumedOwnKeys-2 || targetOf(s.a.ownKeys[0].Public()) != announced[2] {
+		t.Fatal("consuming a key did not delete exactly it and the older ones")
+	}
+
+	for _, m := range held[3:] {
+		deliver(t, s.b, m)
+	}
+	unacknowledged := send(t, s.b, "before acknowledgement")
+	if h := parse(t, unacknowledged.header); h.Epoch != 2 {
+		t.Fatalf("responder started epoch %d before the peer acknowledged epoch 2", h.Epoch)
+	}
+	deliver(t, s.a, unacknowledged)
+	ack := send(t, s.a, "acknowledges epoch 2")
+	if h := parse(t, ack.header); h.RecvEpoch != 2 {
+		t.Fatalf("RecvEpoch = %d, want 2", h.RecvEpoch)
+	}
+	deliver(t, s.b, ack)
+	last := send(t, s.b, "to newest key")
+	if h := parse(t, last.header); h.Epoch != 3 || !bytes.Equal(h.Target, sha256Of(parse(t, ack.header).RatchetPub)) {
+		t.Fatalf("responder did not start epoch 3 towards the newest key (epoch %d)", h.Epoch)
+	}
+	deliver(t, s.a, last)
+	if len(s.a.ownKeys) != 0 {
+		t.Fatalf("%d own keys left after the newest was consumed", len(s.a.ownKeys))
+	}
+}
+
+// TestPostCompromiseHealing leaks Alice's complete state and checks that
+// both directions heal within one round trip of normal traffic: the leaked
+// state, even when fed every later message from Bob, cannot decrypt Bob's
+// next epoch, and the leaked sending chain cannot open Alice's next epoch.
+func TestPostCompromiseHealing(t *testing.T) {
+	s := newSession(t)
+	deliver(t, s.b, send(t, s.a, "x"))
+	y := send(t, s.b, "y")
+	deliver(t, s.a, y)
+	deliver(t, s.b, send(t, s.a, "z"))
+
+	leaked, err := Unmarshal(snapshot(t, s.a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobKeyAtLeak := sha256Of(parse(t, y.header).RatchetPub)
+
+	a1 := send(t, s.a, "a1")
+	if err := openWithLeakedSendChain(leaked, a1); err != nil {
+		t.Fatalf("control: leaked state cannot read the current epoch: %v", err)
+	}
+	deliver(t, s.b, a1)
+	b1 := send(t, s.b, "b1")
+	deliver(t, leaked, b1)
+	deliver(t, s.a, b1)
+
+	a2 := send(t, s.a, "a2")
+	h2 := parse(t, a2.header)
+	if !bytes.Equal(h2.Target, sha256Of(parse(t, b1.header).RatchetPub)) || bytes.Equal(h2.Target, bobKeyAtLeak) {
+		t.Fatal("Alice's new epoch does not target the key Bob generated after the leak")
+	}
+	if err := openWithLeakedSendChain(leaked, a2); err == nil {
+		t.Fatal("A->B did not heal: leaked state reads Alice's new epoch")
+	}
+	deliver(t, s.b, a2)
+
+	b2 := send(t, s.b, "b2")
+	h2b := parse(t, b2.header)
+	if h2b.Epoch != leaked.recv.epoch+1 {
+		t.Fatalf("Bob's epoch %d does not follow the leaked receiving epoch %d", h2b.Epoch, leaked.recv.epoch)
+	}
+	for _, own := range leaked.ownKeys {
+		if target := targetOf(own.Public()); bytes.Equal(target[:], h2b.Target) {
+			t.Fatal("B->A did not heal: Bob's new epoch targets a leaked key")
+		}
+	}
+	if _, err := leaked.Decrypt(b2.header, b2.ciphertext); err == nil {
+		t.Fatal("B->A did not heal: leaked state decrypts Bob's new epoch")
+	}
+	deliver(t, s.a, b2)
+	deliver(t, s.b, send(t, s.a, "a3"))
+}
+
+// openWithLeakedSendChain tries to read a message Alice sent using what an
+// attacker learns from a leaked copy of her state: the sending chain key of
+// her current epoch. Messages of later epochs would also need the shared
+// secret of a KEM encapsulation to one of Bob's keys.
+func openWithLeakedSendChain(leaked *State, m message) error {
+	h, err := ParseHeader(m.header)
+	if err != nil {
+		return err
+	}
+	if h.Epoch != leaked.send.epoch || h.N < leaked.send.n || !bytes.Equal(h.KEMCT, leaked.send.kemCT) {
+		return ErrUnknownTarget
+	}
+	chain := leaked.send.chain
+	var mk [keySize]byte
+	for n := leaked.send.n; n <= h.N; n++ {
+		mk, chain = chainStep(chain)
+	}
+	_, err = openMessage(mk, h.Salt, m.ciphertext, associatedData(m.header, leaked.self, leaked.peer))
+	return err
+}
+
+// TestSkippedKeysAgeOut checks that a skipped key survives
+// MaxSkippedEpochAge receiving epochs and is deleted after that.
+func TestSkippedKeysAgeOut(t *testing.T) {
+	s := newSession(t)
+	m0, m1, m2 := send(t, s.a, "m0"), send(t, s.a, "m1"), send(t, s.a, "m2")
+	deliver(t, s.b, m0)
+	roundTrip := func(i int) {
+		deliver(t, s.a, send(t, s.b, fmt.Sprintf("b%d", i)))
+		deliver(t, s.b, send(t, s.a, fmt.Sprintf("a%d", i)))
+	}
+	for i := range MaxSkippedEpochAge {
+		roundTrip(i)
+	}
+	if s.b.recv.epoch != 1+MaxSkippedEpochAge {
+		t.Fatalf("receiving epoch %d, want %d", s.b.recv.epoch, 1+MaxSkippedEpochAge)
+	}
+	deliver(t, s.b, m1)
+	s.b = restore(t, s.b)
+
+	roundTrip(MaxSkippedEpochAge)
+	for _, sk := range s.b.skipped {
+		if sk.pos.epoch == 1 {
+			t.Fatal("skipped key of an aged-out epoch still stored")
+		}
+	}
+	deliverErr(t, s.b, m2, ErrReplay)
+
+	encoded := snapshot(t, s.b)
+	var w stateWire
+	if err := stateDecMode.Unmarshal(encoded, &w); err != nil {
+		t.Fatal(err)
+	}
+	w.Skipped = []skippedWire{{Epoch: w.RecvEpoch - MaxSkippedEpochAge - 1, N: 0, Key: make([]byte, keySize)}}
+	bad, err := encMode.Marshal(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Unmarshal(bad); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("aged skipped key: Unmarshal = %v, want ErrInvalidState", err)
+	}
+	w.Skipped[0].Epoch++
+	if ok, err := encMode.Marshal(w); err != nil {
+		t.Fatal(err)
+	} else if _, err := Unmarshal(ok); err != nil {
+		t.Fatalf("skipped key at the age limit: Unmarshal = %v", err)
+	}
+}
+
+// TestLostEpochDoesNotBreakSession withholds every message of one of Bob's
+// epochs while Alice, prompted by a delayed message of Bob's previous epoch,
+// announces a newer key. Bob must not start a further epoch before Alice has
+// acknowledged the withheld one: otherwise Alice could never decrypt again.
+func TestLostEpochDoesNotBreakSession(t *testing.T) {
+	s := newSession(t)
+	deliver(t, s.b, send(t, s.a, "a0"))
+	b0 := send(t, s.b, "b0")
+	delayed := send(t, s.b, "b0 delayed")
+	deliver(t, s.a, b0)
+	deliver(t, s.b, send(t, s.a, "a1"))
+	withheld := send(t, s.b, "withheld")
+	epoch := parse(t, withheld.header).Epoch
+
+	deliver(t, s.a, delayed)
+	deliver(t, s.b, send(t, s.a, "a2 with a newer key"))
+	m := send(t, s.b, "still the withheld epoch")
+	if h := parse(t, m.header); h.Epoch != epoch {
+		t.Fatalf("Bob moved to epoch %d past the unacknowledged epoch %d", h.Epoch, epoch)
+	}
+	deliver(t, s.a, m)
+
+	deliver(t, s.b, send(t, s.a, "acknowledges it"))
+	next := send(t, s.b, "next epoch")
+	if h := parse(t, next.header); h.Epoch != epoch+1 {
+		t.Fatalf("Bob did not advance after the acknowledgement: epoch %d", h.Epoch)
+	}
+	deliver(t, s.a, next)
+	deliver(t, s.a, withheld)
 }
