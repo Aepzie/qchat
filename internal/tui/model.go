@@ -502,6 +502,8 @@ func (m *Model) handleState(e client.StateChanged) {
 			return
 		}
 		m.sysLog(entrySystem, "Connecting to "+addr+"…")
+	case client.Authenticating:
+		m.sysLog(entrySystem, "Signing in with your identity…")
 	case client.Connected:
 		m.conn.info = e.Info
 		m.awaitRTT = true

@@ -227,6 +227,8 @@ func (m Model) stateSegment() string {
 		return st.bar.Foreground(t.Success).Render("●") + st.bar.Render(" connected")
 	case m.conn.state == client.Connecting:
 		return st.bar.Foreground(t.Warning).Render("◌ connecting")
+	case m.conn.state == client.Authenticating:
+		return st.bar.Foreground(t.Warning).Render("◌ authenticating")
 	case m.conn.state == client.Disconnected:
 		return st.bar.Foreground(t.Danger).Render("✕ disconnected")
 	case m.conn.state == client.Failed:
