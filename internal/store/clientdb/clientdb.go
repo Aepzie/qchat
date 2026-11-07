@@ -83,6 +83,11 @@ var migrations = []string{
 		lookup BLOB PRIMARY KEY,
 		value  BLOB NOT NULL
 	) STRICT;`,
+	`CREATE TABLE IF NOT EXISTS seen_inits (
+		lookup  BLOB PRIMARY KEY,
+		expires INTEGER NOT NULL
+	) STRICT, WITHOUT ROWID;
+	CREATE INDEX IF NOT EXISTS seen_inits_expires ON seen_inits (expires);`,
 }
 
 // DB is an open client database. It is safe for concurrent use.

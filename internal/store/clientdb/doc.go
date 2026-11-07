@@ -43,6 +43,11 @@
 //   - the number of messages ever stored, including those of deleted
 //     contacts, because the seen table keeps one replay tombstone (the
 //     message lookup HMAC, without any value) per appended message;
+//   - the number of session starts in the replay set (seen_inits: a lookup
+//     HMAC over the signed prekey ID and replay key, without any value) and
+//     the expiry of each entry in Unix seconds; when every entry uses its
+//     signed prekey's RetireAt, as recommended, the expiries only reveal how
+//     many sessions each signed prekey started;
 //   - the schema version.
 //
 // The file does not reveal contact IDs, display names, identity bundles,
@@ -54,8 +59,9 @@
 // Tampering with a stored value is detected and reported as ErrCorrupt.
 // The following changes by someone with write access to the file are not:
 //
-//   - deleting whole rows, including replay tombstones, which re-enables
-//     the acceptance of the deleted messages;
+//   - deleting whole rows, including replay tombstones and replay set
+//     entries, which re-enables the acceptance of the deleted messages and
+//     session starts;
 //   - rolling the whole file back to an earlier copy;
 //   - per-row rollback: replacing a row's value with an older ciphertext of
 //     the same row. The associated data binds a ciphertext to its table and
