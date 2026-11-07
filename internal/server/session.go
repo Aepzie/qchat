@@ -31,6 +31,7 @@ const (
 	reasonUnsupportedData    closeReason = "unsupported_data"
 	reasonWriteFailed        closeReason = "write_failed"
 	reasonInternal           closeReason = "internal"
+	reasonTooManySessions    closeReason = "too_many_sessions"
 	reasonShutdown           closeReason = "shutdown"
 )
 
@@ -47,8 +48,11 @@ const (
 )
 
 // outboundQueueSize is the number of encoded frames a session buffers for
-// its writer. Responses to the session's own requests wait for room;
-// deliveries from other sessions are dropped when the queue is full.
+// its writer. The bytes those frames hold are bounded separately, per
+// session by limits.max_queue_bytes and across all sessions by
+// limits.max_total_queue_bytes. Responses to the session's own requests
+// wait for room; deliveries from other sessions are dropped when either
+// bound is reached.
 const outboundQueueSize = 64
 
 // errorMessages holds the Error frame message for each code. Messages are
@@ -111,10 +115,12 @@ type session struct {
 	timer       *time.Timer
 
 	out        chan []byte
+	queue      *byteBudget
 	stopping   chan struct{}
 	writerDone chan struct{}
 
 	closeOnce sync.Once
+	closed    chan struct{}
 	reason    closeReason
 
 	pendingClose  *closeRequest
@@ -132,8 +138,10 @@ func newSession(srv *Server, conn *websocket.Conn) *session {
 		limiter:     rate.NewLimiter(rate.Limit(limits.FramesPerSecond), limits.Burst),
 		authLimiter: rate.NewLimiter(srv.authRate, srv.authBurst),
 		out:         make(chan []byte, outboundQueueSize),
+		queue:       newByteBudget(limits.MaxQueueBytes),
 		stopping:    make(chan struct{}),
 		writerDone:  make(chan struct{}),
+		closed:      make(chan struct{}),
 	}
 }
 
@@ -150,6 +158,7 @@ func (s *session) run() {
 	s.srv.unroute(s)
 	close(s.stopping)
 	<-s.writerDone
+	s.discardQueued()
 	if s.pendingClose != nil {
 		s.terminate(s.pendingClose.reason, s.pendingClose.status, s.pendingClose.text)
 	}
@@ -311,30 +320,76 @@ func respond[T any](s *session, frameType protocol.FrameType, id uint64, body T)
 }
 
 // enqueue hands an encoded frame to the writer, waiting for room in the
-// queue. It returns false once the writer has stopped after a failed write.
+// queue, in the session's byte budget and in the server-wide byte budget.
+// It returns false once the writer has stopped after a failed write or the
+// connection was closed.
 func (s *session) enqueue(encoded []byte) bool {
+	size := int64(len(encoded))
+	global := s.srv.queueBudget
+	for {
+		localFreed, globalFreed := s.queue.changed(), global.changed()
+		if acquirePair(s.queue, global, size) {
+			break
+		}
+		select {
+		case <-localFreed:
+		case <-globalFreed:
+		case <-s.writerDone:
+			return false
+		case <-s.closed:
+			return false
+		}
+	}
 	select {
 	case s.out <- encoded:
 		return true
 	case <-s.writerDone:
-		return false
+	case <-s.closed:
 	}
+	s.releaseQueued(size)
+	return false
 }
 
 // offer queues a frame pushed by another session without waiting. It
-// reports false if the queue is full or the session is ending, in which
-// case the frame is dropped.
+// reports false if the queue is full, the session's or the server's byte
+// budget is exhausted, or the session is ending; the frame is then dropped.
 func (s *session) offer(encoded []byte) bool {
 	select {
 	case <-s.stopping:
 		return false
 	default:
 	}
+	size := int64(len(encoded))
+	if !acquirePair(s.queue, s.srv.queueBudget, size) {
+		return false
+	}
 	select {
 	case s.out <- encoded:
 		return true
 	default:
+		s.releaseQueued(size)
 		return false
+	}
+}
+
+// releaseQueued returns the bytes of a frame that left the queue to the
+// session's and the server's budgets.
+func (s *session) releaseQueued(size int64) {
+	s.queue.release(size)
+	s.srv.queueBudget.release(size)
+}
+
+// discardQueued drops the frames the writer left behind and releases their
+// bytes. It runs after the session was unrouted and the writer stopped, so
+// nothing can be queued concurrently.
+func (s *session) discardQueued() {
+	for {
+		select {
+		case encoded := <-s.out:
+			s.releaseQueued(int64(len(encoded)))
+		default:
+			return
+		}
 	}
 }
 
@@ -371,8 +426,9 @@ func (s *session) flush() {
 }
 
 // write writes one encoded frame within writeTimeout and terminates the
-// session if that fails.
+// session if that fails. The frame's bytes are released in either case.
 func (s *session) write(encoded []byte) bool {
+	defer s.releaseQueued(int64(len(encoded)))
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
 	if err := s.conn.Write(ctx, websocket.MessageBinary, encoded); err != nil {
@@ -430,6 +486,7 @@ func (s *session) endAfterReadError(err error) {
 func (s *session) terminate(reason closeReason, code websocket.StatusCode, text string) {
 	s.closeOnce.Do(func() {
 		s.reason = reason
+		close(s.closed)
 		_ = s.conn.Close(code, text)
 	})
 }

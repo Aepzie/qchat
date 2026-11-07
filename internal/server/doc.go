@@ -44,14 +44,27 @@
 //     ID, and answers SendResult Delivered if at least one session took the
 //     frame, RecipientOffline otherwise. Payloads are never stored.
 //
+// SendResult is a presence oracle: any authenticated user can learn whether
+// a registered ID is online right now by sending it a message and reading
+// Delivered or RecipientOffline. This is accepted until Phase 3, when the
+// relay queues messages for offline recipients and stops telling the two
+// cases apart.
+//
+// An identity may hold at most limits.max_sessions_per_identity
+// authenticated sessions at once. An AuthProof beyond that is answered with
+// a fatal RateLimited error and the session is closed unauthenticated.
+//
 // Register and AuthBegin also draw from a second, per-session token bucket
 // (5 per minute, burst 5), which bounds the signature checks and database
 // writes a session can cause.
 //
-// Each session has a single writer goroutine fed by a bounded queue of 64
-// frames. Responses to the session's own requests wait for room in the
-// queue; a Deliver pushed by another session never waits: if the
-// recipient's queue is full that delivery is dropped and, if no other
+// Each session has a single writer goroutine fed by a queue bounded to 64
+// frames and to limits.max_queue_bytes of encoded frames. All queues
+// together are bounded by limits.max_total_queue_bytes; bytes are released
+// when a frame has been written or its session has ended. Responses to the
+// session's own requests are never dropped: they wait for room in the
+// queue and in both byte budgets. A Deliver pushed by another session never
+// waits: if it does not fit, that delivery is dropped and, if no other
 // session of the recipient took it, reported as RecipientOffline.
 //
 // # Fatal and non-fatal errors
@@ -79,7 +92,9 @@
 //     version;
 //   - RateLimited: the per-session frame bucket is exhausted;
 //   - Unauthorized: AuthProof without an outstanding challenge, after it
-//     expired, or with a signature that does not verify.
+//     expired, or with a signature that does not verify;
+//   - RateLimited: an AuthProof for an identity that already holds
+//     limits.max_sessions_per_identity sessions.
 //
 // A message larger than limits.max_frame_size closes the session with
 // status 1009 without an Error frame.

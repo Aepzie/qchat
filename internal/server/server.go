@@ -78,6 +78,8 @@ type Server struct {
 	routesMu sync.Mutex
 	routes   map[identity.ID]map[*session]struct{}
 
+	queueBudget *byteBudget
+
 	started  atomic.Bool
 	total    atomic.Uint64
 	rejected atomic.Uint64
@@ -121,6 +123,7 @@ func New(cfg Config, cert tls.Certificate, logger *slog.Logger) (*Server, error)
 		authBurst:        authBurst,
 		now:              time.Now,
 		routes:           make(map[identity.ID]map[*session]struct{}),
+		queueBudget:      newByteBudget(cfg.Limits.MaxTotalQueueBytes),
 		sessions:         make(map[*session]struct{}),
 	}, nil
 }

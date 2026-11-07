@@ -31,6 +31,9 @@ const (
 	DefaultMaxPendingHandshakes = 64
 	DefaultMaxFrameSize         = protocol.MaxFrameSize
 	DefaultMaxMessageSize       = 256 << 10
+	DefaultMaxQueueBytes        = 2 << 20
+	DefaultMaxTotalQueueBytes   = 256 << 20
+	DefaultMaxSessionsPerID     = 4
 	DefaultFramesPerSecond      = 20.0
 	DefaultBurst                = 40
 	DefaultHandshakeTimeout     = 10 * time.Second
@@ -54,8 +57,17 @@ const (
 	MaxMessageSize = protocol.MaxFrameSize - 1<<10
 )
 
+// Bounds of Limits.MaxQueueBytes and Limits.MaxTotalQueueBytes. A queue
+// always holds at least one frame of the largest size the protocol allows.
+const (
+	MinQueueBytes      = protocol.MaxFrameSize
+	MaxQueueBytes      = 1 << 30
+	MaxTotalQueueBytes = 1 << 40
+)
+
 // Bounds enforced by Config.Validate.
 const (
+	maxSessionsPerID      = 1_000
 	maxConnectionsLimit   = 1_000_000
 	minFrameSize          = 256
 	maxFramesPerSecond    = 100_000
@@ -146,6 +158,17 @@ type Limits struct {
 	// between MinMessageSize and MaxMessageSize. A payload must also fit
 	// into a frame of MaxFrameSize, so the smaller limit applies.
 	MaxMessageSize int `toml:"max_message_size" comment:"Largest end-to-end message payload in bytes (1024 to 1047552).\nA payload must also fit into max_frame_size."`
+	// MaxQueueBytes bounds the encoded frames one session holds for its
+	// writer, between MinQueueBytes and MaxQueueBytes. A delivery that does
+	// not fit is dropped; a response to the session's own request waits.
+	MaxQueueBytes int64 `toml:"max_queue_bytes" comment:"Bytes of outbound frames buffered per session (1048576 to 1073741824).\nDeliveries that do not fit are dropped; responses to the session's own requests wait."`
+	// MaxTotalQueueBytes bounds the encoded frames held for writers across
+	// all sessions, between MaxQueueBytes and MaxTotalQueueBytes.
+	MaxTotalQueueBytes int64 `toml:"max_total_queue_bytes" comment:"Bytes of outbound frames buffered across all sessions\n(at least max_queue_bytes, at most 1099511627776)."`
+	// MaxSessionsPerIdentity is the maximum number of simultaneous
+	// authenticated sessions of one identity. An AuthProof beyond it is
+	// answered with a fatal RateLimited error.
+	MaxSessionsPerIdentity int `toml:"max_sessions_per_identity" comment:"Maximum simultaneous authenticated sessions per identity (1 to 1000)."`
 	// FramesPerSecond is the sustained per-session frame rate.
 	FramesPerSecond float64 `toml:"frames_per_second" comment:"Sustained frames per second per session."`
 	// Burst is the per-session token bucket size.
@@ -174,15 +197,18 @@ func DefaultConfig() Config {
 		Database:     DefaultDatabase,
 		Registration: DefaultRegistration,
 		Limits: Limits{
-			MaxConnections:       DefaultMaxConnections,
-			MaxConnectionsPerIP:  DefaultMaxConnectionsPerIP,
-			MaxPendingHandshakes: DefaultMaxPendingHandshakes,
-			MaxFrameSize:         DefaultMaxFrameSize,
-			MaxMessageSize:       DefaultMaxMessageSize,
-			FramesPerSecond:      DefaultFramesPerSecond,
-			Burst:                DefaultBurst,
-			HandshakeTimeout:     DurationOf(DefaultHandshakeTimeout),
-			PingInterval:         DurationOf(DefaultPingInterval),
+			MaxConnections:         DefaultMaxConnections,
+			MaxConnectionsPerIP:    DefaultMaxConnectionsPerIP,
+			MaxPendingHandshakes:   DefaultMaxPendingHandshakes,
+			MaxFrameSize:           DefaultMaxFrameSize,
+			MaxMessageSize:         DefaultMaxMessageSize,
+			MaxQueueBytes:          DefaultMaxQueueBytes,
+			MaxTotalQueueBytes:     DefaultMaxTotalQueueBytes,
+			MaxSessionsPerIdentity: DefaultMaxSessionsPerID,
+			FramesPerSecond:        DefaultFramesPerSecond,
+			Burst:                  DefaultBurst,
+			HandshakeTimeout:       DurationOf(DefaultHandshakeTimeout),
+			PingInterval:           DurationOf(DefaultPingInterval),
 		},
 		Log: LogConfig{Level: DefaultLogLevel},
 	}
@@ -321,6 +347,12 @@ func (l Limits) validate() error {
 		return fmt.Errorf("config: limits.max_frame_size must be between %d and %d", minFrameSize, protocol.MaxFrameSize)
 	case l.MaxMessageSize < MinMessageSize || l.MaxMessageSize > MaxMessageSize:
 		return fmt.Errorf("config: limits.max_message_size must be between %d and %d", MinMessageSize, MaxMessageSize)
+	case l.MaxQueueBytes < MinQueueBytes || l.MaxQueueBytes > MaxQueueBytes:
+		return fmt.Errorf("config: limits.max_queue_bytes must be between %d and %d", MinQueueBytes, MaxQueueBytes)
+	case l.MaxTotalQueueBytes < l.MaxQueueBytes || l.MaxTotalQueueBytes > MaxTotalQueueBytes:
+		return fmt.Errorf("config: limits.max_total_queue_bytes must be between limits.max_queue_bytes and %d", int64(MaxTotalQueueBytes))
+	case l.MaxSessionsPerIdentity < 1 || l.MaxSessionsPerIdentity > maxSessionsPerID:
+		return fmt.Errorf("config: limits.max_sessions_per_identity must be between 1 and %d", maxSessionsPerID)
 	case math.IsNaN(l.FramesPerSecond) || l.FramesPerSecond <= 0 || l.FramesPerSecond > maxFramesPerSecond:
 		return fmt.Errorf("config: limits.frames_per_second must be greater than 0 and at most %d", maxFramesPerSecond)
 	case l.Burst < 1 || l.Burst > maxBurst:

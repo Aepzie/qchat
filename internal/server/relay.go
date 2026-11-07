@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/craguS/qchat/internal/identity"
 	"github.com/craguS/qchat/internal/protocol"
 	"github.com/craguS/qchat/internal/store/serverdb"
@@ -93,10 +95,19 @@ func (s *session) handleAuthProof(frame protocol.Frame) bool {
 	if err := identity.VerifyAuth(pending.bundle, s.srv.fingerprint, pending.nonce, req.Sig); err != nil {
 		return s.fail(frame.ID, protocol.ErrCodeUnauthorized)
 	}
-	s.authenticated = true
-	s.id = pending.bundle.ID
-	s.srv.route(s)
+	if !s.srv.route(s, pending.bundle.ID) {
+		return s.failTooManySessions(frame.ID)
+	}
 	return respond(s, protocol.TypeAuthOK, frame.ID, protocol.AuthOK{})
+}
+
+// failTooManySessions answers an AuthProof for an identity that already has
+// limits.max_sessions_per_identity sessions with a fatal RateLimited error.
+// The session stays unauthenticated.
+func (s *session) failTooManySessions(id uint64) bool {
+	s.queueError(id, protocol.ErrCodeRateLimited)
+	s.pendingClose = &closeRequest{reason: reasonTooManySessions, status: websocket.StatusPolicyViolation, text: closeTextProtocolError}
+	return false
 }
 
 // handleKeyRequest returns the stored bundle of an identity.
@@ -117,6 +128,12 @@ func (s *session) handleKeyRequest(frame protocol.Frame) bool {
 
 // handleSend routes a payload to every live connection of a registered
 // recipient. The payload is never stored.
+//
+// The SendResult is a presence oracle: any authenticated user learns from
+// it whether a registered ID currently has a live session, without knowing
+// anything else about it. This is accepted until Phase 3, when the relay
+// queues messages for offline recipients and the result no longer tells the
+// two cases apart.
 func (s *session) handleSend(frame protocol.Frame) bool {
 	req, err := protocol.DecodeBody[protocol.Send](frame, protocol.TypeSend)
 	if err != nil {
@@ -203,16 +220,24 @@ func (s *Server) lookupBundle(id identity.ID) (*identity.Bundle, protocol.ErrorC
 	return bundle, 0, true
 }
 
-// route makes an authenticated session reachable under its ID.
-func (s *Server) route(sess *session) {
+// route authenticates sess as id and makes it reachable under that ID. It
+// reports false, leaving sess unauthenticated, if id already has
+// limits.max_sessions_per_identity sessions.
+func (s *Server) route(sess *session, id identity.ID) bool {
 	s.routesMu.Lock()
 	defer s.routesMu.Unlock()
-	set := s.routes[sess.id]
+	set := s.routes[id]
+	if len(set) >= s.cfg.Limits.MaxSessionsPerIdentity {
+		return false
+	}
 	if set == nil {
 		set = make(map[*session]struct{})
-		s.routes[sess.id] = set
+		s.routes[id] = set
 	}
 	set[sess] = struct{}{}
+	sess.authenticated = true
+	sess.id = id
+	return true
 }
 
 // unroute removes a session from the routing table. It is a no-op for a
@@ -232,7 +257,8 @@ func (s *Server) unroute(sess *session) {
 
 // deliver offers an encoded Deliver frame to every live session of to,
 // without waiting for any of them. It reports whether at least one session
-// accepted it; a session whose outbound queue is full misses the frame.
+// accepted it; a session whose queue or byte budget is full, or that finds
+// the server-wide byte budget exhausted, misses the frame.
 func (s *Server) deliver(to identity.ID, encoded []byte) bool {
 	s.routesMu.Lock()
 	defer s.routesMu.Unlock()

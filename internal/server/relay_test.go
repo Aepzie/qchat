@@ -405,20 +405,43 @@ func TestSendAndDeliver(t *testing.T) {
 	expectSendResult(t, aliceConn, 67, protocol.SendRecipientOffline)
 }
 
-func TestDeliveryDoesNotBlock(t *testing.T) {
+// queueSession returns a routable session with a queue of frames frames and
+// queueBytes bytes, and no connection.
+func queueSession(srv *Server, frames int, queueBytes int64) *session {
+	return &session{
+		srv:        srv,
+		out:        make(chan []byte, frames),
+		queue:      newByteBudget(queueBytes),
+		stopping:   make(chan struct{}),
+		writerDone: make(chan struct{}),
+		closed:     make(chan struct{}),
+	}
+}
+
+func newBareServer(t *testing.T, mutate func(*Config)) *Server {
+	t.Helper()
 	cert, _ := testIdentity(t)
 	cfg := DefaultConfig()
+	if mutate != nil {
+		mutate(&cfg)
+	}
 	srv, err := New(cfg, cert, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return srv
+}
+
+func TestDeliveryDoesNotBlock(t *testing.T) {
+	srv := newBareServer(t, nil)
 	var to identity.ID
 	to[0] = 7
-	full := &session{id: to, out: make(chan []byte, 1), stopping: make(chan struct{})}
-	stopped := &session{id: to, out: make(chan []byte, 1), stopping: make(chan struct{})}
+	full := queueSession(srv, 1, DefaultMaxQueueBytes)
+	stopped := queueSession(srv, 1, DefaultMaxQueueBytes)
 	close(stopped.stopping)
-	srv.route(full)
-	srv.route(stopped)
+	if !srv.route(full, to) || !srv.route(stopped, to) {
+		t.Fatal("route refused a session below the per-identity limit")
+	}
 
 	if !srv.deliver(to, []byte{1}) {
 		t.Fatal("delivery to a session with room was not accepted")
@@ -429,12 +452,123 @@ func TestDeliveryDoesNotBlock(t *testing.T) {
 	if got := <-full.out; !bytes.Equal(got, []byte{1}) {
 		t.Fatalf("queued frame %x", got)
 	}
-	full.authenticated, stopped.authenticated = true, true
+	full.releaseQueued(1)
+	if used := srv.queueBudget.inUse(); used != 0 {
+		t.Fatalf("server budget holds %d bytes after release", used)
+	}
 	srv.unroute(full)
 	srv.unroute(stopped)
 	if len(srv.routes) != 0 {
 		t.Fatalf("routes not cleaned up: %d", len(srv.routes))
 	}
+}
+
+func TestDeliveryBoundedBySessionBytes(t *testing.T) {
+	srv := newBareServer(t, nil)
+	var to identity.ID
+	to[0] = 8
+	slow := queueSession(srv, outboundQueueSize, 100)
+	srv.route(slow, to)
+
+	if !srv.deliver(to, make([]byte, 60)) {
+		t.Fatal("first delivery was not accepted")
+	}
+	if srv.deliver(to, make([]byte, 60)) {
+		t.Fatal("delivery beyond the session byte limit was accepted")
+	}
+	if !srv.deliver(to, make([]byte, 40)) {
+		t.Fatal("delivery that fits the remaining bytes was not accepted")
+	}
+	if used := srv.queueBudget.inUse(); used != 100 {
+		t.Fatalf("server budget holds %d bytes, want 100", used)
+	}
+	slow.discardQueued()
+	if used, local := srv.queueBudget.inUse(), slow.queue.inUse(); used != 0 || local != 0 {
+		t.Fatalf("budgets hold %d and %d bytes after discard", used, local)
+	}
+}
+
+func TestDeliveryBoundedByServerBytes(t *testing.T) {
+	srv := newBareServer(t, func(c *Config) { c.Limits.MaxTotalQueueBytes = c.Limits.MaxQueueBytes })
+	var first, second identity.ID
+	first[0], second[0] = 1, 2
+	hog := queueSession(srv, outboundQueueSize, DefaultMaxQueueBytes)
+	other := queueSession(srv, outboundQueueSize, DefaultMaxQueueBytes)
+	srv.route(hog, first)
+	srv.route(other, second)
+
+	if !srv.deliver(first, make([]byte, DefaultMaxQueueBytes)) {
+		t.Fatal("delivery filling the server budget was not accepted")
+	}
+	if srv.deliver(second, []byte{1}) {
+		t.Fatal("delivery was accepted with the server budget exhausted")
+	}
+	hog.discardQueued()
+	if !srv.deliver(second, []byte{1}) {
+		t.Fatal("delivery was refused after the server budget was released")
+	}
+}
+
+func TestResponsesWaitForBudget(t *testing.T) {
+	srv := newBareServer(t, nil)
+	sess := queueSession(srv, outboundQueueSize, 10)
+	if !sess.enqueue(make([]byte, 10)) {
+		t.Fatal("enqueue into an empty queue failed")
+	}
+	done := make(chan bool, 1)
+	go func() { done <- sess.enqueue(make([]byte, 5)) }()
+	select {
+	case <-done:
+		t.Fatal("response was queued beyond the session byte limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+	<-sess.out
+	sess.releaseQueued(10)
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("waiting response was dropped")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiting response was not queued after release")
+	}
+
+	go func() { done <- sess.enqueue(make([]byte, 10)) }()
+	close(sess.closed)
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("response was queued on a closed session")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiting response did not give up when the session closed")
+	}
+	if used := sess.queue.inUse(); used != 5 {
+		t.Fatalf("session budget holds %d bytes, want 5", used)
+	}
+}
+
+func TestSessionsPerIdentityLimit(t *testing.T) {
+	ts := startServer(t, serverOptions{config: func(c *Config) {
+		c.Registration = RegistrationOpen
+		c.Limits.MaxSessionsPerIdentity = 1
+	}})
+	alice := newUser(t)
+	first := online(t, ts, alice)
+
+	second := openSession(t, ts)
+	nonce := beginAuth(t, second, alice.id())
+	sendFrame(t, second, protocol.TypeAuthProof, 21, protocol.AuthProof{Sig: signAuth(t, alice.ident, ts.pin, nonce)})
+	expectFatal(t, second, protocol.ErrCodeRateLimited)
+
+	first.Close(websocket.StatusNormalClosure, "")
+	waitFor(t, "alice to go offline", func() bool {
+		ts.srv.routesMu.Lock()
+		defer ts.srv.routesMu.Unlock()
+		return len(ts.srv.routes) == 0
+	})
+	third := openSession(t, ts)
+	authenticate(t, ts, third, alice)
 }
 
 func TestServeFailsWithoutDatabaseDirectory(t *testing.T) {
