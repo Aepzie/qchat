@@ -13,9 +13,11 @@ Goals:
 
 - Users can create groups, add and remove members, and promote or demote
   admins. Groups have a name visible only to members.
-- Group messages are end-to-end encrypted. The relay learns neither group
-  names, membership lists nor which messages belong to which group (beyond
-  what timing and identical payload sizes reveal).
+- Group messages are end-to-end encrypted. The relay learns no group IDs or
+  names and cannot tell which group a message belongs to from its content.
+  **It does see the recipient list of every group message** (the `SendMulti`
+  fan-out), which approximates the membership, plus sender, time and size;
+  hiding that needs sealed sender and is left to Phase 5.
 - Removing a member rotates every remaining member's sending key, so the
   removed member cannot read later messages (post-removal security).
 - Group message authenticity uses hybrid signatures (Ed25519 + ML-DSA-65).
@@ -141,3 +143,44 @@ MLS implementation would contradict the rule of not building our own complex
 cryptographic protocols without review. Groups here are capped at 256 members
 where pairwise fan-out of control and distribution messages is acceptable.
 MLS remains the preferred path once a suitable library exists.
+
+## Changes after the internal security review
+
+The first implementation was reviewed before release; these changes are part
+of v0.4.0 and take precedence over the sections above where they differ.
+
+- **Conflict resolution cannot be won by grinding IDs.** If one of two
+  conflicting controls removes or demotes the other's actor, it wins. Mutual
+  removals are decided by seniority (the admin who has held the role since
+  the earlier epoch wins; the creator wins ties). Remaining conflicts are
+  decided by the hash of the control encoding, not by actor IDs. A conflicting
+  control is only considered while the receiver is still at that epoch.
+- **Onboarding.** A new member receives the full signed control history from
+  `create` and replays it with `Apply`; it accepts the group only if the
+  replay ends in a state that contains it. The adder's word alone is not
+  trusted.
+- **Fork detection.** Every group message header carries the group epoch and
+  a binding of the sender's group state (`SHA-256(GroupID || Epoch || state
+  hash)`); receivers flag messages whose binding differs from their own state
+  as "group out of sync" instead of silently diverging.
+- **Encrypted group headers.** Each sender-key generation has a random header
+  key, distributed with the chain key. The header (group ID, sender,
+  generation, iteration, epoch, binding) is encrypted with XChaCha20-Poly1305
+  under it; receivers find the right key by trial decryption over their known
+  generations. The relay sees only that a payload is a group message.
+- **Key commitment.** The signed data includes an HMAC commitment to the
+  message key, so one envelope cannot decrypt to different plaintexts for
+  members holding different chain keys.
+- **Old generations stop advancing** once a newer generation of the same
+  sender is installed; skipped keys are pruned by age.
+- **`LastRemovalEpoch`** is part of the group state; distributions with an
+  older group epoch are rejected after a removal.
+- **Relay.** `SendMulti` stores the payload once with per-recipient queue
+  rows, succeeds partially and reports the recipients it could not store
+  (`SendMultiResult`), and is charged against a separate per-recipient budget
+  (`limits.multi_recipients_per_minute`).
+
+Known remaining weaknesses (documented in SECURITY.md): no ordering authority
+for membership changes (MLS and Signal's server-stored groups have one), no
+post-compromise security except through removal-triggered rotation, removal
+costs O(n²) pairwise distribution messages, and the relay sees recipient lists.
