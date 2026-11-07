@@ -40,12 +40,32 @@
 //     is the same HMAC for every message of one contact;
 //   - the local, monotonically increasing sequence number of each message,
 //     and therefore the relative order in which messages were stored;
+//   - the number of messages ever stored, including those of deleted
+//     contacts, because the seen table keeps one replay tombstone (the
+//     message lookup HMAC, without any value) per appended message;
 //   - the schema version.
 //
 // The file does not reveal contact IDs, display names, identity bundles,
 // message IDs, message bodies, timestamps, statuses or setting values.
-// Tampering with a stored value is detected and reported as ErrCorrupt;
-// deleting whole rows or rolling the file back to an earlier copy is not.
+//
+// # What is not detected
+//
+// Tampering with a stored value is detected and reported as ErrCorrupt.
+// The following changes by someone with write access to the file are not:
+//
+//   - deleting whole rows, including replay tombstones, which re-enables
+//     the acceptance of the deleted messages;
+//   - rolling the whole file back to an earlier copy;
+//   - per-row rollback: replacing a row's value with an older ciphertext of
+//     the same row. The associated data binds a ciphertext to its table and
+//     row, not to a version, so an earlier value of the same row still
+//     authenticates. An attacker can thereby revert, for example, a
+//     contact's Verified flag or KeyChangedAt, a pinned bundle and its
+//     serial, a message status, or the own bundle serial setting.
+//
+// Callers must therefore not rely on values stored here, such as bundle
+// serials, for protection against an attacker who can write the file; the
+// database protects confidentiality and detects forgery, not rollback.
 //
 // secure_delete overwrites freed pages with zeros. In WAL mode, old page
 // images may remain in the -wal file until the next checkpoint; Close runs a

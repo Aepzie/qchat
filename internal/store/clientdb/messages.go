@@ -10,9 +10,14 @@ import (
 )
 
 // AppendMessage stores m at the end of its conversation and assigns it the
-// next local sequence number. A message with the same (Peer, MsgID) already
-// stored yields ErrDuplicate; replay protection relies on this check.
-// m.Seq is ignored.
+// next local sequence number. A message with the same (Peer, MsgID) that is
+// stored, or was stored and later removed by DeleteContact, yields
+// ErrDuplicate; replay protection relies on this check. m.Seq is ignored.
+//
+// Every appended (Peer, MsgID) is also recorded in the seen table as a
+// value-less HMAC tombstone that DeleteContact keeps, so deleting and
+// re-adding a contact does not let old payloads be delivered again as new
+// messages.
 func (d *DB) AppendMessage(ctx context.Context, m Message) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -30,11 +35,20 @@ func (d *DB) AppendMessage(ctx context.Context, m Message) error {
 	}
 	return d.withTx(ctx, func(tx *sql.Tx) error {
 		var exists int
-		err := tx.QueryRowContext(ctx, `SELECT 1 FROM messages WHERE lookup = ?`, lookup).Scan(&exists)
+		err := tx.QueryRowContext(ctx,
+			`SELECT 1 FROM seen WHERE lookup = ? UNION ALL SELECT 1 FROM messages WHERE lookup = ? LIMIT 1`,
+			lookup, lookup).Scan(&exists)
 		if err == nil {
 			return ErrDuplicate
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("clientdb: append message: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO seen (lookup) VALUES (?)`, lookup)
+		if isUniqueViolation(err) {
+			return ErrDuplicate
+		}
+		if err != nil {
 			return fmt.Errorf("clientdb: append message: %w", err)
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO messages (peer, lookup, value) VALUES (?, ?, x'')`, peer, lookup)
@@ -59,15 +73,22 @@ func (d *DB) AppendMessage(ctx context.Context, m Message) error {
 	})
 }
 
-// HasMessage reports whether a message with (peer, msgID) is stored.
+// HasMessage reports whether a message with (peer, msgID) was ever appended:
+// it is true for a stored message and also for one that DeleteContact has
+// removed, matching the duplicate check of AppendMessage. Use it to discard
+// replayed payloads before decrypting or displaying them; it does not mean
+// the message can still be read.
 func (d *DB) HasMessage(ctx context.Context, peer [32]byte, msgID [16]byte) (bool, error) {
 	if err := d.acquire(); err != nil {
 		return false, err
 	}
 	defer d.mu.RUnlock()
 
+	lookup := d.keys.messageLookup(peer, msgID)
 	var exists int
-	err := d.conn.QueryRowContext(ctx, `SELECT 1 FROM messages WHERE lookup = ?`, d.keys.messageLookup(peer, msgID)).Scan(&exists)
+	err := d.conn.QueryRowContext(ctx,
+		`SELECT 1 FROM seen WHERE lookup = ? UNION ALL SELECT 1 FROM messages WHERE lookup = ? LIMIT 1`,
+		lookup, lookup).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

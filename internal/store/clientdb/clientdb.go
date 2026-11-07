@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 	"sync"
 
@@ -28,6 +30,9 @@ var (
 	ErrInvalid = errors.New("clientdb: invalid argument")
 	// ErrClosed means the database has been closed.
 	ErrClosed = errors.New("clientdb: database is closed")
+	// ErrMissing means OpenExisting found no database file, or a file that
+	// holds no qchat database (for example an empty file).
+	ErrMissing = errors.New("clientdb: database does not exist")
 )
 
 const (
@@ -35,6 +40,7 @@ const (
 	tableContacts = "contacts"
 	tableMessages = "messages"
 	tableSettings = "settings"
+	tableSeen     = "seen"
 
 	metaCanary = "canary"
 
@@ -63,6 +69,10 @@ var migrations = []string{
 		lookup BLOB PRIMARY KEY,
 		value  BLOB NOT NULL
 	) STRICT, WITHOUT ROWID;`,
+	`CREATE TABLE seen (
+		lookup BLOB PRIMARY KEY
+	) STRICT, WITHOUT ROWID;
+	INSERT INTO seen (lookup) SELECT lookup FROM messages;`,
 }
 
 // DB is an open client database. It is safe for concurrent use.
@@ -76,11 +86,33 @@ type DB struct {
 // Open opens or creates the database at path, protected by key. A new file is
 // initialized with the current schema and a canary row; an existing file is
 // migrated and its canary checked, returning ErrWrongKey on mismatch.
+//
+// Open silently creates an empty database when the file is missing. Callers
+// that expect an existing database, such as unlocking a profile, must use
+// [OpenExisting] instead, so that a lost or moved file is reported rather
+// than replaced by an empty one.
 func Open(path string, key [32]byte) (*DB, error) {
+	return open(path, key, false)
+}
+
+// OpenExisting is like [Open] but never creates a database. It returns
+// ErrMissing if path does not exist or holds no qchat database (an empty or
+// uninitialized SQLite file), and leaves the file system unchanged in that
+// case, apart from an empty file SQLite may already have found there.
+func OpenExisting(path string, key [32]byte) (*DB, error) {
+	return open(path, key, true)
+}
+
+func open(path string, key [32]byte, mustExist bool) (*DB, error) {
 	if path == "" || strings.ContainsRune(path, '?') || strings.HasPrefix(path, "file:") || path == ":memory:" {
 		return nil, fmt.Errorf("%w: unsupported database path %q", ErrInvalid, path)
 	}
-	if err := prepareFile(path); err != nil {
+	if mustExist {
+		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrMissing, path)
+		}
+	}
+	if err := prepareFile(path, !mustExist); err != nil {
 		return nil, err
 	}
 	k, err := deriveKeys(key)
@@ -96,7 +128,7 @@ func Open(path string, key [32]byte) (*DB, error) {
 	}
 	conn.SetMaxOpenConns(1)
 	d := &DB{conn: conn, keys: k}
-	if err := d.init(context.Background()); err != nil {
+	if err := d.init(context.Background(), mustExist); err != nil {
 		conn.Close()
 		k.wipe()
 		return nil, err
@@ -105,8 +137,9 @@ func Open(path string, key [32]byte) (*DB, error) {
 }
 
 // init applies pending migrations, writes the canary into a new database and
-// verifies it.
-func (d *DB) init(ctx context.Context) error {
+// verifies it. With mustExist, an uninitialized database is not initialized
+// but reported as ErrMissing.
+func (d *DB) init(ctx context.Context, mustExist bool) error {
 	if err := d.conn.PingContext(ctx); err != nil {
 		return fmt.Errorf("clientdb: open: %w", err)
 	}
@@ -117,6 +150,9 @@ func (d *DB) init(ctx context.Context) error {
 		var version int
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 			return err
+		}
+		if version == 0 && mustExist {
+			return ErrMissing
 		}
 		if version > len(migrations) {
 			return fmt.Errorf("clientdb: database schema version %d is newer than supported version %d", version, len(migrations))

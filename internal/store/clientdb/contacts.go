@@ -99,6 +99,10 @@ func (d *DB) ListContacts(ctx context.Context) ([]Contact, error) {
 // DeleteContact deletes the contact with the given ID and all of its
 // messages. It returns ErrNotFound if no such contact exists; any orphaned
 // messages for that ID are deleted regardless.
+//
+// The replay tombstones of the deleted messages are kept (see
+// AppendMessage), so the relay cannot re-deliver them as new messages after
+// the contact is added again. They hold no message content.
 func (d *DB) DeleteContact(ctx context.Context, id [32]byte) error {
 	if err := d.acquire(); err != nil {
 		return err

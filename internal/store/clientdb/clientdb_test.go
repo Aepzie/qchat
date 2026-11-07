@@ -612,8 +612,8 @@ func TestDeleteContactCascades(t *testing.T) {
 	if _, err := d.GetContact(ctx, a.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted contact: got %v, want ErrNotFound", err)
 	}
-	if ok, err := d.HasMessage(ctx, a.ID, ma.MsgID); err != nil || ok {
-		t.Fatalf("message of deleted contact still present: %v, %v", ok, err)
+	if msgs, err := d.Messages(ctx, a.ID, 10, 0); err != nil || len(msgs) != 0 {
+		t.Fatalf("message of deleted contact still present: %v, %v", msgs, err)
 	}
 	var count int
 	if err := d.conn.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil {
@@ -760,5 +760,122 @@ func TestSubkeysDiffer(t *testing.T) {
 	}
 	if bytes.Equal(k.lookup(labelContact, probe), k.lookup(labelMessage, probe)) {
 		t.Fatal("labels do not separate lookups")
+	}
+}
+
+func TestReplayRejectedAfterDeleteContact(t *testing.T) {
+	ctx := context.Background()
+	d, path, key := openTemp(t)
+	c := sampleContact(t, "Alice")
+	if err := d.PutContact(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	old := sampleMessage(t, c.ID, "old")
+	if err := d.AppendMessage(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.DeleteContact(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutContact(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := d.HasMessage(ctx, c.ID, old.MsgID); err != nil || !ok {
+		t.Fatalf("HasMessage after delete = %v, %v; want true", ok, err)
+	}
+	if err := d.AppendMessage(ctx, old); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("replayed message after delete and re-add: got %v, want ErrDuplicate", err)
+	}
+	if msgs, err := d.Messages(ctx, c.ID, 10, 0); err != nil || len(msgs) != 0 {
+		t.Fatalf("replayed message stored: %v, %v", msgs, err)
+	}
+	fresh := sampleMessage(t, c.ID, "new")
+	if err := d.AppendMessage(ctx, fresh); err != nil {
+		t.Fatalf("new message after re-add: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenExisting(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.AppendMessage(ctx, old); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("replay after reopen: got %v, want ErrDuplicate", err)
+	}
+}
+
+func TestMigrationBackfillsSeen(t *testing.T) {
+	ctx := context.Background()
+	d, path, key := openTemp(t)
+	peer := randomID(t)
+	m := sampleMessage(t, peer, "before migration")
+	if err := d.AppendMessage(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{`DROP TABLE seen`, `DELETE FROM schema_migrations WHERE version = 2`} {
+		if _, err := d.conn.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenExisting(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if _, err := reopened.conn.Exec(`DELETE FROM messages`); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.AppendMessage(ctx, m); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("message stored before migration: got %v, want ErrDuplicate", err)
+	}
+}
+
+func TestOpenExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "qchat.db")
+	key := randomKey(t)
+	if _, err := OpenExisting(path, key); !errors.Is(err, ErrMissing) {
+		t.Fatalf("missing file: got %v, want ErrMissing", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("OpenExisting created the file: %v", err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(path, key); !errors.Is(err, ErrMissing) {
+		t.Fatalf("empty file: got %v, want ErrMissing", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutSetting(context.Background(), "probe", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	existing, err := OpenExisting(path, key)
+	if err != nil {
+		t.Fatalf("existing database: %v", err)
+	}
+	if value, err := existing.GetSetting(context.Background(), "probe"); err != nil || string(value) != "x" {
+		t.Errorf("setting after OpenExisting: %q, %v", value, err)
+	}
+	existing.Close()
+	if _, err := OpenExisting(path, randomKey(t)); !errors.Is(err, ErrWrongKey) {
+		t.Errorf("wrong key: got %v, want ErrWrongKey", err)
+	}
+	if _, err := OpenExisting(":memory:", key); !errors.Is(err, ErrInvalid) {
+		t.Errorf("special path: got %v, want ErrInvalid", err)
 	}
 }
