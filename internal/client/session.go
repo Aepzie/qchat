@@ -20,6 +20,8 @@
 // looks like, and silently retrying would hide it or, worse, train users to
 // ignore it. The same applies to handshakes that are not TLS 1.3 with
 // X25519MLKEM768 and to servers speaking an incompatible protocol version.
+// A malformed server address (transport.ErrInvalidAddress) also stops the
+// session at once, since retrying cannot fix a configuration mistake.
 //
 // Every other failure (network errors, server restarts, keepalive timeouts,
 // errors reported by the server) leads to a reconnect with exponential
@@ -40,7 +42,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/craguS/qchat/internal/buildcfg"
 	"github.com/craguS/qchat/internal/protocol"
 	"github.com/craguS/qchat/internal/transport"
 )
@@ -94,7 +95,8 @@ func (e *RemoteError) Error() string {
 
 // Options configures a Session.
 type Options struct {
-	// Addr is the server address, "host:port".
+	// Addr is the server address, "host:port", as accepted by
+	// transport.ValidateHostPort. The session uses its canonical form.
 	Addr string
 	// Pin is the SHA-256 SPKI fingerprint of the server's public key. It is
 	// required; the zero value is rejected.
@@ -125,9 +127,11 @@ type Session struct {
 
 // New validates opts and returns an idle Session.
 func New(opts Options) (*Session, error) {
-	if err := buildcfg.ValidateAddr(opts.Addr); err != nil {
+	addr, err := transport.ValidateHostPort(opts.Addr)
+	if err != nil {
 		return nil, fmt.Errorf("client: %w", err)
 	}
+	opts.Addr = addr
 	if opts.Pin.IsZero() {
 		return nil, errors.New("client: a server fingerprint (pin) is required")
 	}
@@ -146,7 +150,7 @@ func New(opts Options) (*Session, error) {
 // delivered. Consumers should keep reading until it is closed.
 func (s *Session) Events() <-chan Event { return s.events.out }
 
-// Addr returns the configured server address.
+// Addr returns the configured server address in canonical form.
 func (s *Session) Addr() string { return s.opts.Addr }
 
 // Pin returns the pinned server fingerprint.
@@ -225,7 +229,7 @@ func (s *Session) classify(err error) (error, bool) {
 		s.emit(SecurityAlert{Expected: s.opts.Pin})
 		return err, true
 	}
-	if errors.Is(err, transport.ErrWeakHandshake) || errors.Is(err, ErrIncompatibleVersion) {
+	if errors.Is(err, transport.ErrWeakHandshake) || errors.Is(err, ErrIncompatibleVersion) || errors.Is(err, transport.ErrInvalidAddress) {
 		return err, true
 	}
 	var remote *RemoteError

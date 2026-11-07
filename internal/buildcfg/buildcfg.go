@@ -19,14 +19,13 @@ package buildcfg
 import (
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 
 	"github.com/craguS/qchat/internal/transport"
 )
 
-// ServerAddr is the embedded server address in "host:port" form. It is empty
-// unless set at build time with -ldflags -X.
+// ServerAddr is the embedded server address in "host:port" form, as accepted
+// by transport.ValidateHostPort. It is empty unless set at build time with
+// -ldflags -X.
 var ServerAddr string
 
 // ServerPin is the embedded server public key fingerprint, in any form
@@ -36,7 +35,8 @@ var ServerPin string
 
 // Embedded reports the server this build is locked to.
 //
-// ok is true only when both ServerAddr and ServerPin are set and valid. If
+// ok is true only when both ServerAddr and ServerPin are set and valid; addr
+// is then in the canonical form returned by transport.ValidateHostPort. If
 // neither is set, Embedded returns ok == false and a nil error: the build is
 // not locked. If only one is set, or a value is malformed, Embedded returns an
 // error; such a build is broken and must not fall back to user-supplied
@@ -53,29 +53,13 @@ func parse(rawAddr, rawPin string) (string, transport.Fingerprint, bool, error) 
 	if rawAddr == "" || rawPin == "" {
 		return "", transport.Fingerprint{}, false, errors.New("buildcfg: embedded server configuration is incomplete: both ServerAddr and ServerPin must be set")
 	}
-	if err := ValidateAddr(rawAddr); err != nil {
+	addr, err := transport.ValidateHostPort(rawAddr)
+	if err != nil {
 		return "", transport.Fingerprint{}, false, fmt.Errorf("buildcfg: embedded server address: %w", err)
 	}
 	pin, err := transport.ParseFingerprint(rawPin)
 	if err != nil {
 		return "", transport.Fingerprint{}, false, fmt.Errorf("buildcfg: embedded server pin: %w", err)
 	}
-	return rawAddr, pin, true, nil
-}
-
-// ValidateAddr checks that addr has the "host:port" form with a non-empty
-// host and a port between 1 and 65535. It does not resolve the host.
-func ValidateAddr(addr string) error {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("invalid address %q: want host:port", addr)
-	}
-	if host == "" {
-		return fmt.Errorf("invalid address %q: empty host", addr)
-	}
-	n, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || n == 0 {
-		return fmt.Errorf("invalid address %q: port must be 1-65535", addr)
-	}
-	return nil
+	return addr, pin, true, nil
 }

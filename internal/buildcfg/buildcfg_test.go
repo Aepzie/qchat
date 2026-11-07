@@ -1,8 +1,11 @@
 package buildcfg
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/craguS/qchat/internal/transport"
 )
 
 const validPin = "sha256:0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
@@ -59,15 +62,15 @@ func TestEmbeddedUsesPackageVariables(t *testing.T) {
 	}
 }
 
-func TestValidateAddr(t *testing.T) {
-	for _, good := range []string{"localhost:1", "example.org:65535", "[::1]:8443"} {
-		if err := ValidateAddr(good); err != nil {
-			t.Errorf("ValidateAddr(%q) = %v", good, err)
+func TestParseUsesTransportAddressRules(t *testing.T) {
+	for _, bad := range []string{"user@chat.example.org:443", "chat example.org:443", "chat.example.org/x:443", "bücher.example:443"} {
+		_, _, ok, err := parse(bad, validPin)
+		if ok || !errors.Is(err, transport.ErrInvalidAddress) {
+			t.Errorf("parse(%q): ok=%v err=%v, want ErrInvalidAddress", bad, ok, err)
 		}
 	}
-	for _, bad := range []string{"", "host", "host:", "host:abc", "host:70000", ":80"} {
-		if err := ValidateAddr(bad); err == nil {
-			t.Errorf("ValidateAddr(%q) succeeded", bad)
-		}
+	addr, _, ok, err := parse("chat.example.org:0443", validPin)
+	if !ok || err != nil || addr != "chat.example.org:443" {
+		t.Errorf("parse(non-canonical port) = %q, %v, %v; want canonical address", addr, ok, err)
 	}
 }

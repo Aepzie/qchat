@@ -227,6 +227,47 @@ func TestNewValidates(t *testing.T) {
 	if _, err := New(Options{Addr: "example.org:443", Pin: pin}); err != nil {
 		t.Errorf("New with valid options: %v", err)
 	}
+	for _, bad := range []string{"user@example.org:443", "exa mple.org:443", "example.org/x:443", "bücher.example:443"} {
+		if _, err := New(Options{Addr: bad, Pin: pin}); !errors.Is(err, transport.ErrInvalidAddress) {
+			t.Errorf("New(Addr: %q) error = %v, want ErrInvalidAddress", bad, err)
+		}
+	}
+	s, err := New(Options{Addr: "example.org:0443", Pin: pin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Addr() != "example.org:443" {
+		t.Errorf("Addr() = %q, want canonical example.org:443", s.Addr())
+	}
+}
+
+func TestInvalidAddressIsPermanent(t *testing.T) {
+	var pin transport.Fingerprint
+	pin[0] = 1
+	dialed := atomic.Int32{}
+	dialer := func(context.Context, string, string) (net.Conn, error) {
+		dialed.Add(1)
+		return nil, errors.New("must not dial")
+	}
+	s := newTestSession(t, Options{Addr: "example.org:443", Pin: pin, Dialer: dialer})
+	s.opts.Addr = "user@example.org:443"
+	_, res := runSession(t, s)
+	seen := waitFor(t, s, "Failed", isState(Failed))
+	if err := seen[len(seen)-1].(StateChanged).Err; !errors.Is(err, transport.ErrInvalidAddress) {
+		t.Fatalf("Failed.Err = %v, want ErrInvalidAddress", err)
+	}
+	if err := res.wait(t); !errors.Is(err, transport.ErrInvalidAddress) {
+		t.Fatalf("Run = %v, want ErrInvalidAddress", err)
+	}
+	attempts := 0
+	for _, ev := range seen {
+		if sc, ok := ev.(StateChanged); ok && sc.State == Connecting {
+			attempts++
+		}
+	}
+	if attempts != 1 || dialed.Load() != 0 {
+		t.Fatalf("attempts = %d, network dials = %d; want 1 attempt and no dial", attempts, dialed.Load())
+	}
 }
 
 func TestConnectWelcomeAndRTT(t *testing.T) {
@@ -450,6 +491,46 @@ func TestKeepaliveTimeout(t *testing.T) {
 	seen := waitFor(t, s, "Disconnected", isState(Disconnected))
 	if err := seen[len(seen)-1].(StateChanged).Err; !errors.Is(err, ErrKeepaliveTimeout) {
 		t.Fatalf("Disconnected.Err = %v", err)
+	}
+}
+
+func TestKeepaliveDeadlineIndependentOfPingTicks(t *testing.T) {
+	const pongs = 3
+	const grace = 50 * time.Millisecond
+	lastPong := make(chan time.Time, 1)
+	fs := startFakeServer(t, func(ctx context.Context, conn *websocket.Conn, n int) {
+		if n != 1 || !welcome(ctx, t, conn) {
+			return
+		}
+		if !servePongs(ctx, conn, pongs) {
+			return
+		}
+		lastPong <- time.Now()
+		for {
+			if _, _, err := conn.Read(ctx); err != nil {
+				return
+			}
+		}
+	})
+	s := newTestSession(t, Options{Addr: fs.addr, Pin: fs.pin})
+	s.idleGrace = grace
+	runSession(t, s)
+	waitFor(t, s, "Connected", isState(Connected))
+	seen := waitFor(t, s, "Disconnected", isState(Disconnected))
+	detected := time.Now()
+	if err := seen[len(seen)-1].(StateChanged).Err; !errors.Is(err, ErrKeepaliveTimeout) {
+		t.Fatalf("Disconnected.Err = %v", err)
+	}
+	var silentSince time.Time
+	select {
+	case silentSince = <-lastPong:
+	default:
+		t.Fatal("server did not answer the expected pings before the timeout")
+	}
+	interval := time.Second
+	want := 2*interval + grace
+	if got := detected.Sub(silentSince); got < want-200*time.Millisecond || got > want+400*time.Millisecond {
+		t.Fatalf("dead peer detected %v after the last frame, want about %v", got, want)
 	}
 }
 

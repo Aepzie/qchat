@@ -146,6 +146,12 @@ func (c *liveConn) handshake(ctx context.Context) (ConnectionInfo, error) {
 
 // keepalive pings the server every interval and handles incoming frames
 // until the connection fails or ctx ends. It always returns a non-nil error.
+//
+// The connection is considered dead once nothing at all has been received
+// for 2*interval plus the idle grace period. That deadline is tracked by its
+// own timer, restarted on every received frame, rather than checked on the
+// ping ticker: with long server-announced intervals, checking only on ticks
+// would let a dead peer go unnoticed for up to one more interval.
 func (c *liveConn) keepalive(ctx context.Context, interval time.Duration) error {
 	c.outstanding = make(map[uint64]pendingPing)
 	idleLimit := 2*interval + c.session.idleGrace
@@ -156,19 +162,21 @@ func (c *liveConn) keepalive(ctx context.Context, interval time.Duration) error 
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	idle := time.NewTimer(idleLimit)
+	defer idle.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case r := <-c.frames:
 			lastRecv = time.Now()
+			idle.Reset(idleLimit)
 			if err := c.handleFrame(ctx, r); err != nil {
 				return err
 			}
+		case <-idle.C:
+			return fmt.Errorf("%w: nothing received for %s", ErrKeepaliveTimeout, time.Since(lastRecv).Round(time.Second))
 		case now := <-ticker.C:
-			if now.Sub(lastRecv) > idleLimit {
-				return fmt.Errorf("%w: nothing received for %s", ErrKeepaliveTimeout, now.Sub(lastRecv).Round(time.Second))
-			}
 			c.expirePings(now, idleLimit)
 			if err := c.ping(ctx); err != nil {
 				return err

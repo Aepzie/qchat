@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -51,7 +50,8 @@ type DialOptions struct {
 // Dial opens a WebSocket connection to wss://hostport/v1/ws and
 // authenticates the server by its pinned public key fingerprint.
 //
-// hostport must be "host:port" (IPv6 hosts in brackets). The TLS handshake
+// hostport must be accepted by ValidateHostPort; otherwise an error wrapping
+// ErrInvalidAddress is returned before any network activity. The TLS handshake
 // must use TLS 1.3 with X25519MLKEM768, the server key must match pin, and
 // the server must select Subprotocol; otherwise the connection is closed and
 // an error is returned. A zero pin is rejected before any network activity.
@@ -70,7 +70,7 @@ func Dial(ctx context.Context, hostport string, pin Fingerprint, opts DialOption
 	if pin.IsZero() {
 		return nil, errNoPin
 	}
-	host, err := normalizeHostPort(hostport)
+	host, err := ValidateHostPort(hostport)
 	if err != nil {
 		return nil, err
 	}
@@ -125,28 +125,6 @@ func newPinnedHTTPClient(pin Fingerprint, dial func(ctx context.Context, network
 			return http.ErrUseLastResponse
 		},
 	}
-}
-
-// normalizeHostPort validates "host:port" and returns it in canonical form.
-func normalizeHostPort(hostport string) (string, error) {
-	host, port, err := net.SplitHostPort(hostport)
-	if err != nil {
-		return "", fmt.Errorf("transport: invalid server address: %w", err)
-	}
-	if host == "" {
-		return "", errors.New("transport: invalid server address: empty host")
-	}
-	for i := 0; i < len(host); i++ {
-		c := host[i]
-		if c <= ' ' || c >= 0x7f || strings.IndexByte(`/\?#@[]`, c) >= 0 {
-			return "", errors.New("transport: invalid server address: illegal character in host")
-		}
-	}
-	portNum, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || portNum == 0 {
-		return "", errors.New("transport: invalid server address: bad port")
-	}
-	return net.JoinHostPort(host, strconv.FormatUint(portNum, 10)), nil
 }
 
 // effectiveReadLimit maps "unset" (zero) and invalid negative values to

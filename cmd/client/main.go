@@ -104,7 +104,7 @@ func resolveTarget(emb embedded, o options) (target, error) {
 		return target{}, fmt.Errorf("this build is misconfigured: %w", emb.err)
 	}
 	if emb.ok {
-		if o.serverSet && o.server != emb.addr {
+		if o.serverSet && !sameServer(o.server, emb.addr) {
 			return target{}, fmt.Errorf("this client is locked to %s", emb.addr)
 		}
 		if o.pinSet {
@@ -124,14 +124,23 @@ func resolveTarget(emb embedded, o options) (target, error) {
 	case !o.pinSet || o.pin == "":
 		return target{}, errors.New("missing --pin sha256:<fingerprint>; get it from the server operator over a channel you trust")
 	}
-	if err := buildcfg.ValidateAddr(o.server); err != nil {
+	addr, err := transport.ValidateHostPort(o.server)
+	if err != nil {
 		return target{}, fmt.Errorf("--server: %w", err)
 	}
 	pin, err := transport.ParseFingerprint(o.pin)
 	if err != nil {
 		return target{}, fmt.Errorf("--pin: %w", err)
 	}
-	return target{addr: o.server, pin: pin}, nil
+	return target{addr: addr, pin: pin}, nil
+}
+
+// sameServer reports whether the user-supplied address flag names the
+// embedded server, which is already in canonical form. Equivalent spellings
+// such as a port with leading zeros match; anything invalid does not.
+func sameServer(flagAddr, embeddedAddr string) bool {
+	addr, err := transport.ValidateHostPort(flagAddr)
+	return err == nil && addr == embeddedAddr
 }
 
 // run is main without the process exit, for testing. It returns the exit

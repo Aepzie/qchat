@@ -40,11 +40,12 @@ func TestResolveWithoutEmbedding(t *testing.T) {
 	}
 
 	cases := map[string][]string{
-		"missing --server and --pin": nil,
-		"missing --server":           {"--pin", pinA},
-		"missing --pin":              {"--server", "chat.example.org:443"},
-		"--server: invalid address":  {"--server", "chat.example.org", "--pin", pinA},
-		"--pin:":                     {"--server", "chat.example.org:443", "--pin", "sha256:abcd"},
+		"missing --server and --pin":                  nil,
+		"missing --server":                            {"--pin", pinA},
+		"missing --pin":                               {"--server", "chat.example.org:443"},
+		"--server: transport: invalid server address": {"--server", "chat.example.org", "--pin", pinA},
+		"illegal character in host":                   {"--server", "user@chat.example.org:443", "--pin", pinA},
+		"--pin:":                                      {"--server", "chat.example.org:443", "--pin", "sha256:abcd"},
 	}
 	for want, args := range cases {
 		_, err := resolveTarget(embedded{}, flags(t, args...))
@@ -60,6 +61,7 @@ func TestResolveLockedBuild(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
 		{"--server", "locked.example.org:443"},
+		{"--server", "locked.example.org:0443"},
 		{"--pin", strings.ToUpper(pinA[7:])},
 		{"--server", "locked.example.org:443", "--pin", pinA},
 	} {
@@ -75,6 +77,7 @@ func TestResolveLockedBuild(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"--server", "evil.example.org:443"},
+		{"--server", "user@locked.example.org:443"},
 		{"--pin", pinB},
 		{"--pin", "garbage"},
 		{"--server", "locked.example.org:443", "--pin", pinB},
