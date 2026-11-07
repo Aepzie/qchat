@@ -22,6 +22,7 @@ const (
 	convSystem convKind = iota
 	convRequests
 	convContact
+	convGroup
 )
 
 // Keys of the pseudo-conversations. They start with a NUL byte, which no
@@ -36,6 +37,7 @@ type conversation struct {
 	key     string
 	kind    convKind
 	contact ContactInfo
+	group   GroupInfo
 	unread  int
 	entries []entry
 	// loaded reports that the stored history was fetched; loading that a
@@ -53,6 +55,8 @@ func (c *conversation) title() string {
 		return "System"
 	case convRequests:
 		return "Message requests"
+	case convGroup:
+		return "# " + c.group.Name
 	}
 	return c.contact.label()
 }

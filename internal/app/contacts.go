@@ -273,8 +273,11 @@ func (a *App) MarkVerified(contactID string, verified bool) error {
 	})
 }
 
-// MarkRead resets the unread count of a contact.
+// MarkRead resets the unread count of a contact or group.
 func (a *App) MarkRead(contactID string) error {
+	if isGroupKey(contactID) {
+		return a.markGroupRead(contactID)
+	}
 	id, err := parseContactID(contactID)
 	if err != nil {
 		return err

@@ -37,7 +37,8 @@ const (
 	keyIDAttempts = 8
 )
 
-// startMaintenance runs maintainPrekeys in the background. Runs never
+// startMaintenance runs maintainPrekeys, then pruneGroupKeys, in the
+// background. Prekey maintenance runs never
 // overlap; a run requested while one is in progress is skipped.
 func (a *App) startMaintenance(ctx context.Context) {
 	a.bg.Add(1)
@@ -45,6 +46,7 @@ func (a *App) startMaintenance(ctx context.Context) {
 		defer a.bg.Done()
 		defer a.maintRuns.Add(1)
 		_ = a.maintainPrekeys(ctx)
+		_ = a.pruneGroupKeys(ctx)
 	}()
 }
 

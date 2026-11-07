@@ -8,6 +8,10 @@
 // continued with the KEM double ratchet (package ratchet), carried in the
 // envelopes of package e2e. The App keeps its own prekeys stocked on the
 // relay (see prekeys.go) and implements the session rules (see sessions.go).
+// Groups (docs/design/phase-4-groups.md) are built on top: signed controls
+// and sender keys travel over the pairwise sessions, group messages are
+// encrypted once with the sender's sender key and fanned out by the relay
+// (see groups.go for the rules, groupapi.go for the interface side).
 //
 // Behaviour worth knowing:
 //
@@ -46,6 +50,7 @@ import (
 	"time"
 
 	"github.com/craguS/qchat/internal/client"
+	"github.com/craguS/qchat/internal/group"
 	"github.com/craguS/qchat/internal/identity"
 	"github.com/craguS/qchat/internal/profile"
 	"github.com/craguS/qchat/internal/protocol"
@@ -96,6 +101,13 @@ type App struct {
 	emitMu sync.RWMutex
 	closed bool
 
+	// groupMu serialises every change of group states and sender keys and
+	// the processing of deliveries, so that group input is applied in
+	// order; pending holds group input that waits (see groups.go). It is
+	// taken before ratchetMu.
+	groupMu sync.Mutex
+	pending []pendingGroup
+
 	// ratchetMu serialises every use of the stored ratchet sessions and of
 	// shadows and handshakes, so that a session is never loaded, advanced
 	// and written back by two goroutines at once. It is taken before mu.
@@ -113,8 +125,22 @@ type App struct {
 	unread   map[identity.ID]int
 	requests map[identity.ID][]clientdb.Message
 	inflight map[messageKey]struct{}
-	dropped  int
-	denied   *client.RegistrationDenied
+	// groupUnread counts unread group messages; bundles caches the bundles
+	// of group members who are not contacts.
+	groupUnread map[group.ID]int
+	bundles     map[identity.ID]*identity.Bundle
+	// onboarding holds control histories received for groups the user is
+	// being added to; groupStatus the relay result of group messages sent
+	// in this run; backlogUntil when the backlog after connecting is
+	// considered processed (wall clock).
+	// groupOutOfSync records whether the last message received in a group
+	// was sent from a different group state than the own.
+	groupOutOfSync map[group.ID]bool
+	onboarding     map[onboardKey][][]byte
+	groupStatus    map[messageKey]uint8
+	backlogUntil   time.Time
+	dropped        int
+	denied         *client.RegistrationDenied
 }
 
 // New returns an App for an unlocked profile. invite is the invite code
@@ -133,19 +159,24 @@ func New(p *profile.Profile, invite string) (*App, error) {
 		return nil, fmt.Errorf("app: own bundle is invalid: %w", err)
 	}
 	return &App{
-		prof:       p,
-		invite:     invite,
-		self:       self,
-		selfRaw:    raw,
-		now:        time.Now,
-		tuiEvents:  make(chan client.Event, eventBuffer),
-		chat:       make(chan tui.ChatEvent, eventBuffer),
-		done:       make(chan struct{}),
-		unread:     map[identity.ID]int{},
-		requests:   map[identity.ID][]clientdb.Message{},
-		inflight:   map[messageKey]struct{}{},
-		shadows:    map[identity.ID]shadowSession{},
-		handshakes: map[identity.ID][]time.Time{},
+		prof:           p,
+		invite:         invite,
+		self:           self,
+		selfRaw:        raw,
+		now:            time.Now,
+		tuiEvents:      make(chan client.Event, eventBuffer),
+		chat:           make(chan tui.ChatEvent, eventBuffer),
+		done:           make(chan struct{}),
+		unread:         map[identity.ID]int{},
+		requests:       map[identity.ID][]clientdb.Message{},
+		inflight:       map[messageKey]struct{}{},
+		groupUnread:    map[group.ID]int{},
+		bundles:        map[identity.ID]*identity.Bundle{},
+		onboarding:     map[onboardKey][][]byte{},
+		groupOutOfSync: map[group.ID]bool{},
+		groupStatus:    map[messageKey]uint8{},
+		shadows:        map[identity.ID]shadowSession{},
+		handshakes:     map[identity.ID][]time.Time{},
 	}, nil
 }
 
@@ -233,10 +264,12 @@ func (a *App) Run(ctx context.Context, events <-chan client.Event) {
 func (a *App) handleEvent(ctx context.Context, ev client.Event) bool {
 	switch e := ev.(type) {
 	case client.Delivery:
+		a.noteDelivery()
 		a.handleDelivery(ctx, e)
 		return false
 	case client.StateChanged:
 		if e.State == client.Connected {
+			a.noteConnected()
 			a.startMaintenance(ctx)
 		}
 	case client.RegistrationDenied:

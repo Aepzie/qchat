@@ -172,6 +172,14 @@ func (m *Model) handleResult(msg tea.Msg) (tea.Cmd, bool) {
 		m.applyVerification(msg)
 	case markVerifiedMsg:
 		m.applyMarkVerified(msg)
+	case groupsMsg:
+		if msg.err != nil {
+			m.sysLog(entryError, "Cannot load groups: "+describeBackendError(msg.err)+".")
+			return nil, true
+		}
+		return m.mergeGroups(msg.groups), true
+	case groupResultMsg:
+		return m.applyGroupResult(msg), true
 	default:
 		return nil, false
 	}
@@ -226,15 +234,16 @@ func (m *Model) openConversation(key string) tea.Cmd {
 	m.open, m.cursor = key, key
 	m.input.placeholder = placeholderFor(c)
 	var cmds []tea.Cmd
+	stored := c.kind == convContact || c.kind == convGroup
 	if c.unread > 0 {
 		c.unread = 0
-		if c.kind == convContact {
-			cmds = append(cmds, m.markRead(c.contact.ID))
+		if stored {
+			cmds = append(cmds, m.markRead(c.key))
 		}
 	}
-	if c.kind == convContact && !c.loaded && !c.loading && m.cfg.Backend != nil {
+	if stored && !c.loaded && !c.loading && m.cfg.Backend != nil {
 		c.loading = true
-		cmds = append(cmds, m.loadHistory(c.contact.ID))
+		cmds = append(cmds, m.loadHistory(c.key))
 	}
 	if changed {
 		m.refreshHistory()
@@ -249,6 +258,14 @@ func placeholderFor(c *conversation) string {
 		return "Message " + c.contact.label() + " · /help"
 	case convRequests:
 		return "Read only · /add <qc1-id> [name] to accept"
+	case convGroup:
+		switch {
+		case c.group.Left:
+			return "Read only · you are no longer a member"
+		case c.group.Invite:
+			return "Invitation · /group accept or /group leave"
+		}
+		return "Message " + c.title() + " · /group members · /help"
 	}
 	return "Type a note or /help"
 }
@@ -259,6 +276,12 @@ func (m *Model) mergeContacts(list []ContactInfo) tea.Cmd {
 	next := []conversation{m.convs[0]}
 	if req := m.conv(requestsKey); req != nil {
 		next = append(next, *req)
+	}
+	var groups []conversation
+	for _, c := range m.convs {
+		if c.kind == convGroup {
+			groups = append(groups, c)
+		}
 	}
 	seen := map[string]bool{}
 	var cmds []tea.Cmd
@@ -281,7 +304,12 @@ func (m *Model) mergeContacts(list []ContactInfo) tea.Cmd {
 		relabel(&c)
 		next = append(next, c)
 	}
-	m.convs = next
+	m.convs = append(next, groups...)
+	for i := range m.convs {
+		if m.convs[i].kind == convGroup {
+			m.relabelGroup(&m.convs[i])
+		}
+	}
 	if m.conv(m.open) == nil {
 		m.open = systemKey
 		m.input.placeholder = placeholderFor(&m.convs[0])
@@ -343,7 +371,14 @@ func (m *Model) applyHistory(msg historyMsg) {
 	known := map[string]bool{}
 	entries := make([]entry, 0, len(msg.messages)+len(c.entries))
 	for _, mi := range msg.messages {
-		e := messageEntry(mi, c.contact.label())
+		from := c.contact.label()
+		if c.kind == convGroup {
+			from = m.memberLabel(c, cleanLine(mi.From, 128))
+		}
+		e := messageEntry(mi, from)
+		if c.kind == convGroup {
+			e.sender = cleanLine(mi.From, 128)
+		}
 		if e.at.IsZero() {
 			e.at = m.cfg.Now()
 		}
@@ -378,13 +413,18 @@ func (m *Model) handleChatEvent(ev ChatEvent) tea.Cmd {
 		return m.keyChanged(cleanLine(e.ContactID, 128))
 	case ContactsChanged:
 		return m.loadContacts()
+	case GroupChanged:
+		return m.groupChanged(e)
 	}
 	return nil
 }
 
-// receive files an incoming message under its contact, or under Message
-// requests when the sender is unknown.
+// receive files an incoming message under its contact or group, or under
+// Message requests when the sender is unknown.
 func (m *Model) receive(e IncomingMessage) tea.Cmd {
+	if e.GroupID != "" {
+		return m.receiveGroup(e)
+	}
 	id := cleanLine(e.ContactID, 128)
 	if id == "" {
 		return nil
@@ -467,7 +507,7 @@ func (m *Model) sendMessage(c *conversation, text string) tea.Cmd {
 	}
 	m.nextLocalID++
 	localID := fmt.Sprintf("%s%d", localIDPrefix, m.nextLocalID)
-	id := c.contact.ID
+	id := c.key
 	m.add(entry{kind: entryMessage, text: sanitizeText(text), from: "you", msgID: localID, outgoing: true, status: StatusSending})
 	m.history.GotoBottom()
 	return sendCmd(b, id, localID, text)

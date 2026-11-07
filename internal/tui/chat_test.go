@@ -37,6 +37,10 @@ type fakeBackend struct {
 	marked    map[string]bool
 	read      []string
 	nextID    int
+	groups    []GroupInfo
+	changes   []string
+	created   []string
+	groupErr  error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -137,6 +141,45 @@ func (f *fakeBackend) MarkRead(id string) error {
 	defer f.mu.Unlock()
 	f.read = append(f.read, id)
 	return nil
+}
+
+func (f *fakeBackend) Groups() ([]GroupInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]GroupInfo(nil), f.groups...), nil
+}
+
+func (f *fakeBackend) CreateGroup(_ context.Context, name string, members []string) (GroupInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.created = append(f.created, name+"|"+strings.Join(members, ","))
+	if f.groupErr != nil {
+		return GroupInfo{}, f.groupErr
+	}
+	g := GroupInfo{ID: testGroupID(byte('0' + len(f.groups))), Name: name, Members: []GroupMember{{ID: selfID, ShortID: "qc1-ssss-ssss", Admin: true, Self: true}}}
+	for _, id := range members {
+		g.Members = append(g.Members, GroupMember{ID: id, ShortID: shortID(id)})
+	}
+	f.groups = append(f.groups, g)
+	return g, nil
+}
+
+func (f *fakeBackend) ChangeGroup(_ context.Context, id string, change GroupChange) (GroupInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.changes = append(f.changes, fmt.Sprintf("%s|%d|%s|%s", id, change.Op, change.Member, change.Name))
+	if f.groupErr != nil {
+		return GroupInfo{}, f.groupErr
+	}
+	for i := range f.groups {
+		if f.groups[i].ID == id {
+			if change.Op == GroupRename {
+				f.groups[i].Name = change.Name
+			}
+			return f.groups[i], nil
+		}
+	}
+	return GroupInfo{}, errors.New("no such group")
 }
 
 // drain runs cmd and every command its messages produce, feeding the

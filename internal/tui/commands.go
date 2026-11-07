@@ -26,23 +26,37 @@ var commands = []command{
 	{"/whoami", "your ID and QR code"},
 	{"/status", "connection details"},
 	{"/fingerprint", "pinned server key"},
+	{"/group", "groups: create <name> [ids], add, remove, members…"},
 	{"/clear", "clear this view"},
 	{"/quit", "exit qchat"},
 }
 
 // paletteQuery returns the command prefix being typed, or false if the input
-// is not a command in progress.
+// is not a command in progress. "/group " followed by one partial word is a
+// query for the /group subcommands.
 func paletteQuery(input string) (string, bool) {
-	if !strings.HasPrefix(input, "/") || strings.ContainsAny(input, " \t\n") {
+	if !strings.HasPrefix(input, "/") || strings.ContainsAny(input, "\t\n") {
+		return "", false
+	}
+	name, sub, spaced := strings.Cut(input, " ")
+	if !spaced {
+		return input, true
+	}
+	if strings.ToLower(name) != "/group" || strings.Contains(sub, " ") {
 		return "", false
 	}
 	return input, true
 }
 
-// matchCommands returns the commands whose name starts with prefix.
+// matchCommands returns the commands whose name starts with prefix: the
+// /group subcommands when prefix holds a space, the commands otherwise.
 func matchCommands(prefix string) []command {
+	list := commands
+	if strings.Contains(prefix, " ") {
+		list = groupCommands
+	}
 	var out []command
-	for _, c := range commands {
+	for _, c := range list {
 		if strings.HasPrefix(c.name, strings.ToLower(prefix)) {
 			out = append(out, c)
 		}
@@ -92,6 +106,8 @@ func (m *Model) runCommand(input string) tea.Cmd {
 	switch name {
 	case "/add":
 		return m.cmdAdd(fields[1:])
+	case "/group":
+		return m.cmdGroup(fields[1:])
 	case "/rename":
 		return m.cmdRename(rest)
 	case "/remove":
@@ -192,7 +208,7 @@ func helpRows() []row {
 		row{"normal", "J/K select · enter open · i insert · j/k line · ctrl+d/u half page · g/G top/bottom · : command · q quit"},
 		row{"status", "… sending · ✓ sent, stored by the relay until delivered · ⧗ recipient offline, not delivered (old relays) · ✕ not sent · ◷ sender clock off"},
 		row{"contacts", "✓ verified · ⚠ safety number changed, run /verify"},
-		row{"privacy", "Messages to contacts are end-to-end encrypted with forward secrecy; session starts are signed. The relay sees who talks to whom, when, and message sizes. Notes typed in System stay on this device."},
+		row{"privacy", "Messages to contacts and # groups are end-to-end encrypted. The relay sees who talks to whom (for groups, every recipient), when, and sizes. Notes in System stay on this device."},
 	)
 }
 
@@ -230,7 +246,8 @@ func (m *Model) statusRows() []row {
 	}
 	return append(rows,
 		row{"e2e", "prekey sessions and KEM ratchet with ML-KEM-768 + X25519, session starts signed with Ed25519 + ML-DSA-65"},
-		row{"limits", "the relay sees sender, recipient, time and size · not independently audited"},
+		row{"groups", "sender keys with hybrid signatures, rotated when a member leaves or is removed"},
+		row{"limits", "the relay sees sender, recipients (also of group messages), time and size · not independently audited"},
 	)
 }
 

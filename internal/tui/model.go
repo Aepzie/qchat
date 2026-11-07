@@ -8,11 +8,11 @@
 // from tea.Cmds. Tests can therefore drive it entirely by feeding messages to
 // Update and inspecting View.
 //
-// The interface is honest about what Phase 3 protects: messages to contacts
-// are end-to-end encrypted with forward secrecy and the relay stores them
-// until they are delivered, but the relay sees who talks to whom, when and
-// how much. Notes typed in the System conversation never
-// leave the device.
+// The interface is honest about what Phases 3 and 4 protect: messages to
+// contacts and groups are end-to-end encrypted and the relay stores them
+// until they are delivered, but the relay sees who talks to whom, the
+// recipients of every group message, when and how much. Notes typed in the
+// System conversation never leave the device.
 //
 // CreateProfileModel and UnlockModel are separate small models for the
 // steps before the chat starts.
@@ -185,7 +185,7 @@ func (m Model) Quitting() bool { return m.quitting }
 
 // Init starts listening for events and loads the identity and contacts.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.listen(), m.listenChat(), m.loadSelf(), m.loadContacts())
+	return tea.Batch(m.listen(), m.listenChat(), m.loadSelf(), m.loadContacts(), m.loadGroups())
 }
 
 // listen waits for the next session event.
@@ -390,6 +390,16 @@ func (m *Model) submit() tea.Cmd {
 	case convRequests:
 		m.log(entryWarn, "Message requests cannot be answered. Add the sender with /add <qc1-id> [name] first.")
 		return nil
+	case convGroup:
+		switch {
+		case c.group.Left:
+			m.log(entryWarn, "You are no longer a member of this group.")
+			return nil
+		case c.group.Invite:
+			m.log(entryWarn, "Accept the invitation with /group accept first, or decline it with /group leave.")
+			return nil
+		}
+		return m.sendMessage(c, raw)
 	}
 	m.add(entry{kind: entryNote, text: sanitizeText(raw)})
 	m.history.GotoBottom()
