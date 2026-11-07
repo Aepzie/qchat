@@ -26,8 +26,8 @@ qchat has not been audited by an independent party. It is pre-alpha software. Do
 
 - **Honest-but-curious or compromised relay server.** The server must never see plaintext, private keys, group keys or group names. Its view of metadata should be minimised.
 - **Network attacker (active MITM or passive recorder).** Cannot read or modify traffic; the client pins the server key and does not trust public CAs.
-- **Harvest-now-decrypt-later quantum adversary.** Hybrid post-quantum constructions are used throughout (X25519 + ML-KEM-768, Ed25519 + ML-DSA-65), so confidentiality and authenticity hold as long as at least one component remains unbroken.
-- **Stolen device.** Local data is encrypted with a key derived from the user's passphrase using Argon2id.
+- **Harvest-now-decrypt-later quantum adversary.** The design goal is hybrid post-quantum constructions throughout (X25519 + ML-KEM-768, Ed25519 + ML-DSA-65), so confidentiality and authenticity hold as long as at least one component remains unbroken. Today (Phase 1) only the transport key exchange is hybrid (X25519MLKEM768). Server authentication still relies on a classical Ed25519 certificate key: recorded traffic stays confidential against a future quantum computer, but such a computer could impersonate the pinned server in a live connection.
+- **Stolen device.** Goal: local data encrypted with a key derived from the user's passphrase using Argon2id. Not implemented yet; Phase 1 stores no user data on the client.
 
 ### Metadata minimisation goals
 

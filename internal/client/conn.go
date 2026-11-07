@@ -1,0 +1,315 @@
+package client
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/rand/v2"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/craguS/qchat/internal/protocol"
+	"github.com/craguS/qchat/internal/transport"
+)
+
+// outcome describes how one connection attempt ended.
+type outcome struct {
+	err         error
+	established bool
+	uptime      time.Duration
+}
+
+// readResult is one message (or the terminal error) from the reader
+// goroutine.
+type readResult struct {
+	kind websocket.MessageType
+	msg  []byte
+	err  error
+}
+
+// pendingPing is a Ping awaiting its Pong.
+type pendingPing struct {
+	nonce uint64
+	sent  time.Time
+}
+
+// connectOnce runs a single connection from dial to teardown.
+func (s *Session) connectOnce(ctx context.Context) outcome {
+	dialCtx, cancelDial := context.WithTimeout(ctx, dialTimeout)
+	conn, err := transport.Dial(dialCtx, s.opts.Addr, s.opts.Pin, transport.DialOptions{
+		NetDialContext: s.opts.Dialer,
+		ReadLimit:      protocol.MaxFrameSize,
+	})
+	cancelDial()
+	if err != nil {
+		return outcome{err: err}
+	}
+	defer conn.CloseNow()
+
+	// The reader uses its own context: cancelling the context passed to
+	// Read tears the connection down immediately, which would prevent the
+	// orderly close below.
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	defer cancelRead()
+	frames := make(chan readResult)
+	go readLoop(readCtx, conn, frames)
+
+	c := &liveConn{session: s, conn: conn, frames: frames, nextID: helloID + 1}
+	info, err := c.handshake(ctx)
+	if err != nil {
+		c.closeWith(err)
+		return outcome{err: err}
+	}
+	s.setConnected(info)
+	s.emit(StateChanged{State: Connected, Info: info})
+
+	err = c.keepalive(ctx, info.PingInterval)
+	c.closeWith(err)
+	return outcome{err: err, established: true, uptime: time.Since(info.ConnectedAt)}
+}
+
+// readLoop forwards incoming messages until an error occurs or ctx ends.
+func readLoop(ctx context.Context, conn *websocket.Conn, out chan<- readResult) {
+	for {
+		kind, msg, err := conn.Read(ctx)
+		select {
+		case out <- readResult{kind: kind, msg: msg, err: err}:
+		case <-ctx.Done():
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// liveConn is the state of one established WebSocket connection.
+type liveConn struct {
+	session     *Session
+	conn        *websocket.Conn
+	frames      <-chan readResult
+	nextID      uint64
+	outstanding map[uint64]pendingPing
+}
+
+// handshake sends Hello and waits for the matching Welcome.
+func (c *liveConn) handshake(ctx context.Context) (ConnectionInfo, error) {
+	if err := sendFrame(ctx, c.conn, protocol.TypeHello, helloID, protocol.ClientHello()); err != nil {
+		return ConnectionInfo{}, err
+	}
+	timer := time.NewTimer(c.session.handshake)
+	defer timer.Stop()
+
+	var r readResult
+	select {
+	case <-ctx.Done():
+		return ConnectionInfo{}, ctx.Err()
+	case <-timer.C:
+		return ConnectionInfo{}, ErrHandshakeTimeout
+	case r = <-c.frames:
+	}
+	f, err := decodeMessage(r)
+	if err != nil {
+		return ConnectionInfo{}, err
+	}
+	switch f.Type {
+	case protocol.TypeError:
+		return ConnectionInfo{}, c.remoteError(f)
+	case protocol.TypeWelcome:
+	default:
+		return ConnectionInfo{}, fmt.Errorf("%w: expected Welcome, got %v", ErrProtocolViolation, f.Type)
+	}
+	if f.ID != helloID {
+		return ConnectionInfo{}, fmt.Errorf("%w: Welcome has ID %d, want %d", ErrProtocolViolation, f.ID, helloID)
+	}
+	welcome, err := protocol.DecodeBody[protocol.Welcome](f, protocol.TypeWelcome)
+	if errors.Is(err, protocol.ErrUnsupportedVersion) {
+		return ConnectionInfo{}, fmt.Errorf("%w: %w", ErrIncompatibleVersion, err)
+	}
+	if err != nil {
+		return ConnectionInfo{}, fmt.Errorf("%w: invalid Welcome: %w", ErrProtocolViolation, err)
+	}
+	if welcome.Version != protocol.Version {
+		return ConnectionInfo{}, fmt.Errorf("%w: server selected version %d, client speaks %d", ErrIncompatibleVersion, welcome.Version, protocol.Version)
+	}
+	return ConnectionInfo{
+		Addr:            c.session.opts.Addr,
+		Fingerprint:     c.session.opts.Pin,
+		ProtocolVersion: welcome.Version,
+		PingInterval:    time.Duration(welcome.PingInterval) * time.Second,
+		MaxFrameSize:    welcome.MaxFrameSize,
+		Transport:       TransportDescription,
+		ConnectedAt:     time.Now(),
+	}, nil
+}
+
+// keepalive pings the server every interval and handles incoming frames
+// until the connection fails or ctx ends. It always returns a non-nil error.
+//
+// The connection is considered dead once nothing at all has been received
+// for 2*interval plus the idle grace period. That deadline is tracked by its
+// own timer, restarted on every received frame, rather than checked on the
+// ping ticker: with long server-announced intervals, checking only on ticks
+// would let a dead peer go unnoticed for up to one more interval.
+func (c *liveConn) keepalive(ctx context.Context, interval time.Duration) error {
+	c.outstanding = make(map[uint64]pendingPing)
+	idleLimit := 2*interval + c.session.idleGrace
+	lastRecv := time.Now()
+
+	if err := c.ping(ctx); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	idle := time.NewTimer(idleLimit)
+	defer idle.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case r := <-c.frames:
+			lastRecv = time.Now()
+			idle.Reset(idleLimit)
+			if err := c.handleFrame(ctx, r); err != nil {
+				return err
+			}
+		case <-idle.C:
+			return fmt.Errorf("%w: nothing received for %s", ErrKeepaliveTimeout, time.Since(lastRecv).Round(time.Second))
+		case now := <-ticker.C:
+			c.expirePings(now, idleLimit)
+			if err := c.ping(ctx); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// handleFrame processes one message received after the handshake.
+func (c *liveConn) handleFrame(ctx context.Context, r readResult) error {
+	f, err := decodeMessage(r)
+	if err != nil {
+		return err
+	}
+	switch f.Type {
+	case protocol.TypePong:
+		pong, err := protocol.DecodeBody[protocol.Pong](f, protocol.TypePong)
+		if err != nil {
+			return fmt.Errorf("%w: invalid Pong: %w", ErrProtocolViolation, err)
+		}
+		p, ok := c.outstanding[f.ID]
+		if !ok || p.nonce != pong.Nonce {
+			return nil
+		}
+		delete(c.outstanding, f.ID)
+		c.session.emit(RTT{time.Since(p.sent)})
+		return nil
+	case protocol.TypePing:
+		ping, err := protocol.DecodeBody[protocol.Ping](f, protocol.TypePing)
+		if err != nil {
+			return fmt.Errorf("%w: invalid Ping: %w", ErrProtocolViolation, err)
+		}
+		return sendFrame(ctx, c.conn, protocol.TypePong, f.ID, protocol.Pong(ping))
+	case protocol.TypeError:
+		return c.remoteError(f)
+	default:
+		return fmt.Errorf("%w: unexpected %v frame", ErrProtocolViolation, f.Type)
+	}
+}
+
+// ping sends a Ping with a fresh ID and random nonce.
+func (c *liveConn) ping(ctx context.Context) error {
+	if len(c.outstanding) >= maxOutstandingPing {
+		return fmt.Errorf("%w: %d keepalives unanswered", ErrKeepaliveTimeout, len(c.outstanding))
+	}
+	id := c.nextID
+	c.nextID++
+	nonce := rand.Uint64()
+	c.outstanding[id] = pendingPing{nonce: nonce, sent: time.Now()}
+	return sendFrame(ctx, c.conn, protocol.TypePing, id, protocol.Ping{Nonce: nonce})
+}
+
+// expirePings forgets Pings older than limit, so a lost Pong does not count
+// against maxOutstandingPing forever.
+func (c *liveConn) expirePings(now time.Time, limit time.Duration) {
+	for id, p := range c.outstanding {
+		if now.Sub(p.sent) > limit {
+			delete(c.outstanding, id)
+		}
+	}
+}
+
+// remoteError decodes an Error frame, reports it and returns it as an error.
+func (c *liveConn) remoteError(f protocol.Frame) error {
+	body, err := protocol.DecodeBody[protocol.ErrorBody](f, protocol.TypeError)
+	if err != nil {
+		return fmt.Errorf("%w: invalid Error frame: %w", ErrProtocolViolation, err)
+	}
+	remote := &RemoteError{Code: body.Code, Message: SanitizeASCII(body.Message, protocol.MaxErrorMessageLen)}
+	c.session.emit(ServerError{Code: remote.Code, Message: remote.Message})
+	return remote
+}
+
+// sendFrame encodes body as a frame of type t and writes it with the write
+// timeout.
+func sendFrame[T any](ctx context.Context, conn *websocket.Conn, t protocol.FrameType, id uint64, body T) error {
+	f, err := protocol.NewFrame(t, id, body)
+	if err != nil {
+		return fmt.Errorf("client: build %v frame: %w", t, err)
+	}
+	raw, err := protocol.Encode(f)
+	if err != nil {
+		return fmt.Errorf("client: encode %v frame: %w", t, err)
+	}
+	wctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	if err := conn.Write(wctx, websocket.MessageBinary, raw); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%w: write: %w", ErrConnectionLost, err)
+	}
+	return nil
+}
+
+// closeWith ends the connection. For protocol violations the server is told
+// why, best effort, before the WebSocket is closed.
+func (c *liveConn) closeWith(cause error) {
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+	if errors.Is(cause, ErrProtocolViolation) {
+		_ = sendFrame(ctx, c.conn, protocol.TypeError, 0, protocol.ErrorBody{Code: protocol.ErrCodeBadRequest, Message: "protocol violation"})
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = c.conn.Close(websocket.StatusNormalClosure, "")
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		c.conn.CloseNow()
+	}
+}
+
+// decodeMessage turns a read result into a frame, mapping every failure to
+// an error suitable for StateChanged.
+func decodeMessage(r readResult) (protocol.Frame, error) {
+	if r.err != nil {
+		if status := websocket.CloseStatus(r.err); status != -1 {
+			return protocol.Frame{}, fmt.Errorf("%w: server closed the connection (%v)", ErrConnectionLost, status)
+		}
+		return protocol.Frame{}, fmt.Errorf("%w: %w", ErrConnectionLost, r.err)
+	}
+	if r.kind != websocket.MessageBinary {
+		return protocol.Frame{}, fmt.Errorf("%w: text message received", ErrProtocolViolation)
+	}
+	f, err := protocol.Decode(r.msg)
+	if errors.Is(err, protocol.ErrUnsupportedVersion) {
+		return protocol.Frame{}, fmt.Errorf("%w: %w", ErrIncompatibleVersion, err)
+	}
+	if err != nil {
+		return protocol.Frame{}, fmt.Errorf("%w: %w", ErrProtocolViolation, err)
+	}
+	return f, nil
+}
