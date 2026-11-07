@@ -226,3 +226,123 @@ func TestQueueExpiryAndPrune(t *testing.T) {
 		t.Fatalf("final PruneQueue = %d, %v; want 2", n, err)
 	}
 }
+
+func TestEnqueueMulti(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	alice, bob, carol, dave := testID(1), testID(2), testID(3), testID(4)
+	for _, id := range [][32]byte{bob, carol, dave} {
+		registerTestIdentity(t, db, id)
+	}
+	now := time.Unix(1_700_000_000, 0)
+	later := now.Add(time.Hour)
+
+	qids, err := db.EnqueueMulti(ctx, [][32]byte{bob, carol, dave}, alice, []byte("group"), now, later, testLimits)
+	if err != nil {
+		t.Fatalf("EnqueueMulti: %v", err)
+	}
+	if len(qids) != 3 || qids[0] >= qids[1] || qids[1] >= qids[2] {
+		t.Fatalf("queue IDs %v, want three increasing IDs", qids)
+	}
+	for i, id := range [][32]byte{bob, carol, dave} {
+		msgs, err := db.QueuedFor(ctx, id, 0, 10, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) != 1 || msgs[0].QID != qids[i] || msgs[0].Sender != alice || string(msgs[0].Payload) != "group" {
+			t.Fatalf("recipient %d queue = %+v", i, msgs)
+		}
+	}
+	if err := db.Ack(ctx, carol, qids[1]); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, _ := db.QueuedFor(ctx, bob, 0, 10, now); len(msgs) != 1 {
+		t.Fatal("acknowledging one copy deleted another recipient's copy")
+	}
+}
+
+func TestEnqueueMultiIsAtomic(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	alice, bob, carol, stranger := testID(1), testID(2), testID(3), testID(9)
+	registerTestIdentity(t, db, bob)
+	registerTestIdentity(t, db, carol)
+	now := time.Unix(1_700_000_000, 0)
+	later := now.Add(time.Hour)
+	limits := QueueLimits{MaxMessages: 1, MaxBytes: 1 << 20}
+
+	total := func() int {
+		n := 0
+		for _, id := range [][32]byte{bob, carol, stranger} {
+			msgs, err := db.QueuedFor(ctx, id, 0, 10, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n += len(msgs)
+		}
+		return n
+	}
+
+	if _, err := db.EnqueueMulti(ctx, [][32]byte{bob, stranger, carol}, alice, []byte("x"), now, later, limits); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown recipient: %v, want ErrNotFound", err)
+	}
+	if n := total(); n != 0 {
+		t.Fatalf("%d messages stored after ErrNotFound", n)
+	}
+
+	mustEnqueue(t, db, carol, alice, "fills carol", now, time.Hour)
+	if _, err := db.EnqueueMulti(ctx, [][32]byte{bob, carol}, alice, []byte("x"), now, later, limits); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("one full queue: %v, want ErrQueueFull", err)
+	}
+	if n := total(); n != 1 {
+		t.Fatalf("%d messages stored after ErrQueueFull, want only carol's earlier one", n)
+	}
+	if _, err := db.EnqueueMulti(ctx, [][32]byte{carol, stranger}, alice, []byte("x"), now, later, limits); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown recipient and full queue: %v, want ErrNotFound", err)
+	}
+
+	bySize := QueueLimits{MaxMessages: 100, MaxBytes: 4}
+	if _, err := db.EnqueueMulti(ctx, [][32]byte{bob}, alice, []byte("12345"), now, later, bySize); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("payload over byte limit: %v, want ErrQueueFull", err)
+	}
+	if n := total(); n != 1 {
+		t.Fatalf("%d messages stored, want 1", n)
+	}
+}
+
+func TestEnqueueMultiRejects(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	alice, bob := testID(1), testID(2)
+	registerTestIdentity(t, db, bob)
+	now := time.Unix(1_700_000_000, 0)
+	later := now.Add(time.Hour)
+	tooMany := make([][32]byte, MaxMultiRecipients+1)
+	for i := range tooMany {
+		tooMany[i] = testID(byte(i))
+		tooMany[i][1] = byte(i >> 8)
+	}
+	tests := []struct {
+		name       string
+		recipients [][32]byte
+		payload    []byte
+		expires    time.Time
+		limits     QueueLimits
+	}{
+		{"NoRecipients", nil, []byte("x"), later, testLimits},
+		{"TooManyRecipients", tooMany, []byte("x"), later, testLimits},
+		{"DuplicateRecipient", [][32]byte{bob, bob}, []byte("x"), later, testLimits},
+		{"EmptyPayload", [][32]byte{bob}, nil, later, testLimits},
+		{"HugePayload", [][32]byte{bob}, make([]byte, MaxQueuedPayloadSize+1), later, testLimits},
+		{"AlreadyExpired", [][32]byte{bob}, []byte("x"), now, testLimits},
+		{"ZeroLimits", [][32]byte{bob}, []byte("x"), later, QueueLimits{}},
+	}
+	for _, tc := range tests {
+		if _, err := db.EnqueueMulti(ctx, tc.recipients, alice, tc.payload, now, tc.expires, tc.limits); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("%s: %v, want ErrInvalidArgument", tc.name, err)
+		}
+	}
+	if msgs, _ := db.QueuedFor(ctx, bob, 0, 10, now); len(msgs) != 0 {
+		t.Fatalf("%d messages stored by rejected calls", len(msgs))
+	}
+}

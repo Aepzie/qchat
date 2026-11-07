@@ -41,41 +41,109 @@ type Queued struct {
 // nothing. The recipient must be a stored identity, otherwise ErrNotFound
 // is returned.
 func (db *DB) Enqueue(ctx context.Context, recipient, sender [32]byte, payload []byte, now, expires time.Time, limits QueueLimits) (uint64, error) {
-	if len(payload) == 0 || len(payload) > MaxQueuedPayloadSize {
-		return 0, fmt.Errorf("%w: payload size %d not between 1 and %d", ErrInvalidArgument, len(payload), MaxQueuedPayloadSize)
+	if err := checkEnqueueArgs(payload, now, expires, limits); err != nil {
+		return 0, err
 	}
-	if limits.MaxMessages < 1 || limits.MaxBytes < 1 {
-		return 0, fmt.Errorf("%w: queue limits must be positive", ErrInvalidArgument)
-	}
-	if !expires.After(now) {
-		return 0, fmt.Errorf("%w: message expires before it is stored", ErrInvalidArgument)
-	}
-	var qid int64
+	var qid uint64
 	err := db.withTx(ctx, func(tx *sql.Tx) error {
-		if err := requireIdentity(ctx, tx, recipient); err != nil {
-			return err
+		var err error
+		qid, err = enqueueTx(ctx, tx, recipient, sender, payload, now, expires, limits)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return qid, nil
+}
+
+// MaxMultiRecipients is the largest number of recipients EnqueueMulti
+// accepts in one call.
+const MaxMultiRecipients = 256
+
+// EnqueueMulti stores one copy of payload from sender for every recipient,
+// in a single transaction, and returns the queue IDs in the order of
+// recipients. Each copy has its own queue ID and counts toward the limits
+// of its recipient exactly as if it had been stored by [DB.Enqueue].
+//
+// Either every copy is stored or none is: if any recipient is not a stored
+// identity the call fails with ErrNotFound, and if any recipient's queue
+// would exceed limits it fails with ErrQueueFull, in both cases changing
+// nothing. The errors deliberately do not say which recipient caused them.
+// recipients must hold between 1 and MaxMultiRecipients distinct IDs.
+func (db *DB) EnqueueMulti(ctx context.Context, recipients [][32]byte, sender [32]byte, payload []byte, now, expires time.Time, limits QueueLimits) ([]uint64, error) {
+	if len(recipients) == 0 || len(recipients) > MaxMultiRecipients {
+		return nil, fmt.Errorf("%w: %d recipients, want 1 to %d", ErrInvalidArgument, len(recipients), MaxMultiRecipients)
+	}
+	seen := make(map[[32]byte]struct{}, len(recipients))
+	for _, r := range recipients {
+		if _, dup := seen[r]; dup {
+			return nil, fmt.Errorf("%w: duplicate recipient", ErrInvalidArgument)
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM queue WHERE recipient = ? AND expires <= ?", recipient[:], now.Unix()); err != nil {
-			return fmt.Errorf("serverdb: prune queue: %w", err)
+		seen[r] = struct{}{}
+	}
+	if err := checkEnqueueArgs(payload, now, expires, limits); err != nil {
+		return nil, err
+	}
+	qids := make([]uint64, len(recipients))
+	err := db.withTx(ctx, func(tx *sql.Tx) error {
+		for _, r := range recipients {
+			if err := requireIdentity(ctx, tx, r); err != nil {
+				return err
+			}
 		}
-		var count int
-		var size int64
-		if err := tx.QueryRowContext(ctx, "SELECT count(*), coalesce(sum(size), 0) FROM queue WHERE recipient = ?",
-			recipient[:]).Scan(&count, &size); err != nil {
-			return fmt.Errorf("serverdb: read queue usage: %w", err)
-		}
-		if count >= limits.MaxMessages || size+int64(len(payload)) > limits.MaxBytes {
-			return ErrQueueFull
-		}
-		err := tx.QueryRowContext(ctx, `INSERT INTO queue (recipient, sender, payload, size, expires)
-			VALUES (?, ?, ?, ?, ?) RETURNING qid`, recipient[:], sender[:], payload, len(payload), expires.Unix()).Scan(&qid)
-		if err != nil {
-			return fmt.Errorf("serverdb: store message: %w", err)
+		for i, r := range recipients {
+			qid, err := enqueueTx(ctx, tx, r, sender, payload, now, expires, limits)
+			if err != nil {
+				return err
+			}
+			qids[i] = qid
 		}
 		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	return qids, nil
+}
+
+// checkEnqueueArgs validates the arguments shared by Enqueue and
+// EnqueueMulti.
+func checkEnqueueArgs(payload []byte, now, expires time.Time, limits QueueLimits) error {
+	if len(payload) == 0 || len(payload) > MaxQueuedPayloadSize {
+		return fmt.Errorf("%w: payload size %d not between 1 and %d", ErrInvalidArgument, len(payload), MaxQueuedPayloadSize)
+	}
+	if limits.MaxMessages < 1 || limits.MaxBytes < 1 {
+		return fmt.Errorf("%w: queue limits must be positive", ErrInvalidArgument)
+	}
+	if !expires.After(now) {
+		return fmt.Errorf("%w: message expires before it is stored", ErrInvalidArgument)
+	}
+	return nil
+}
+
+// enqueueTx stores one message within tx after checking that recipient
+// exists and that its queue has room, and returns the new queue ID.
+func enqueueTx(ctx context.Context, tx *sql.Tx, recipient, sender [32]byte, payload []byte, now, expires time.Time, limits QueueLimits) (uint64, error) {
+	if err := requireIdentity(ctx, tx, recipient); err != nil {
 		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM queue WHERE recipient = ? AND expires <= ?", recipient[:], now.Unix()); err != nil {
+		return 0, fmt.Errorf("serverdb: prune queue: %w", err)
+	}
+	var count int
+	var size int64
+	if err := tx.QueryRowContext(ctx, "SELECT count(*), coalesce(sum(size), 0) FROM queue WHERE recipient = ?",
+		recipient[:]).Scan(&count, &size); err != nil {
+		return 0, fmt.Errorf("serverdb: read queue usage: %w", err)
+	}
+	if count >= limits.MaxMessages || size+int64(len(payload)) > limits.MaxBytes {
+		return 0, ErrQueueFull
+	}
+	var qid int64
+	err := tx.QueryRowContext(ctx, `INSERT INTO queue (recipient, sender, payload, size, expires)
+		VALUES (?, ?, ?, ?, ?) RETURNING qid`, recipient[:], sender[:], payload, len(payload), expires.Unix()).Scan(&qid)
+	if err != nil {
+		return 0, fmt.Errorf("serverdb: store message: %w", err)
 	}
 	return uint64(qid), nil
 }
