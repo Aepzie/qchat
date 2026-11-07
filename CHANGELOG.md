@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-08
+
+Adds end-to-end encrypted groups. The group protocol is composed from
+standard primitives (inspired by Signal's Sender Keys) and has not been
+independently analysed.
+
+### Added
+
+- Groups of up to 256 members with admin-signed membership control messages
+  (create, add, remove, promote, demote, rename, leave), epochs and state
+  hashes, and verified control history for new members.
+- Sender keys: one encryption per group message with a forward-only chain,
+  salted per-message keys, key commitment and a per-generation hybrid
+  Ed25519 + ML-DSA-65 signature; headers encrypted under a per-generation key.
+- Rotation of every remaining member's sender key on removal or leave, after
+  1000 messages or 7 days; older generations are frozen and pruned.
+- Out-of-sync detection by binding each group message to the sender's group
+  state.
+- Relay `SendMulti` (frame 22) and `SendMultiResult` (frame 23): one payload
+  stored once for many recipients, partial success, per-recipient budget
+  `limits.multi_recipients_per_minute`.
+- TUI: groups sidebar, group conversations, members overlay, invitations and
+  `/group` commands.
+- Design document `docs/design/phase-4-groups.md`, including an MLS evaluation.
+
+### Changed
+
+- Default `limits.prekey_requests_per_hour` raised from 30 to 120.
+
+### Security
+
+- Changes from an internal review before release: conflict resolution that
+  cannot be won by grinding identity IDs, encrypted group headers, join
+  history verification, fork detection, and bounded relay fan-out.
+
 ## [0.3.0] - 2026-11-08
 
 Adds forward secrecy and offline delivery. The session protocol is composed
@@ -102,7 +137,8 @@ release; only the connection between client and relay is protected.
 - The server never logs client IP addresses or client-supplied data.
 - A pinned-key mismatch blocks the connection and is never retried.
 
-[Unreleased]: https://github.com/craguS/qchat/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/craguS/qchat/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/craguS/qchat/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/craguS/qchat/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/craguS/qchat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/craguS/qchat/releases/tag/v0.1.0

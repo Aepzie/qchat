@@ -39,9 +39,15 @@ Implemented (Phase 3, v0.3.0):
 - Offline delivery: the relay stores only ciphertext until the recipient acknowledges it (default TTL 7 days)
 - Send results no longer reveal whether a recipient is online
 
+Implemented (Phase 4, v0.4.0):
+
+- Groups up to 256 members with admins: `/group create|add|remove|admin|unadmin|rename|leave|accept|members`
+- Sender keys with hybrid-signed messages and encrypted headers; key rotation on removal
+- Verified join history for new members and out-of-sync detection
+- Relay fan-out with `SendMulti`: payload stored once, partial delivery reporting
+
 Planned:
 
-- Group chats with key rotation on member removal
 - Metadata protection: sealed sender, padding to size buckets, optional Tor onion service
 - Client installer builder with embedded server configuration
 - File transfer and themes
@@ -71,7 +77,7 @@ Cryptographic building blocks (established libraries only): Go standard library 
 | 1 | Repository, skeleton, pinned TLS 1.3 server/client connection, simple TUI (v0.1.0) | Done |
 | 2 | Identities, hybrid keys, 1:1 end-to-end messages (v0.2.0) | Done |
 | 3 | Forward secrecy (ratchet), prekeys, offline delivery (v0.3.0) | Done |
-| 4 | Groups, including key rotation | Planned |
+| 4 | Groups, including key rotation (v0.4.0) | Done |
 | 5 | Metadata protection: sealed sender, padding, Tor | Planned |
 | 6 | Client installer builder with embedded server config | Planned |
 | 7 | TUI polish, files, themes | Planned |
