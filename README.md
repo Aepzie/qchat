@@ -15,7 +15,7 @@ A server operator can build clients with the server address and the server publi
 
 ## Features
 
-Implemented (Phase 1, in progress):
+Implemented (Phase 1, v0.1.0):
 
 - TLS 1.3 transport restricted to the hybrid key exchange X25519MLKEM768
 - Server certificate pinning by SPKI SHA-256 (no public CA trust)
@@ -56,7 +56,7 @@ Planned cryptographic building blocks (established libraries only): Go standard 
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| 1 | Repository, skeleton, pinned TLS 1.3 server/client connection, simple TUI (v0.1.0) | In progress |
+| 1 | Repository, skeleton, pinned TLS 1.3 server/client connection, simple TUI (v0.1.0) | Done |
 | 2 | Identities, hybrid keys, 1:1 end-to-end messages | Planned |
 | 3 | Forward secrecy (ratchet), prekeys, offline delivery | Planned |
 | 4 | Groups, including key rotation | Planned |
