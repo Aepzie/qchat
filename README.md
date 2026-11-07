@@ -45,7 +45,7 @@ Planned:
 +----------+                                         +----------+
                                                           |
                                                           v
-                                                       SQLite
+                                                 SQLite (planned, Phase 3)
 ```
 
 Frames on the wire are versioned CBOR messages. The relay never logs client IP addresses and, once end-to-end encryption is implemented, only handles ciphertext.
@@ -94,7 +94,13 @@ A hardened systemd unit is provided in [`deploy/systemd/qchat-server.service`](d
 
 ## Building pinned client installers (Phase 6)
 
-Not implemented yet. The goal is for an operator to produce client builds with the server address and fingerprint embedded.
+The `server build-client` command and the installers are not implemented yet. The client already honours a build-time lock, so an operator can produce a locked client manually:
+
+```sh
+go build -o qchat -ldflags "-X github.com/craguS/qchat/internal/buildcfg.ServerAddr=chat.example.org:7443 -X github.com/craguS/qchat/internal/buildcfg.ServerPin=sha256:<hex>" ./cmd/client
+```
+
+A locked client refuses `--server`/`--pin` values that differ from the embedded ones.
 
 ## Screenshots (coming)
 

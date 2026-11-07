@@ -16,9 +16,11 @@
 //     the post-quantum ML-KEM-768). A peer that cannot do this key exchange
 //     is refused; there is no fallback to a classical-only group.
 //
-// The transport is the outer layer only. Message contents are additionally
-// end-to-end encrypted by higher layers, so the server operator and the TLS
-// layer never see plaintext chat messages.
+// The transport is the outer layer only. It protects traffic between a
+// client and the relay, not against the relay itself. End-to-end encryption
+// of message contents is the job of higher layers (planned for later
+// phases); until those exist, nothing that passes through the relay should
+// be considered hidden from the server operator.
 //
 // # Privacy
 //
