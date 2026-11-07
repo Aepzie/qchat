@@ -258,3 +258,114 @@ func TestDefaultDir(t *testing.T) {
 		t.Errorf("DefaultDir() = %q, %v", dir, err)
 	}
 }
+
+func removeDatabase(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{DBFileName, DBFileName + "-wal", DBFileName + "-shm"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestUnlockMissingDatabase(t *testing.T) {
+	dir := t.TempDir()
+	p := create(t, dir)
+	p.Close()
+	removeDatabase(t, dir)
+	if _, err := Unlock(dir, testPassphrase); !errors.Is(err, ErrDatabaseMissing) || !errors.Is(err, clientdb.ErrMissing) {
+		t.Fatalf("missing database: %v, want ErrDatabaseMissing", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, DBFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Unlock created a database: %v", err)
+	}
+	if _, err := Unlock(dir, otherPassphrase); !errors.Is(err, ErrWrongPassphrase) {
+		t.Errorf("wrong passphrase with missing database: %v", err)
+	}
+}
+
+func TestRecoverAdoptsRelayBundle(t *testing.T) {
+	dir := t.TempDir()
+	p := create(t, dir)
+	id := p.Identity.ID()
+	relayBundle, err := p.Bundle(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	removeDatabase(t, dir)
+
+	recovered, err := Recover(dir, testPassphrase, relayBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Identity.ID() != id || recovered.BundleSerial != 1 || recovered.DisplayName() != "" {
+		t.Errorf("recovered profile: %v serial %d name %q", recovered.Identity.ID(), recovered.BundleSerial, recovered.DisplayName())
+	}
+	again, err := recovered.Bundle(time.Now().Add(time.Hour))
+	if err != nil || !bytes.Equal(again, relayBundle) {
+		t.Fatalf("recovered profile does not return the relay bundle: %v", err)
+	}
+	if err := recovered.SetDisplayName("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := recovered.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := unlock(t, dir, testPassphrase)
+	if reopened.BundleSerial != 1 || reopened.DisplayName() != "Alice" {
+		t.Errorf("reopened after recovery: serial %d name %q", reopened.BundleSerial, reopened.DisplayName())
+	}
+	if raw, err := reopened.Bundle(time.Now()); err != nil || !bytes.Equal(raw, relayBundle) {
+		t.Errorf("reopened bundle differs: %v", err)
+	}
+	reopened.Close()
+	if _, err := Recover(dir, testPassphrase, relayBundle); !errors.Is(err, ErrExists) {
+		t.Errorf("Recover over an existing database: %v, want ErrExists", err)
+	}
+}
+
+func TestRecoverRejects(t *testing.T) {
+	dir := t.TempDir()
+	p := create(t, dir)
+	p.Close()
+	removeDatabase(t, dir)
+
+	other := create(t, t.TempDir())
+	foreign, err := other.Bundle(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Recover(dir, testPassphrase, foreign); !errors.Is(err, ErrBundleMismatch) || !errors.Is(err, identity.ErrIDMismatch) {
+		t.Errorf("bundle of another identity: %v, want ErrBundleMismatch", err)
+	}
+	if _, err := Recover(dir, testPassphrase, []byte{0xa0}); !errors.Is(err, ErrBundleMismatch) {
+		t.Errorf("malformed bundle: %v, want ErrBundleMismatch", err)
+	}
+	if _, err := Recover(dir, otherPassphrase, nil); !errors.Is(err, ErrWrongPassphrase) {
+		t.Errorf("wrong passphrase: %v", err)
+	}
+	if _, err := Recover(t.TempDir(), testPassphrase, nil); !errors.Is(err, ErrNoProfile) {
+		t.Errorf("no profile: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, DBFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed Recover left a database: %v", err)
+	}
+
+	fresh, err := Recover(dir, testPassphrase, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if fresh.BundleSerial != 0 {
+		t.Errorf("serial without relay bundle = %d, want 0", fresh.BundleSerial)
+	}
+	raw, err := fresh.Bundle(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle, err := identity.ParseBundleForID(raw, fresh.Identity.ID()); err != nil || bundle.Serial != 1 {
+		t.Errorf("new bundle after recovery without relay bundle: %v", err)
+	}
+}

@@ -75,6 +75,17 @@ var (
 
 	// ErrClosed reports use of a profile after [Profile.Close].
 	ErrClosed = errors.New("profile: profile is closed")
+
+	// ErrDatabaseMissing reports that [Unlock] found the key file but no
+	// database. The contacts, verifications, pinned bundles, message history
+	// and the stored own bundle are gone; [Recover] creates a new, empty
+	// database without locking the user out of the relay. Errors carrying
+	// it also match clientdb.ErrMissing.
+	ErrDatabaseMissing = errors.New("profile: the key file exists but the database is missing")
+
+	// ErrBundleMismatch reports that the bundle given to [Recover] does not
+	// carry the keys of the profile's identity.
+	ErrBundleMismatch = errors.New("profile: bundle does not match the profile's identity")
 )
 
 // keyRecord is the plaintext sealed in the key file.
@@ -206,29 +217,26 @@ func (p *Profile) initialize(dbPath string, dbKey [vault.KeySize]byte, displayNa
 
 // Unlock opens the profile in dir with passphrase. It returns
 // [ErrNoProfile] if dir has no key file, [ErrWrongPassphrase] if the
-// passphrase is wrong (or the key file was modified), and another error if
-// the key file or database is damaged or the database does not belong to
-// the key file.
+// passphrase is wrong (or the key file was modified), [ErrDatabaseMissing]
+// if the key file opens but the database does not exist (it is never
+// re-created silently: an empty database would lose every contact and
+// verification and make [Profile.Bundle] sign a new bundle the relay rejects
+// as a conflict), and another error if the key file or database is damaged
+// or the database does not belong to the key file.
+//
+// After [ErrDatabaseMissing] the caller should restore qchat.db from a
+// backup if one exists, and otherwise call [Recover].
 func Unlock(dir string, passphrase []byte) (*Profile, error) {
-	blob, err := readKeyFile(dir)
+	id, dbKey, err := openKeyFile(dir, passphrase)
 	if err != nil {
 		return nil, err
 	}
-	record, err := openKeyRecord(blob, passphrase)
-	if err != nil {
-		return nil, err
-	}
-	defer clear(record.Identity)
-	defer clear(record.DBKey)
-
-	id, err := identity.UnmarshalSecret(record.Identity)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrMalformedKeyFile, err)
-	}
-	var dbKey [vault.KeySize]byte
-	copy(dbKey[:], record.DBKey)
 	defer clear(dbKey[:])
-	db, err := clientdb.Open(filepath.Join(dir, DBFileName), dbKey)
+	db, err := clientdb.OpenExisting(filepath.Join(dir, DBFileName), dbKey)
+	if errors.Is(err, clientdb.ErrMissing) {
+		id.Destroy()
+		return nil, fmt.Errorf("%w: %w", ErrDatabaseMissing, err)
+	}
 	if errors.Is(err, clientdb.ErrWrongKey) {
 		id.Destroy()
 		return nil, fmt.Errorf("profile: %s does not belong to %s: %w", DBFileName, KeyFileName, err)
@@ -244,6 +252,101 @@ func Unlock(dir string, passphrase []byte) (*Profile, error) {
 		return nil, err
 	}
 	return p, nil
+}
+
+// Recover opens the profile in dir with passphrase after its database was
+// lost ([Unlock] returned [ErrDatabaseMissing]). It creates a new, empty
+// database and adopts relayBundle, the bundle the relay currently holds for
+// the profile's identity, as the stored own bundle, so that
+// [Profile.Bundle] keeps returning exactly the bytes the relay already
+// knows instead of signing a new serial 1 bundle the relay would reject.
+//
+// relayBundle must pass identity.ParseBundleForID for the profile's ID, and
+// its signing and KEM keys must equal those of the local identity;
+// otherwise Recover returns [ErrBundleMismatch], wrapping the parse error
+// if there is one, and creates nothing. An
+// empty relayBundle means the relay holds no bundle for this identity; the
+// first call of [Profile.Bundle] then creates a serial 1 bundle as after
+// [Create].
+//
+// Contacts, verifications, message history, replay protection and the
+// display name are not recovered; the caller should set the display name
+// again and re-verify contacts. Recover refuses with [ErrExists] if a
+// database exists, and returns [ErrNoProfile] and [ErrWrongPassphrase] like
+// Unlock. If a step fails, the database files it created are removed.
+func Recover(dir string, passphrase, relayBundle []byte) (*Profile, error) {
+	id, dbKey, err := openKeyFile(dir, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(dbKey[:])
+	var adopted *identity.Bundle
+	if len(relayBundle) > 0 {
+		if adopted, err = matchingBundle(id, relayBundle); err != nil {
+			id.Destroy()
+			return nil, err
+		}
+	}
+	dbPath := filepath.Join(dir, DBFileName)
+	if _, err := os.Lstat(dbPath); !errors.Is(err, fs.ErrNotExist) {
+		id.Destroy()
+		if err != nil {
+			return nil, fmt.Errorf("profile: %w", err)
+		}
+		return nil, fmt.Errorf("%w: %s exists; use Unlock", ErrExists, DBFileName)
+	}
+
+	db, err := clientdb.Open(dbPath, dbKey)
+	if err != nil {
+		id.Destroy()
+		removeFiles(dbPath, dbPath+"-wal", dbPath+"-shm")
+		return nil, err
+	}
+	p := &Profile{Dir: dir, Identity: id, DB: db, KDFParams: vault.DefaultParams()}
+	if adopted != nil {
+		if err := p.storeBundle(adopted.Raw, adopted.Serial); err != nil {
+			p.Close()
+			removeFiles(dbPath, dbPath+"-wal", dbPath+"-shm")
+			return nil, err
+		}
+	}
+	return p, nil
+}
+
+// matchingBundle parses raw as a bundle of id and checks that it carries
+// exactly the keys of id.
+func matchingBundle(id *identity.Identity, raw []byte) (*identity.Bundle, error) {
+	bundle, err := identity.ParseBundleForID(raw, id.ID())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBundleMismatch, err)
+	}
+	if !bundle.SigningKey.Equal(id.SigningKey()) || !bundle.KEMKey.Equal(id.KEMKey()) {
+		return nil, fmt.Errorf("%w: keys differ from the local identity", ErrBundleMismatch)
+	}
+	return bundle, nil
+}
+
+// openKeyFile reads and decrypts the key file of dir. The caller destroys
+// the identity and clears the database key.
+func openKeyFile(dir string, passphrase []byte) (*identity.Identity, [vault.KeySize]byte, error) {
+	var dbKey [vault.KeySize]byte
+	blob, err := readKeyFile(dir)
+	if err != nil {
+		return nil, dbKey, err
+	}
+	record, err := openKeyRecord(blob, passphrase)
+	if err != nil {
+		return nil, dbKey, err
+	}
+	defer clear(record.Identity)
+	defer clear(record.DBKey)
+
+	id, err := identity.UnmarshalSecret(record.Identity)
+	if err != nil {
+		return nil, dbKey, fmt.Errorf("%w: %w", ErrMalformedKeyFile, err)
+	}
+	copy(dbKey[:], record.DBKey)
+	return id, dbKey, nil
 }
 
 // load reads the cached settings of an unlocked profile. Missing settings
@@ -301,16 +404,27 @@ func (p *Profile) Bundle(now time.Time) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := p.storeBundle(raw, serial); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// storeBundle stores raw as the own bundle with the given serial and updates
+// [Profile.BundleSerial]. The serial is written first, so a crash in between
+// never leaves a bundle whose serial is unknown.
+func (p *Profile) storeBundle(raw []byte, serial uint64) error {
+	ctx := context.Background()
 	var encodedSerial [8]byte
 	binary.BigEndian.PutUint64(encodedSerial[:], serial)
 	if err := p.DB.PutSetting(ctx, settingBundleSerial, encodedSerial[:]); err != nil {
-		return nil, err
+		return err
 	}
 	if err := p.DB.PutSetting(ctx, settingBundle, raw); err != nil {
-		return nil, err
+		return err
 	}
 	p.BundleSerial = serial
-	return raw, nil
+	return nil
 }
 
 // DisplayName returns the user's own display name, or "" if none is set.

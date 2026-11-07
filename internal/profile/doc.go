@@ -12,8 +12,15 @@
 //     clientdb), every value encrypted under the database key.
 //
 // The directory is created readable only by the current user (mode 0700 on
-// Unix; a protected DACL granting only the user and SYSTEM on Windows), and
-// the key file is replaced atomically (temporary file, flush, rename).
+// Unix; on Windows an owner of the current user and a protected DACL
+// granting only the user and SYSTEM), an existing directory owned by
+// another account is refused, and the key file is replaced atomically
+// (temporary file, flush, rename).
+//
+// A key file without its database is reported by [Unlock] as
+// [ErrDatabaseMissing] instead of being paired with a new, empty database;
+// [Recover] starts over with an empty database while keeping the bundle
+// the relay already holds.
 //
 // # Threat model
 //
