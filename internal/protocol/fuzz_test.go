@@ -91,7 +91,15 @@ func relaySeedFrames(f *testing.F) []Frame {
 		mustFrame(f, TypeSend, 5, Send{To: id, Payload: []byte("ciphertext")}),
 		mustFrame(f, TypeSendResult, 5, SendResult{Status: SendDelivered}),
 		mustFrame(f, TypeSendResult, 6, SendResult{Status: SendRecipientOffline}),
-		mustFrame(f, TypeDeliver, 0, Deliver{From: id, Payload: []byte("ciphertext")}),
+		mustFrame(f, TypeDeliver, 0, Deliver{From: id, Payload: []byte("ciphertext"), QueueID: 1}),
+		mustFrame(f, TypeSendResult, 7, SendResult{Status: SendAccepted}),
+		mustFrame(f, TypePrekeyUpload, 8, PrekeyUpload{}),
+		mustFrame(f, TypePrekeyUpload, 8, PrekeyUpload{SignedPrekey: []byte("spk"), OneTimePrekeys: [][]byte{{1}, {2, 3}}}),
+		mustFrame(f, TypePrekeyStatus, 8, PrekeyStatus{OneTimeRemaining: 50, SignedPrekeyExpires: 1700000000}),
+		mustFrame(f, TypePrekeyRequest, 9, PrekeyRequest{ID: id}),
+		mustFrame(f, TypePrekeyResponse, 9, PrekeyResponse{Bundle: []byte("b"), SignedPrekey: []byte("s")}),
+		mustFrame(f, TypePrekeyResponse, 9, PrekeyResponse{Bundle: []byte("b"), SignedPrekey: []byte("s"), OneTimePrekey: []byte("o")}),
+		mustFrame(f, TypeAck, 0, Ack{QueueID: 1 << 40}),
 	}
 }
 
@@ -119,11 +127,14 @@ func FuzzDecodeBody(f *testing.F) {
 	f.Add(uint8(TypeError), mustHex(f, "a2 01 01 02 61 ff"))
 	f.Add(uint8(TypeRegistered), []byte{0xf6})
 	f.Add(uint8(TypeRegister), mustHex(f, "a2 01 41 01 02 60"))
-	f.Add(uint8(TypeSendResult), mustHex(f, "a1 01 03"))
+	f.Add(uint8(TypeSendResult), mustHex(f, "a1 01 04"))
+	f.Add(uint8(TypePrekeyUpload), mustHex(f, "a1 02 80"))
+	f.Add(uint8(TypePrekeyUpload), mustHex(f, "a1 02 81 40"))
+	f.Add(uint8(TypeAck), mustHex(f, "a1 01 00"))
 	f.Add(uint8(0), mustFrame(f, TypePing, 0, Ping{Nonce: 7}).Body)
 
 	f.Fuzz(func(t *testing.T, sel uint8, body []byte) {
-		switch FrameType(sel % 17) {
+		switch FrameType(sel % 22) {
 		case TypeHello:
 			checkBodyRoundTrip[Hello](t, TypeHello, body)
 		case TypeWelcome:
@@ -167,6 +178,21 @@ func FuzzDecodeBody(f *testing.F) {
 		case TypeDeliver:
 			checkBodyRoundTrip[Deliver](t, TypeDeliver, body)
 			checkBodyRoundTrip[*Deliver](t, TypeDeliver, body)
+		case TypePrekeyUpload:
+			checkBodyRoundTrip[PrekeyUpload](t, TypePrekeyUpload, body)
+			checkBodyRoundTrip[*PrekeyUpload](t, TypePrekeyUpload, body)
+		case TypePrekeyStatus:
+			checkBodyRoundTrip[PrekeyStatus](t, TypePrekeyStatus, body)
+		case TypePrekeyRequest:
+			checkBodyRoundTrip[PrekeyRequest](t, TypePrekeyRequest, body)
+			if _, err := DecodeBody[KeyRequest](rawFrame(TypePrekeyRequest, body), TypePrekeyRequest); err == nil {
+				t.Fatal("KeyRequest body accepted for PrekeyRequest frame")
+			}
+		case TypePrekeyResponse:
+			checkBodyRoundTrip[PrekeyResponse](t, TypePrekeyResponse, body)
+		case TypeAck:
+			checkBodyRoundTrip[Ack](t, TypeAck, body)
+			checkBodyRoundTrip[*Ack](t, TypeAck, body)
 		default:
 			if _, err := DecodeBody[Pong](rawFrame(TypePing, body), TypePing); err == nil {
 				t.Fatal("Pong body accepted for Ping frame")

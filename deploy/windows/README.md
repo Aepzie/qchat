@@ -63,7 +63,7 @@ process crashes.
 
 This writes `server.key` (the private key), `server.crt` and `server.toml`,
 creates the database `db\qchat.db` (registered identity bundles and invite
-code hashes, never messages), and prints the fingerprint users must pin. Keep the data directory outside
+code hashes and the undelivered ciphertext queue), and prints the fingerprint users must pin. Keep the data directory outside
 any user profile. Running `init` again refuses to overwrite the identity;
 `--force` creates a new key, which changes the fingerprint and locks out
 every client pinned to the old one.

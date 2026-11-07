@@ -18,6 +18,17 @@
 // associated data is used; everything the receiver must agree on goes into
 // the info string, which is bound into the key schedule.
 //
+// # Shared secrets
+//
+// [Encapsulate] and [Decapsulate] use the same KEM and KDF with the HPKE
+// export-only AEAD (ID 0xffff) to agree on a 32-byte secret instead of
+// encrypting a message: secret = Export("qchat/v1/kem", 32) of the base-mode
+// context set up with the caller's (non-empty) info string. They are the key
+// agreement step of the session handshake and the ratchet. Because neither
+// HPKE nor ML-KEM confirms the key, a mismatched key, info string or
+// encapsulation yields an unrelated secret rather than an error; callers
+// confirm the secret with an AEAD keyed from it.
+//
 // # Security properties
 //
 //   - Hybrid confidentiality. The X-Wing KEM combines ML-KEM-768 and X25519

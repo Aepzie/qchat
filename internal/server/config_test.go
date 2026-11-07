@@ -26,11 +26,12 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatalf("default config invalid: %v", err)
 	}
 	want := Config{
-		Listen:       "0.0.0.0:7443",
-		TLSCert:      "server.crt",
-		TLSKey:       "server.key",
-		Database:     "db/qchat.db",
-		Registration: "invite",
+		Listen:         "0.0.0.0:7443",
+		TLSCert:        "server.crt",
+		TLSKey:         "server.key",
+		Database:       "db/qchat.db",
+		Registration:   "invite",
+		UndeliveredTTL: DurationOf(168 * time.Hour),
 		Limits: Limits{
 			MaxConnections:         1000,
 			MaxConnectionsPerIP:    16,
@@ -44,6 +45,9 @@ func TestDefaultConfig(t *testing.T) {
 			Burst:                  40,
 			HandshakeTimeout:       DurationOf(10 * time.Second),
 			PingInterval:           DurationOf(30 * time.Second),
+			MaxQueuedMessages:      1000,
+			MaxQueuedBytes:         64 << 20,
+			PrekeyRequestsPerHour:  30,
 		},
 		Log: LogConfig{Level: "info"},
 	}
@@ -63,7 +67,11 @@ tls_cert = "a.crt"
 tls_key  = "b.key"
 database = "state/q.db"
 registration = "open"
+undelivered_ttl = "48h"
 [limits]
+max_queued_messages = 50
+max_queued_bytes = 2097152
+prekey_requests_per_hour = 5
 max_connections = 50
 max_connections_per_ip = 4
 max_pending_handshakes = 8
@@ -84,12 +92,16 @@ level = "debug"
 		t.Fatal(err)
 	}
 	want := Config{
-		Listen:       "127.0.0.1:9000",
-		TLSCert:      filepath.Join(dir, "a.crt"),
-		TLSKey:       filepath.Join(dir, "b.key"),
-		Database:     filepath.Join(dir, "state", "q.db"),
-		Registration: "open",
+		Listen:         "127.0.0.1:9000",
+		TLSCert:        filepath.Join(dir, "a.crt"),
+		TLSKey:         filepath.Join(dir, "b.key"),
+		Database:       filepath.Join(dir, "state", "q.db"),
+		Registration:   "open",
+		UndeliveredTTL: DurationOf(48 * time.Hour),
 		Limits: Limits{
+			MaxQueuedMessages:      50,
+			MaxQueuedBytes:         2 << 20,
+			PrekeyRequestsPerHour:  5,
 			MaxConnections:         50,
 			MaxConnectionsPerIP:    4,
 			MaxPendingHandshakes:   8,
@@ -274,6 +286,15 @@ func TestValidateRejects(t *testing.T) {
 		"huge total queue":        func(c *Config) { c.Limits.MaxTotalQueueBytes = MaxTotalQueueBytes + 1 },
 		"zero sessions per id":    func(c *Config) { c.Limits.MaxSessionsPerIdentity = 0 },
 		"many sessions per id":    func(c *Config) { c.Limits.MaxSessionsPerIdentity = maxSessionsPerID + 1 },
+		"zero undelivered ttl":    func(c *Config) { c.UndeliveredTTL = Duration{} },
+		"short undelivered ttl":   func(c *Config) { c.UndeliveredTTL = DurationOf(MinUndeliveredTTL - time.Second) },
+		"long undelivered ttl":    func(c *Config) { c.UndeliveredTTL = DurationOf(MaxUndeliveredTTL + time.Second) },
+		"zero queued messages":    func(c *Config) { c.Limits.MaxQueuedMessages = 0 },
+		"many queued messages":    func(c *Config) { c.Limits.MaxQueuedMessages = MaxQueuedMessages + 1 },
+		"tiny queued bytes":       func(c *Config) { c.Limits.MaxQueuedBytes = MinQueuedBytes - 1 },
+		"huge queued bytes":       func(c *Config) { c.Limits.MaxQueuedBytes = MaxQueuedBytes + 1 },
+		"zero prekey requests":    func(c *Config) { c.Limits.PrekeyRequestsPerHour = 0 },
+		"many prekey requests":    func(c *Config) { c.Limits.PrekeyRequestsPerHour = MaxPrekeyRequestsPerHour + 1 },
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -302,6 +323,14 @@ func TestValidateAccepts(t *testing.T) {
 		"minimum queue":        func(c *Config) { c.Limits.MaxQueueBytes, c.Limits.MaxTotalQueueBytes = MinQueueBytes, MinQueueBytes },
 		"maximum total queue":  func(c *Config) { c.Limits.MaxTotalQueueBytes = MaxTotalQueueBytes },
 		"one session per id":   func(c *Config) { c.Limits.MaxSessionsPerIdentity = 1 },
+		"minimum ttl":          func(c *Config) { c.UndeliveredTTL = DurationOf(MinUndeliveredTTL) },
+		"maximum ttl":          func(c *Config) { c.UndeliveredTTL = DurationOf(MaxUndeliveredTTL) },
+		"one queued message":   func(c *Config) { c.Limits.MaxQueuedMessages = 1 },
+		"most queued messages": func(c *Config) { c.Limits.MaxQueuedMessages = MaxQueuedMessages },
+		"minimum queued bytes": func(c *Config) { c.Limits.MaxQueuedBytes = MinQueuedBytes },
+		"maximum queued bytes": func(c *Config) { c.Limits.MaxQueuedBytes = MaxQueuedBytes },
+		"one prekey request":   func(c *Config) { c.Limits.PrekeyRequestsPerHour = 1 },
+		"most prekey requests": func(c *Config) { c.Limits.PrekeyRequestsPerHour = MaxPrekeyRequestsPerHour },
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -337,7 +366,9 @@ func TestWriteTOMLRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := buf.String()
-	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS", "database = 'db/qchat.db'", "registration = 'invite'", "max_message_size = 262144", "max_queue_bytes = 2097152", "max_total_queue_bytes = 268435456", "max_sessions_per_identity = 4", "never messages", "invite create"} {
+	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS", "database = 'db/qchat.db'", "registration = 'invite'", "max_message_size = 262144", "max_queue_bytes = 2097152", "max_total_queue_bytes = 268435456", "max_sessions_per_identity = 4", "invite create",
+		"undelivered_ttl = '168h0m0s'", "max_queued_messages = 1000", "max_queued_bytes = 67108864",
+		"prekey_requests_per_hour = 30", "waiting for delivery"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("WriteTOML output lacks %q:\n%s", want, text)
 		}

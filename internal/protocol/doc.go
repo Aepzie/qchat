@@ -74,28 +74,39 @@
 //	  C→S  KeyRequest{ID}
 //	  S→C  KeyResponse{Bundle}       or Error NotFound
 //
+//	Prekeys (requires authentication)
+//	  C→S  PrekeyUpload{SignedPrekey, OneTimePrekeys}   both optional
+//	  S→C  PrekeyStatus{OneTimeRemaining, SignedPrekeyExpires}
+//	  C→S  PrekeyRequest{ID}
+//	  S→C  PrekeyResponse{Bundle, SignedPrekey, OneTimePrekey}
+//	                                 or Error NotFound / RateLimited
+//
 //	Messaging (requires authentication)
 //	  C→S  Send{To, Payload}
-//	  S→C  SendResult{Status}        Delivered or RecipientOffline
-//	  S→C  Deliver{From, Payload}    pushed to every authenticated
-//	                                 connection of the recipient
+//	  S→C  SendResult{Status}        Accepted, or Error NotFound / QueueFull
+//	  S→C  Deliver{From, Payload, QueueID}
+//	                                 pushed to every authenticated connection
+//	                                 of the recipient, and again after each
+//	                                 authentication until acknowledged
+//	  C→S  Ack{QueueID}              no response; the relay deletes the message
 //
 // The authentication signature covers the fingerprint of the relay's TLS
 // public key as well as the nonce and the ID, so a proof cannot be replayed
 // against another relay, and a connection is authenticated for exactly one
 // ID. [Registered] and [AuthOK] carry no fields; their only valid body is the
-// empty map. These frame types were added within wire version 1: a peer that
-// predates them rejects them as unknown types, which is the intended,
-// backwards compatible failure mode.
+// empty map. These frame types, and the prekey and acknowledgement frames,
+// were added within wire version 1: a peer that predates them rejects them as
+// unknown types, which is the intended, backwards compatible failure mode.
 //
 // # Relay model
 //
 // The server is an untrusted relay. The handshake, keepalive, error,
-// registration, authentication and key lookup bodies are plaintext and
-// defined in this package. The Payload of [Send] and [Deliver] is end-to-end
-// encrypted ciphertext: the relay routes it by recipient ID and checks only
-// its size, and it never needs, nor is able, to interpret its contents.
-// Identity bundles returned by the relay are verified by the client, which
-// checks that each bundle is validly self-signed and that its ID equals the
-// requested ID, so the relay cannot substitute keys.
+// registration, authentication, key lookup and prekey bodies are plaintext
+// and defined in this package. The Payload of [Send] and [Deliver] is
+// end-to-end encrypted ciphertext: the relay routes and stores it by
+// recipient ID and checks only its size, and it never needs, nor is able, to
+// interpret its contents. Identity bundles returned by the relay are verified
+// by the client, which checks that each bundle is validly self-signed and
+// that its ID equals the requested ID, and prekeys are verified against that
+// bundle, so the relay cannot substitute keys.
 package protocol

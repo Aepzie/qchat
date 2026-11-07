@@ -73,6 +73,11 @@ type Server struct {
 	challengeTTL     time.Duration
 	authRate         rate.Limit
 	authBurst        int
+	prekeyRate       rate.Limit
+	prekeyBurst      int
+	uploadRate       rate.Limit
+	uploadBurst      int
+	pruneInterval    time.Duration
 	now              func() time.Time
 
 	routesMu sync.Mutex
@@ -121,6 +126,11 @@ func New(cfg Config, cert tls.Certificate, logger *slog.Logger) (*Server, error)
 		challengeTTL:     challengeTTL,
 		authRate:         rate.Every(authInterval),
 		authBurst:        authBurst,
+		prekeyRate:       rate.Every(time.Hour / time.Duration(cfg.Limits.PrekeyRequestsPerHour)),
+		prekeyBurst:      cfg.Limits.PrekeyRequestsPerHour,
+		uploadRate:       rate.Every(uploadInterval),
+		uploadBurst:      uploadBurst,
+		pruneInterval:    pruneInterval,
 		now:              time.Now,
 		routes:           make(map[identity.ID]map[*session]struct{}),
 		queueBudget:      newByteBudget(cfg.Limits.MaxTotalQueueBytes),
@@ -166,6 +176,13 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 	s.db = db
 	defer s.closeDatabase()
+	pruneCtx, stopPrune := context.WithCancel(context.Background())
+	pruneDone := make(chan struct{})
+	go s.pruneLoop(pruneCtx, pruneDone)
+	defer func() {
+		stopPrune()
+		<-pruneDone
+	}()
 	s.mu.Lock()
 	s.addr = ln.Addr()
 	s.mu.Unlock()

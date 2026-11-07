@@ -1,5 +1,6 @@
 // Package serverdb is the relay's database (qchat.db): public identity
-// bundles and hashed invite codes, nothing else.
+// bundles, public prekeys, hashed invite codes and the end-to-end encrypted
+// messages waiting for their recipients, nothing else.
 //
 // The database is a SQLite file opened through database/sql with the pure-Go
 // modernc.org/sqlite driver, in WAL mode with a busy timeout, foreign keys
@@ -20,16 +21,33 @@
 //     normalized invite code, the expiry in Unix seconds and the remaining
 //     uses. The code itself is never stored and cannot be recovered; an
 //     invite whose last use is redeemed is deleted at once.
+//   - signed_prekeys(id, prekey, key_id, expires): one signed prekey per
+//     identity, exactly as uploaded, with its key ID and expiry in Unix
+//     seconds. The prekey expiring last wins.
+//   - one_time_prekeys(id, key_id, prekey): at most MaxOneTimePrekeys
+//     one-time prekeys per identity. TakePrekeys deletes the one it hands
+//     out in the same transaction, so each is handed out exactly once.
+//   - queue(qid, recipient, sender, payload, size, expires): messages
+//     waiting for their recipient. The payload is end-to-end encrypted
+//     ciphertext that the relay cannot read. The sender ID is stored in the
+//     clear because the recipient needs it to pick the session that
+//     decrypts the message; this is metadata the relay learns anyway from
+//     the authenticated connection, and hiding it (sealed sender) is left to
+//     a later phase. A row is deleted when its recipient acknowledges it or
+//     when it expires (PruneQueue); no delivery or read time is stored.
 //
-// Messages are never stored.
+// Prekeys and queued messages reference the identity they belong to, by
+// foreign key with ON DELETE CASCADE.
 //
 // # Trust boundary
 //
-// This package does not parse bundles or verify signatures. The caller must
-// verify the bundle signature, compute the ID from the signing key and take
-// the serial from the verified bundle before calling PutIdentity or
-// RedeemInviteAndPut; this package only enforces the replacement rules
-// (identical bundle, higher serial, otherwise conflict) atomically.
+// This package does not parse bundles or prekeys or verify signatures. The
+// caller must verify the bundle signature, compute the ID from the signing
+// key and take the serial from the verified bundle before calling
+// PutIdentity or RedeemInviteAndPut, and must verify every prekey against
+// the owner's bundle before storing it; this package only enforces the
+// replacement rules (identical bundle, higher serial, otherwise conflict;
+// newest signed prekey; unique one-time key IDs) atomically.
 //
 // # Invite codes
 //

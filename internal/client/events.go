@@ -115,6 +115,13 @@ type Delivery struct {
 	// Payload is the end-to-end encrypted ciphertext. It is a copy owned by
 	// the receiver.
 	Payload []byte
+	// QueueID identifies the stored copy of the message on the relay. The
+	// receiver passes it to [Session.Ack] once the message has been
+	// processed, and the relay then deletes it. Until then the relay
+	// delivers it again after every authentication, so receivers must
+	// tolerate duplicates. It is 0 only for deliveries that did not come
+	// from a relay.
+	QueueID uint64
 }
 
 // RegistrationDenied reports that the relay refused to register the local

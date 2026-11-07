@@ -41,6 +41,8 @@ const (
 	tableMessages = "messages"
 	tableSettings = "settings"
 	tableSeen     = "seen"
+	tableSessions = "sessions"
+	tablePrekeys  = "prekeys"
 
 	metaCanary = "canary"
 
@@ -73,6 +75,19 @@ var migrations = []string{
 		lookup BLOB PRIMARY KEY
 	) STRICT, WITHOUT ROWID;
 	INSERT INTO seen (lookup) SELECT lookup FROM messages;`,
+	`CREATE TABLE sessions (
+		lookup BLOB PRIMARY KEY,
+		value  BLOB NOT NULL
+	) STRICT;
+	CREATE TABLE prekeys (
+		lookup BLOB PRIMARY KEY,
+		value  BLOB NOT NULL
+	) STRICT;`,
+	`CREATE TABLE IF NOT EXISTS seen_inits (
+		lookup  BLOB PRIMARY KEY,
+		expires INTEGER NOT NULL
+	) STRICT, WITHOUT ROWID;
+	CREATE INDEX IF NOT EXISTS seen_inits_expires ON seen_inits (expires);`,
 }
 
 // DB is an open client database. It is safe for concurrent use.

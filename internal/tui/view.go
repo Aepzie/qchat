@@ -145,12 +145,12 @@ type statusSegment struct {
 }
 
 // e2eBadges returns the end-to-end encryption badge, longest form first.
-// Phase 2 has no forward secrecy, and the badge says so.
+// Messages are protected by sessions with forward secrecy (Phase 3).
 func e2eBadges(enabled bool) []string {
 	if !enabled {
 		return []string{" E2E: off "}
 	}
-	return []string{" E2E · no forward secrecy yet ", " E2E · no FS yet ", " E2E·noFS "}
+	return []string{" E2E · forward secrecy ", " E2E · FS ", " E2E "}
 }
 
 func (m Model) renderStatus(width int) string {

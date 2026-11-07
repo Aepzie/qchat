@@ -814,7 +814,7 @@ func TestMigrationBackfillsSeen(t *testing.T) {
 	if err := d.AppendMessage(ctx, m); err != nil {
 		t.Fatal(err)
 	}
-	for _, stmt := range []string{`DROP TABLE seen`, `DELETE FROM schema_migrations WHERE version = 2`} {
+	for _, stmt := range []string{`DROP TABLE seen`, `DROP TABLE sessions`, `DROP TABLE prekeys`, `DELETE FROM schema_migrations WHERE version >= 2`} {
 		if _, err := d.conn.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}

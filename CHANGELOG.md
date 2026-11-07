@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-08
+
+Adds forward secrecy and offline delivery. The session protocol is composed
+from standard primitives but has not been independently analysed. Sessions
+and messages from v0.2.0 are not compatible.
+
+### Added
+
+- Hybrid KEM shared secrets via HPKE export-only (MLKEM768-X25519).
+- Signed prekeys and one-time prekeys, verified by the relay against the
+  owner's bundle; weekly rotation and automatic top-up in the client.
+- KEM-based asynchronous session start inspired by PQXDH: encapsulations to
+  the identity key, signed prekey and one-time prekey, signed and timestamped
+  Init with a replay set.
+- Per-direction KEM double ratchet with salted per-message keys, bounded and
+  age-limited skipped keys and one-round-trip healing.
+- Relay offline queue: ciphertext is stored until acknowledged or until
+  `undelivered_ttl` (default 7 days); new limits `max_queued_messages`,
+  `max_queued_bytes`, `prekey_requests_per_hour`.
+- Design document `docs/design/phase-3-forward-secrecy.md`.
+
+### Changed
+
+- Message envelope version 2 replaces the Phase 2 static-key format.
+- The relay answers every send with "accepted", so other users can no longer
+  learn whether a recipient is online.
+
+### Security
+
+- Changes from an internal protocol review: Init freshness and replay
+  protection, rollback-safe message keys, transcript hashes of the sender
+  bundle and prekeys, shorter signed prekey lifetime aligned with the queue TTL.
+
 ## [0.2.0] - 2026-11-07
 
 Adds identities and 1:1 end-to-end encrypted messages. This release has
@@ -69,6 +102,7 @@ release; only the connection between client and relay is protected.
 - The server never logs client IP addresses or client-supplied data.
 - A pinned-key mismatch blocks the connection and is never retried.
 
-[Unreleased]: https://github.com/craguS/qchat/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/craguS/qchat/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/craguS/qchat/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/craguS/qchat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/craguS/qchat/releases/tag/v0.1.0

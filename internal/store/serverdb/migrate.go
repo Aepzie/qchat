@@ -21,6 +21,28 @@ var migrations = []string{
 		uses_left  INTEGER NOT NULL CHECK (uses_left >= 0)
 	) STRICT, WITHOUT ROWID;
 	CREATE INDEX invites_expires_at ON invites (expires_at);`,
+	`CREATE TABLE signed_prekeys (
+		id      BLOB    NOT NULL PRIMARY KEY REFERENCES identities (id) ON DELETE CASCADE,
+		prekey  BLOB    NOT NULL CHECK (length(prekey) > 0),
+		key_id  INTEGER NOT NULL,
+		expires INTEGER NOT NULL
+	) STRICT, WITHOUT ROWID;
+	CREATE TABLE one_time_prekeys (
+		id     BLOB    NOT NULL REFERENCES identities (id) ON DELETE CASCADE,
+		key_id INTEGER NOT NULL,
+		prekey BLOB    NOT NULL CHECK (length(prekey) > 0),
+		PRIMARY KEY (id, key_id)
+	) STRICT;
+	CREATE TABLE queue (
+		qid       INTEGER PRIMARY KEY AUTOINCREMENT,
+		recipient BLOB    NOT NULL REFERENCES identities (id) ON DELETE CASCADE,
+		sender    BLOB    NOT NULL CHECK (length(sender) = 32),
+		payload   BLOB    NOT NULL CHECK (length(payload) > 0),
+		size      INTEGER NOT NULL CHECK (size = length(payload)),
+		expires   INTEGER NOT NULL
+	) STRICT;
+	CREATE INDEX queue_recipient_qid ON queue (recipient, qid);
+	CREATE INDEX queue_expires ON queue (expires);`,
 }
 
 // migrate applies the missing migrations in one write transaction, so

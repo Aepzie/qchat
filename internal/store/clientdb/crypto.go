@@ -22,9 +22,12 @@ const (
 // HMAC labels for lookup columns. Each ends with a zero byte so that no label
 // is a prefix of another.
 const (
-	labelContact = "qchat/clientdb/v1/contact\x00"
-	labelMessage = "qchat/clientdb/v1/message\x00"
-	labelSetting = "qchat/clientdb/v1/setting\x00"
+	labelContact  = "qchat/clientdb/v1/contact\x00"
+	labelMessage  = "qchat/clientdb/v1/message\x00"
+	labelSetting  = "qchat/clientdb/v1/setting\x00"
+	labelSession  = "qchat/clientdb/v1/session\x00"
+	labelPrekey   = "qchat/clientdb/v1/prekey\x00"
+	labelSeenInit = "qchat/clientdb/v1/seen-init\x00"
 )
 
 // lookupSize is the length of every lookup column (HMAC-SHA256 output).
@@ -88,6 +91,22 @@ func (k *keys) messageLookup(peer [32]byte, msgID [16]byte) []byte {
 // settingLookup returns the lookup key of a setting.
 func (k *keys) settingLookup(name string) []byte {
 	return k.lookup(labelSetting, []byte(name))
+}
+
+// sessionLookup returns the lookup key of the ratchet session with peer.
+func (k *keys) sessionLookup(peer [32]byte) []byte {
+	return k.lookup(labelSession, peer[:])
+}
+
+// prekeyLookup returns the lookup key of an own prekey secret.
+func (k *keys) prekeyLookup(kind PrekeyKind, keyID uint32) []byte {
+	return k.lookup(labelPrekey, []byte{byte(kind)}, binary.BigEndian.AppendUint32(nil, keyID))
+}
+
+// seenInitLookup returns the replay set entry of a session start that used
+// the own signed prekey spkID and has replay key key.
+func (k *keys) seenInitLookup(spkID uint32, key [32]byte) []byte {
+	return k.lookup(labelSeenInit, binary.BigEndian.AppendUint32(nil, spkID), key[:])
 }
 
 // rowAAD builds the associated data that binds a ciphertext to its table, its

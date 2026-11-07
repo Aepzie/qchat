@@ -22,6 +22,15 @@ const (
 
 	// ContextAuth labels the relay authentication proof.
 	ContextAuth = "qchat/v1/auth-tls"
+
+	// ContextSignedPrekey labels the signature on a signed prekey.
+	ContextSignedPrekey = "qchat/v1/signed-prekey"
+
+	// ContextOneTimePrekey labels the signature on a one-time prekey.
+	ContextOneTimePrekey = "qchat/v1/one-time-prekey"
+
+	// ContextSessionInit labels the signature on a session Init header.
+	ContextSessionInit = "qchat/v1/session-init"
 )
 
 // SecretVersion is the format version of the record produced by
@@ -208,6 +217,39 @@ func (i *Identity) sign(ctx string, msg []byte) ([]byte, error) {
 // e2e.Seal instead.
 func (i *Identity) SignMessage(tbs []byte) ([]byte, error) {
 	return i.sign(ContextMessage, tbs)
+}
+
+// SignSignedPrekey signs the to-be-signed encoding of a signed prekey under
+// [ContextSignedPrekey]. It exists for package prekey, which defines that
+// encoding. Each signing method is fixed to one context, so no caller can
+// obtain a signature that is valid in another part of the protocol.
+func (i *Identity) SignSignedPrekey(tbs []byte) ([]byte, error) {
+	return i.sign(ContextSignedPrekey, tbs)
+}
+
+// SignOneTimePrekey signs the to-be-signed encoding of a one-time prekey
+// under [ContextOneTimePrekey]. It exists for package prekey.
+func (i *Identity) SignOneTimePrekey(tbs []byte) ([]byte, error) {
+	return i.sign(ContextOneTimePrekey, tbs)
+}
+
+// SignSessionInit signs the to-be-signed encoding of a session Init header
+// under [ContextSessionInit]. It exists for package handshake.
+func (i *Identity) SignSessionInit(tbs []byte) ([]byte, error) {
+	return i.sign(ContextSessionInit, tbs)
+}
+
+// Decapsulate recovers the shared secret that sealbox.Encapsulate produced
+// for this identity's KEM key under the given info string. It exists for
+// package handshake, which encapsulates to the identity key when a session
+// starts. It returns [ErrDestroyed] after [Identity.Destroy].
+func (i *Identity) Decapsulate(enc, info []byte) ([32]byte, error) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	if i.destroyed {
+		return [32]byte{}, ErrDestroyed
+	}
+	return sealbox.Decapsulate(i.kem, enc, info)
 }
 
 // OpenBox decrypts an HPKE box sealed to this identity's KEM key under the

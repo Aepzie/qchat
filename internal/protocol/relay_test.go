@@ -76,9 +76,9 @@ func TestRelayRoundTrip(t *testing.T) {
 	t.Run("SendResultOffline", func(t *testing.T) {
 		roundTrip(t, TypeSendResult, 7, SendResult{Status: SendRecipientOffline})
 	})
-	t.Run("Deliver", func(t *testing.T) { roundTrip(t, TypeDeliver, 0, Deliver{From: id, Payload: []byte{0}}) })
+	t.Run("Deliver", func(t *testing.T) { roundTrip(t, TypeDeliver, 0, Deliver{From: id, Payload: []byte{0}, QueueID: 1}) })
 	t.Run("DeliverPointer", func(t *testing.T) {
-		roundTrip(t, TypeDeliver, 0, &Deliver{From: id, Payload: []byte{1, 2}})
+		roundTrip(t, TypeDeliver, 0, &Deliver{From: id, Payload: []byte{1, 2}, QueueID: 1<<64 - 1})
 	})
 }
 
@@ -88,7 +88,9 @@ func TestRelayMaxPayloadFits(t *testing.T) {
 	payload := bytes.Repeat([]byte{0xcd}, MaxPayloadSize)
 	id := filled(IDSize, 0)
 	t.Run("Send", func(t *testing.T) { roundTrip(t, TypeSend, 1<<64-1, Send{To: id, Payload: payload}) })
-	t.Run("Deliver", func(t *testing.T) { roundTrip(t, TypeDeliver, 1<<64-1, Deliver{From: id, Payload: payload}) })
+	t.Run("Deliver", func(t *testing.T) {
+		roundTrip(t, TypeDeliver, 1<<64-1, Deliver{From: id, Payload: payload, QueueID: 1<<64 - 1})
+	})
 	wire := mustEncode(t, mustFrame(t, TypeSend, 1<<64-1, Send{To: id, Payload: payload}))
 	if len(wire) > MaxFrameSize {
 		t.Fatalf("maximal Send frame is %d bytes, limit %d", len(wire), MaxFrameSize)
@@ -223,13 +225,13 @@ func TestRelayDecodeBodyRejects(t *testing.T) {
 		{"SendKeysUnsorted", decodeErr[Send](TypeSend,
 			mustHex(t, "a2 02 41 01 01 58 20"+strings.Repeat("01", IDSize))), ErrMalformed},
 		{"DeliverShortFrom", decodeErr[Deliver](TypeDeliver,
-			encodeLoose(t, Deliver{From: short, Payload: []byte{1}})), ErrMalformed},
-		{"DeliverEmptyPayload", decodeErr[Deliver](TypeDeliver, encodeLoose(t, Deliver{From: id})), ErrMalformed},
+			encodeLoose(t, Deliver{From: short, Payload: []byte{1}, QueueID: 1})), ErrMalformed},
+		{"DeliverEmptyPayload", decodeErr[Deliver](TypeDeliver, encodeLoose(t, Deliver{From: id, QueueID: 1})), ErrMalformed},
 		{"DeliverPayloadTooLarge", decodeErr[Deliver](TypeDeliver,
-			encodeLoose(t, Deliver{From: id, Payload: make([]byte, MaxPayloadSize+1)})), ErrMalformed},
+			encodeLoose(t, Deliver{From: id, Payload: make([]byte, MaxPayloadSize+1), QueueID: 1})), ErrMalformed},
 
 		{"SendResultZero", decodeErr[SendResult](TypeSendResult, encodeLoose(t, looseSendResult{Status: 0})), ErrMalformed},
-		{"SendResultUnknown", decodeErr[SendResult](TypeSendResult, encodeLoose(t, looseSendResult{Status: 3})), ErrMalformed},
+		{"SendResultUnknown", decodeErr[SendResult](TypeSendResult, encodeLoose(t, looseSendResult{Status: 4})), ErrMalformed},
 		{"SendResultOverflow", decodeErr[SendResult](TypeSendResult, encodeLoose(t, looseSendResult{Status: 257})), ErrMalformed},
 		{"SendResultMissing", decodeErr[SendResult](TypeSendResult, mustHex(t, "a0")), ErrMalformed},
 		{"SendResultNonCanonical", decodeErr[SendResult](TypeSendResult, mustHex(t, "a1 01 18 01")), ErrMalformed},
@@ -265,9 +267,9 @@ func TestRelayNewFrameRejects(t *testing.T) {
 		{"SendNoPayload", buildErr(TypeSend, Send{To: id}), ErrMalformed},
 		{"SendNoRecipient", buildErr(TypeSend, Send{Payload: []byte{1}}), ErrMalformed},
 		{"DeliverPayloadTooLarge", buildErr(TypeDeliver,
-			Deliver{From: id, Payload: make([]byte, MaxPayloadSize+1)}), ErrMalformed},
+			Deliver{From: id, Payload: make([]byte, MaxPayloadSize+1), QueueID: 1}), ErrMalformed},
 		{"SendResultZero", buildErr(TypeSendResult, SendResult{}), ErrMalformed},
-		{"SendResultUnknown", buildErr(TypeSendResult, SendResult{Status: 3}), ErrMalformed},
+		{"SendResultUnknown", buildErr(TypeSendResult, SendResult{Status: 4}), ErrMalformed},
 		{"NilRegistered", buildErr[*Registered](TypeRegistered, nil), ErrMalformed},
 		{"RegisteredAsAuthOK", buildErr(TypeAuthOK, Registered{}), ErrUnexpectedType},
 		{"AuthOKAsRegistered", buildErr(TypeRegistered, AuthOK{}), ErrUnexpectedType},
@@ -300,8 +302,8 @@ func TestRelayDecodeBodyWrongType(t *testing.T) {
 			_, err := DecodeBody[AuthBegin](mustFrame(t, TypeKeyRequest, 0, KeyRequest{ID: id}), TypeAuthBegin)
 			return err
 		}()},
-		{"DeliverFromSend", func() error {
-			_, err := DecodeBody[Deliver](mustFrame(t, TypeSend, 0, Send{To: id, Payload: []byte{1}}), TypeSend)
+		{"PrekeyRequestFromKeyRequest", func() error {
+			_, err := DecodeBody[PrekeyRequest](mustFrame(t, TypeKeyRequest, 0, KeyRequest{ID: id}), TypeKeyRequest)
 			return err
 		}()},
 		{"AuthOKFromRegistered", func() error {
@@ -325,7 +327,8 @@ func TestRelayDecodeBodyWrongType(t *testing.T) {
 func TestSendStatusString(t *testing.T) {
 	want := map[SendStatus]string{
 		SendDelivered: "Delivered", SendRecipientOffline: "RecipientOffline",
-		0: "SendStatus(0)", 3: "SendStatus(3)", 255: "SendStatus(255)",
+		SendAccepted: "Accepted",
+		0:            "SendStatus(0)", 4: "SendStatus(4)", 255: "SendStatus(255)",
 	}
 	for s, name := range want {
 		if got := s.String(); got != name {
@@ -333,7 +336,7 @@ func TestSendStatusString(t *testing.T) {
 		}
 	}
 	for s := 0; s < 256; s++ {
-		valid := s == 1 || s == 2
+		valid := s >= 1 && s <= 3
 		if got := SendStatus(s).Valid(); got != valid {
 			t.Errorf("SendStatus(%d).Valid() = %v, want %v", s, got, valid)
 		}
@@ -343,14 +346,14 @@ func TestSendStatusString(t *testing.T) {
 func TestRelayErrorCodeString(t *testing.T) {
 	want := map[ErrorCode]string{
 		ErrCodeUnauthorized: "Unauthorized", ErrCodeNotFound: "NotFound",
-		ErrCodeRegistrationDenied: "RegistrationDenied", ErrCodeConflict: "Conflict",
-		10: "ErrorCode(10)",
+		ErrCodeRegistrationDenied: "RegistrationDenied", ErrCodeConflict: "Conflict", ErrCodeQueueFull: "QueueFull",
+		11: "ErrorCode(11)",
 	}
 	for c, name := range want {
 		if got := c.String(); got != name {
 			t.Errorf("ErrorCode(%d).String() = %q, want %q", uint16(c), got, name)
 		}
-		if got, valid := c.Valid(), c != 10; got != valid {
+		if got, valid := c.Valid(), c != 11; got != valid {
 			t.Errorf("ErrorCode(%d).Valid() = %v, want %v", uint16(c), got, valid)
 		}
 	}

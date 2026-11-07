@@ -196,7 +196,7 @@ func messageMeta(e entry, st styles) []string {
 	case StatusSending:
 		long, short = append(long, st.faint.Render("… sending")), append(short, st.faint.Render("…"))
 	case StatusSent:
-		long, short = append(long, st.muted.Render("✓ sent")), append(short, st.muted.Render("✓"))
+		long, short = append(long, st.muted.Render("✓ sent · stored by relay until delivered")), append(short, st.muted.Render("✓ sent"))
 	case StatusRecipientOffline:
 		long, short = append(long, st.warn.Render("⧗ recipient offline · not delivered")), append(short, st.warn.Render("⧗ offline"))
 	case StatusFailed:

@@ -234,7 +234,7 @@ func TestErrorCodeFor(t *testing.T) {
 }
 
 func TestErrorCodeString(t *testing.T) {
-	for c := ErrorCode(0); c <= 10; c++ {
+	for c := ErrorCode(0); c <= 12; c++ {
 		s := c.String()
 		if c.Valid() == strings.HasPrefix(s, "ErrorCode(") {
 			t.Errorf("ErrorCode(%d): String %q inconsistent with Valid %v", uint16(c), s, c.Valid())
