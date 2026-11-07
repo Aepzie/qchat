@@ -44,7 +44,10 @@ import (
 // session has decrypted, which is also the only proof that the derived key
 // is right (KEM decapsulation uses implicit rejection). The one-time
 // prekey the Init used is deleted in the same transaction that stores the
-// message and the new session (clientdb.CommitReceive).
+// message and the new session, which also records the Init in the replay
+// set (clientdb.CommitReceiveInit); a session start already recorded there
+// is rejected, so a replayed Init can neither replace a session nor start a
+// deleted one again.
 //
 // A shadow session is the responder side of a peer's losing simultaneous
 // start. It lives in memory only and is used only to read the messages the
@@ -105,11 +108,11 @@ func isTransient(err error) bool {
 	return errors.As(err, &t)
 }
 
-// dbError classifies a database error: duplicates, missing rows and invalid
-// records are permanent, everything else transient.
+// dbError classifies a database error: duplicates, replayed session starts,
+// missing rows and invalid records are permanent, everything else transient.
 func dbError(err error) error {
 	if err == nil || errors.Is(err, clientdb.ErrDuplicate) || errors.Is(err, clientdb.ErrNotFound) ||
-		errors.Is(err, clientdb.ErrInvalid) || errors.Is(err, clientdb.ErrCorrupt) {
+		errors.Is(err, clientdb.ErrInvalid) || errors.Is(err, clientdb.ErrCorrupt) || errors.Is(err, clientdb.ErrInitSeen) {
 		return err
 	}
 	return transient(err)
@@ -207,6 +210,10 @@ type opened struct {
 	plaintext   e2e.Plaintext
 	// sender is the bundle from an accepted Init, nil otherwise.
 	sender *identity.Bundle
+	// seen is the replay set entry of an accepted Init, nil otherwise. It is
+	// recorded in the same transaction as the message, and a start already
+	// in the replay set is rejected (clientdb.ErrInitSeen).
+	seen *clientdb.SeenInit
 	// shadow is the shadow session to keep, if the message was read with
 	// one.
 	shadow *shadowSession
@@ -265,7 +272,7 @@ func (a *App) openExisting(cur clientdb.Session, env e2e.Envelope) (opened, erro
 // openAccepted accepts the envelope's Init as a new responder session and
 // decrypts with it.
 func (a *App) openAccepted(ctx context.Context, from identity.ID, env e2e.Envelope) (opened, error) {
-	st, acc, err := a.acceptInit(ctx, from, env.Init)
+	st, acc, seen, err := a.acceptInit(ctx, from, env.Init)
 	if err != nil {
 		return opened{}, err
 	}
@@ -288,7 +295,7 @@ func (a *App) openAccepted(ctx context.Context, from identity.ID, env e2e.Envelo
 		Created:     now,
 		Updated:     now,
 	}
-	return opened{next: next, consumedOPK: acc.OPKID, plaintext: pt, sender: acc.Sender}, nil
+	return opened{next: next, consumedOPK: acc.OPKID, plaintext: pt, sender: acc.Sender, seen: seen}, nil
 }
 
 // openShadow decrypts a message of the peer's losing session start and
@@ -296,14 +303,15 @@ func (a *App) openAccepted(ctx context.Context, from identity.ID, env e2e.Envelo
 func (a *App) openShadow(ctx context.Context, from identity.ID, cur clientdb.Session, env e2e.Envelope) (opened, error) {
 	digest := sha256.Sum256(env.Init)
 	var (
-		st  *ratchet.State
-		acc *handshake.Accepted
-		err error
+		st   *ratchet.State
+		acc  *handshake.Accepted
+		seen *clientdb.SeenInit
+		err  error
 	)
 	if sh, ok := a.shadows[from]; ok && sh.digest == digest {
 		st, err = ratchet.Unmarshal(sh.state)
 	} else {
-		st, acc, err = a.acceptInit(ctx, from, env.Init)
+		st, acc, seen, err = a.acceptInit(ctx, from, env.Init)
 	}
 	if err != nil {
 		return opened{}, err
@@ -320,17 +328,33 @@ func (a *App) openShadow(ctx context.Context, from identity.ID, cur clientdb.Ses
 	}
 	o := opened{next: cur, plaintext: pt, shadow: &shadowSession{digest: digest, state: state}}
 	if acc != nil {
-		o.consumedOPK, o.sender = acc.OPKID, acc.Sender
+		o.consumedOPK, o.sender, o.seen = acc.OPKID, acc.Sender, seen
 	}
 	return o, nil
 }
 
 // acceptInit verifies a peer's Init, checks its sender bundle against the
-// stored contact and returns the new responder ratchet state.
-func (a *App) acceptInit(ctx context.Context, from identity.ID, init []byte) (*ratchet.State, *handshake.Accepted, error) {
-	if !a.allowHandshake(from) {
-		return nil, nil, errHandshakeLimited
+// stored contact and returns the new responder ratchet state together with
+// the replay set entry to record when the first message is committed.
+func (a *App) acceptInit(ctx context.Context, from identity.ID, init []byte) (*ratchet.State, *handshake.Accepted, *clientdb.SeenInit, error) {
+	st, acc, retireAt, err := a.acceptInitState(ctx, from, init)
+	if err != nil {
+		return nil, nil, nil, err
 	}
+	expires := acc.Created.Add(handshake.MaxInitAge)
+	if !retireAt.IsZero() {
+		expires = retireAt
+	}
+	return st, acc, &clientdb.SeenInit{SPKID: acc.SPKID, Key: acc.ReplayKey, Expires: expires}, nil
+}
+
+// acceptInitState is acceptInit without the replay set entry; it also
+// returns the RetireAt of the signed prekey the Init used.
+func (a *App) acceptInitState(ctx context.Context, from identity.ID, init []byte) (*ratchet.State, *handshake.Accepted, time.Time, error) {
+	if !a.allowHandshake(from) {
+		return nil, nil, time.Time{}, errHandshakeLimited
+	}
+	var retireAt time.Time
 	var lookupErr error
 	note := func(err error) {
 		if !errors.Is(err, clientdb.ErrNotFound) && !errors.Is(err, clientdb.ErrCorrupt) && !errors.Is(err, prekey.ErrMalformedPrivate) {
@@ -345,9 +369,9 @@ func (a *App) acceptInit(ctx context.Context, from identity.ID, init []byte) (*r
 			}
 		}
 	}()
-	lookup := func(kind clientdb.PrekeyKind, slot **sealbox.PrivateKey) handshake.PrekeyLookup {
+	lookup := func(kind clientdb.PrekeyKind, slot **sealbox.PrivateKey, retire *time.Time) handshake.PrekeyLookup {
 		return func(keyID uint32) (*sealbox.PrivateKey, []byte, error) {
-			k, raw, err := a.loadPrekey(ctx, kind, keyID)
+			k, raw, retireAt, err := a.loadPrekey(ctx, kind, keyID)
 			if err != nil {
 				note(err)
 				return nil, nil, err
@@ -355,28 +379,30 @@ func (a *App) acceptInit(ctx context.Context, from identity.ID, init []byte) (*r
 			if *slot != nil {
 				(*slot).Destroy()
 			}
-			*slot = k
+			*slot, *retire = k, retireAt
 			return k, raw, nil
 		}
 	}
-	acc, err := handshake.AcceptAt(a.prof.Identity, from, init, lookup(clientdb.PrekeySigned, &signed), lookup(clientdb.PrekeyOneTime, &oneTime), a.now())
+	var unused time.Time
+	acc, err := handshake.AcceptAt(a.prof.Identity, from, init,
+		lookup(clientdb.PrekeySigned, &signed, &retireAt), lookup(clientdb.PrekeyOneTime, &oneTime, &unused), a.now())
 	switch {
 	case lookupErr != nil:
-		return nil, nil, transient(lookupErr)
+		return nil, nil, time.Time{}, transient(lookupErr)
 	case errors.Is(err, identity.ErrDestroyed):
-		return nil, nil, transient(err)
+		return nil, nil, time.Time{}, transient(err)
 	case err != nil:
-		return nil, nil, err
+		return nil, nil, time.Time{}, err
 	}
 	defer clear(acc.SK[:])
 	if err := a.checkSender(ctx, from, acc.Sender); err != nil {
-		return nil, nil, err
+		return nil, nil, time.Time{}, err
 	}
 	st, err := ratchet.New(ratchet.Params{Self: a.prof.Identity.ID(), Peer: from, SK: acc.SK, Role: ratchet.Responder, OwnInitialKey: signed})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, time.Time{}, err
 	}
-	return st, acc, nil
+	return st, acc, retireAt, nil
 }
 
 // checkSender accepts the sender bundle of an Init if from is not a
@@ -506,10 +532,13 @@ func (a *App) fileOpened(ctx context.Context, from identity.ID, o opened) (bool,
 }
 
 // commitIncoming stores a decrypted message with its session changes. For
-// a contact this is one transaction (CommitReceive). For an unknown sender
+// a contact this is one transaction (CommitReceive, or CommitReceiveInit
+// for the first message of an accepted Init, which also records the Init in
+// the replay set). For an unknown sender the Init is recorded first, then
 // the session is stored and the one-time prekey deleted, while the message
-// itself becomes an in-memory message request. It reports whether the
-// sender is unknown.
+// itself becomes an in-memory message request; recording first means a
+// crash in between can only lose that session, never let a replay in. It
+// reports whether the sender is unknown.
 func (a *App) commitIncoming(ctx context.Context, o opened, m clientdb.Message) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -520,7 +549,12 @@ func (a *App) commitIncoming(ctx context.Context, o opened, m clientdb.Message) 
 	case err != nil:
 		return false, transient(err)
 	}
-	if err := a.prof.DB.CommitReceive(ctx, o.next, m, o.consumedOPK); err != nil {
+	if o.seen != nil {
+		err = a.prof.DB.CommitReceiveInit(ctx, o.next, m, o.consumedOPK, *o.seen)
+	} else {
+		err = a.prof.DB.CommitReceive(ctx, o.next, m, o.consumedOPK)
+	}
+	if err != nil {
 		return false, dbError(err)
 	}
 	a.unread[m.Peer]++
@@ -543,6 +577,15 @@ func (a *App) commitRequestLocked(ctx context.Context, o opened, m clientdb.Mess
 	}
 	if seen {
 		return clientdb.ErrDuplicate
+	}
+	if o.seen != nil {
+		replayed, err := a.prof.DB.MarkInitSeen(ctx, o.seen.SPKID, o.seen.Key, o.seen.Expires)
+		if err != nil {
+			return dbError(err)
+		}
+		if replayed {
+			return clientdb.ErrInitSeen
+		}
 	}
 	if err := a.prof.DB.PutSession(ctx, o.next); err != nil {
 		return dbError(err)

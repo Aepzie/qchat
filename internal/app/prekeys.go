@@ -51,7 +51,8 @@ func (a *App) startMaintenance(ctx context.Context) {
 // maintainPrekeys keeps the own prekeys on the relay as the policy
 // requires:
 //
-//  1. delete private keys whose retention has ended (PruneRetiredPrekeys);
+//  1. delete private keys whose retention has ended (PruneRetiredPrekeys)
+//     and replay set entries that can no longer match (PruneSeenInits);
 //  2. ask the relay for its status with an empty PrekeyUpload;
 //  3. make sure an active signed prekey exists locally, generating one
 //     when there is none or the newest is older than signedPrekeyRotation,
@@ -74,6 +75,9 @@ func (a *App) maintainPrekeys(ctx context.Context) error {
 	}
 	now := a.now()
 	if _, err := a.prof.DB.PruneRetiredPrekeys(ctx, now); err != nil {
+		return err
+	}
+	if _, err := a.prof.DB.PruneSeenInits(ctx, now); err != nil {
 		return err
 	}
 	status, err := uploadPrekeys(ctx, sess, protocol.PrekeyUpload{})
@@ -222,25 +226,25 @@ func prekeySecret(kind clientdb.PrekeyKind, keyID uint32, priv *sealbox.PrivateK
 	return clientdb.PrekeySecret{Kind: kind, KeyID: keyID, Private: record, Public: public, Created: created}, nil
 }
 
-// loadPrekey returns the private key of an own prekey and its public
-// encoding as uploaded. The caller destroys the key. It returns
-// clientdb.ErrNotFound for an unknown or deleted key.
-func (a *App) loadPrekey(ctx context.Context, kind clientdb.PrekeyKind, keyID uint32) (*sealbox.PrivateKey, []byte, error) {
+// loadPrekey returns the private key of an own prekey, its public encoding
+// as uploaded and its RetireAt (zero for none). The caller destroys the key.
+// It returns clientdb.ErrNotFound for an unknown or deleted key.
+func (a *App) loadPrekey(ctx context.Context, kind clientdb.PrekeyKind, keyID uint32) (*sealbox.PrivateKey, []byte, time.Time, error) {
 	secret, err := a.prof.DB.GetPrekeySecret(ctx, kind, keyID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, time.Time{}, err
 	}
 	defer clear(secret.Private)
 	if len(secret.Public) == 0 {
-		return nil, nil, fmt.Errorf("%w: prekey record has no public encoding", clientdb.ErrCorrupt)
+		return nil, nil, time.Time{}, fmt.Errorf("%w: prekey record has no public encoding", clientdb.ErrCorrupt)
 	}
 	id, priv, err := prekey.UnmarshalPrivate(secret.Private)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, time.Time{}, err
 	}
 	if id != keyID {
 		priv.Destroy()
-		return nil, nil, fmt.Errorf("%w: prekey record has key ID %d, want %d", clientdb.ErrCorrupt, id, keyID)
+		return nil, nil, time.Time{}, fmt.Errorf("%w: prekey record has key ID %d, want %d", clientdb.ErrCorrupt, id, keyID)
 	}
-	return priv, secret.Public, nil
+	return priv, secret.Public, secret.RetireAt, nil
 }

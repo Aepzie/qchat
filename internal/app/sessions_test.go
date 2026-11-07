@@ -380,3 +380,63 @@ func TestSendFailsWithoutPrekeys(t *testing.T) {
 		t.Fatalf("history %+v", h)
 	}
 }
+
+func TestReplayedInitRejectedByReplaySet(t *testing.T) {
+	for _, contact := range []bool{true, false} {
+		t.Run(map[bool]string{true: "contact", false: "unknown sender"}[contact], func(t *testing.T) {
+			r := newFakeRelay()
+			alice, bob := newFakeUser(t, r, "Alice"), newFakeUser(t, r, "Bob")
+			r.mu.Lock()
+			r.oneTime[bob.id] = nil
+			r.mu.Unlock()
+			alice.add(bob)
+			if contact {
+				bob.add(alice)
+			}
+			ctx := context.Background()
+			acked := func(qid uint64) bool { return slices.Contains(r.acksOf(bob.id), qid) }
+
+			alice.send(bob, "one")
+			alice.send(bob, "two")
+			queued := r.take(bob.id)
+			bob.app.handleDelivery(ctx, queued[0])
+			if texts := bob.receive(); len(texts) != 1 || texts[0] != "one" {
+				t.Fatalf("bob received %q", texts)
+			}
+
+			if err := bob.prof.DB.DeleteSession(ctx, alice.id); err != nil {
+				t.Fatal(err)
+			}
+			dropped := bob.dropped()
+			bob.app.handleDelivery(ctx, queued[1])
+			if bob.dropped() != dropped+1 || !acked(queued[1].QueueID) {
+				t.Fatal("Init replayed after its session was deleted was not dropped and acknowledged")
+			}
+			if _, found := bob.session(alice); found {
+				t.Fatal("replayed Init started a session again")
+			}
+			wantTexts(t, "bob", bob.receive())
+
+			if err := alice.prof.DB.DeleteSession(ctx, bob.id); err != nil {
+				t.Fatal(err)
+			}
+			alice.send(bob, "fresh start")
+			wantTexts(t, "bob", bob.receive(), "fresh start")
+			fresh, _ := bob.session(alice)
+			replay := queued[1]
+			replay.QueueID = 999
+			bob.app.handleDelivery(ctx, replay)
+			if !acked(999) || bob.dropped() != dropped+2 {
+				t.Fatal("old Init replayed against a newer session was not dropped and acknowledged")
+			}
+			if now, _ := bob.session(alice); !bytes.Equal(now.State, fresh.State) || !bytes.Equal(now.PendingInit, fresh.PendingInit) {
+				t.Fatal("replayed Init replaced the newer session")
+			}
+			if !contact {
+				bob.add(alice)
+			}
+			bob.send(alice, "works")
+			wantTexts(t, "alice", alice.receive(), "works")
+		})
+	}
+}
