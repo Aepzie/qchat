@@ -522,6 +522,13 @@ func TestSOCKS5ConnectionUsableAfterHandshake(t *testing.T) {
 	}
 }
 
+func TestServerIdentityForOnionHost(t *testing.T) {
+	onion := "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
+	if _, _, err := GenerateServerIdentity([]string{onion}); err != nil {
+		t.Fatalf("GenerateServerIdentity(%q): %v", onion, err)
+	}
+}
+
 // TestDialThroughSOCKS5Onion runs the full transport through the proxy to
 // a v3 onion host name, which only the proxy can reach: a local DNS lookup
 // would fail. Pinning still authenticates the server end to end.
