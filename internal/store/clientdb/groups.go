@@ -695,6 +695,54 @@ func (d *DB) appendGroupMessageTx(ctx context.Context, tx *sql.Tx, m GroupMessag
 	return nil
 }
 
+// UpdateGroupMessageStatus changes the status of the group message
+// identified by (group, sender, msgID), for example once the relay has
+// answered a send. It returns [ErrNotFound] if there is no such message.
+func (d *DB) UpdateGroupMessageStatus(ctx context.Context, group, sender [32]byte, msgID [16]byte, status uint8) error {
+	if !validStatus(status) {
+		return fmt.Errorf("%w: unknown status %d", ErrInvalid, status)
+	}
+	if err := d.acquire(); err != nil {
+		return err
+	}
+	defer d.mu.RUnlock()
+
+	groupLookup := d.keys.groupLookup(group)
+	lookup := d.keys.groupMessageLookup(group, sender, msgID)
+	return d.withTx(ctx, func(tx *sql.Tx) error {
+		var seq int64
+		var rowGroup, sealed []byte
+		err := tx.QueryRowContext(ctx, `SELECT seq, peer, value FROM messages WHERE lookup = ?`, lookup).Scan(&seq, &rowGroup, &sealed)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("clientdb: update group message status: %w", err)
+		}
+		if !bytes.Equal(rowGroup, groupLookup) {
+			return fmt.Errorf("%w: group message row has the wrong group", ErrCorrupt)
+		}
+		m, err := d.openGroupMessage(groupLookup, lookup, seq, sealed)
+		if err != nil {
+			return err
+		}
+		m.Status = status
+		plain, err := encode(m.record())
+		if err != nil {
+			return err
+		}
+		defer clear(plain)
+		resealed, err := d.keys.seal(plain, rowAAD(tableGroupMessages, lookup, seq))
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE messages SET value = ? WHERE seq = ?`, resealed, seq); err != nil {
+			return fmt.Errorf("clientdb: update group message status: %w", err)
+		}
+		return nil
+	})
+}
+
 // openGroupMessage decrypts a group message row and checks that its
 // identifiers match the row's peer and lookup columns.
 func (d *DB) openGroupMessage(groupLookup, lookup []byte, seq int64, sealed []byte) (GroupMessage, error) {

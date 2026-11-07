@@ -180,6 +180,36 @@ func TestSenderKeyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUpdateGroupMessageStatus(t *testing.T) {
+	ctx := context.Background()
+	d, _, _ := openTemp(t)
+	group, self := randomID(t), randomID(t)
+	m := sampleGroupMessage(t, group, self, "outgoing")
+	m.Dir, m.Status, m.Flags = Outgoing, StatusSent, 0
+	if err := d.AppendGroupMessage(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateGroupMessageStatus(ctx, group, self, m.MsgID, StatusDelivered); err != nil {
+		t.Fatalf("UpdateGroupMessageStatus: %v", err)
+	}
+	got, err := d.GroupMessages(ctx, group, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Status != StatusDelivered || got[0].Body != "outgoing" {
+		t.Fatalf("after update: %+v", got)
+	}
+	if err := d.UpdateGroupMessageStatus(ctx, group, self, randomMsgID(t), StatusDelivered); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown message: err = %v, want ErrNotFound", err)
+	}
+	if err := d.UpdateGroupMessageStatus(ctx, randomID(t), self, m.MsgID, StatusDelivered); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other group: err = %v, want ErrNotFound", err)
+	}
+	if err := d.UpdateGroupMessageStatus(ctx, group, self, m.MsgID, 200); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad status: err = %v, want ErrInvalid", err)
+	}
+}
+
 func TestGroupMessages(t *testing.T) {
 	ctx := context.Background()
 	d, _, _ := openTemp(t)
