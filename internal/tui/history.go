@@ -1,0 +1,258 @@
+package tui
+
+import (
+	"strings"
+	"time"
+
+	"charm.land/lipgloss/v2"
+
+	"github.com/craguS/qchat/internal/client"
+	"github.com/craguS/qchat/internal/transport"
+)
+
+// maxEntries bounds the history kept in memory; the oldest entries go first.
+const maxEntries = 2000
+
+// entryKind selects how a history entry is drawn.
+type entryKind uint8
+
+const (
+	entrySystem entryKind = iota
+	entryGood
+	entryWarn
+	entryError
+	entryNote
+	entryOutput
+	entryAlert
+)
+
+// row is one labelled line of command output. A value may span several
+// lines separated by "\n".
+type row struct {
+	key   string
+	value string
+}
+
+// entry is one item in the history pane. All text is sanitized when the
+// entry is created.
+type entry struct {
+	at    time.Time
+	kind  entryKind
+	text  string
+	title string
+	rows  []row
+	alert client.SecurityAlert
+	addr  string
+}
+
+// Layout of a history line: "15:04:05" + two spaces, then a one-cell marker
+// and a space, then the body.
+const (
+	timestampWidth = 8
+	noteIndent     = timestampWidth + 2
+	bodyIndent     = noteIndent + 2
+	maxAlertWidth  = 84
+)
+
+// standsAlone reports whether an entry is set off from its neighbours by a
+// blank line.
+func (e entry) standsAlone() bool {
+	return e.kind == entryNote || e.kind == entryOutput || e.kind == entryAlert
+}
+
+// renderEntries draws the whole history at the given width.
+func renderEntries(entries []entry, width int, st styles) []string {
+	var lines []string
+	for i, e := range entries {
+		if i > 0 && (e.standsAlone() || entries[i-1].standsAlone()) {
+			lines = append(lines, "")
+		}
+		lines = append(lines, renderEntry(e, width, st)...)
+	}
+	return lines
+}
+
+func renderEntry(e entry, width int, st styles) []string {
+	switch e.kind {
+	case entryNote:
+		return renderNote(e, width, st)
+	case entryOutput:
+		return renderOutput(e, width, st)
+	case entryAlert:
+		return renderAlert(e, width, st)
+	default:
+		return renderLine(e, width, st)
+	}
+}
+
+func timestamp(e entry, st styles) string {
+	return st.faint.Render(e.at.Format("15:04:05"))
+}
+
+// renderLine draws a one-paragraph system message with a colored marker.
+func renderLine(e entry, width int, st styles) []string {
+	marker, body := st.faint.Render("•"), st.muted
+	switch e.kind {
+	case entryGood:
+		marker, body = st.ok.Render("●"), st.text
+	case entryWarn:
+		marker, body = st.warn.Render("◌"), st.text
+	case entryError:
+		marker, body = st.danger.Render("✕"), st.danger
+	}
+	indent := strings.Repeat(" ", bodyIndent)
+	var out []string
+	for i, line := range wrapLines(e.text, width-bodyIndent) {
+		if i == 0 {
+			out = append(out, timestamp(e, st)+"  "+marker+" "+body.Render(line))
+			continue
+		}
+		out = append(out, indent+body.Render(line))
+	}
+	return out
+}
+
+// renderNote draws a note the user typed. Notes are never transmitted, and
+// the label says so.
+func renderNote(e entry, width int, st styles) []string {
+	out := []string{timestamp(e, st) + "  " + st.accent.Bold(true).Render("you") + "  " + st.faint.Render("local · not sent")}
+	indent := strings.Repeat(" ", noteIndent)
+	for _, line := range wrapLines(e.text, width-noteIndent) {
+		out = append(out, indent+st.text.Render(line))
+	}
+	return out
+}
+
+// renderOutput draws command output: a title and aligned key/value rows.
+func renderOutput(e entry, width int, st styles) []string {
+	out := []string{timestamp(e, st) + "  " + st.accent.Render("▸") + " " + st.bold.Render(e.title)}
+	keyWidth := 0
+	for _, r := range e.rows {
+		keyWidth = max(keyWidth, lipgloss.Width(r.key))
+	}
+	valueIndent := bodyIndent + keyWidth + 2
+	if width-valueIndent < 16 {
+		valueIndent = bodyIndent + 2
+	}
+	pad := strings.Repeat(" ", valueIndent)
+	for _, r := range e.rows {
+		key := strings.Repeat(" ", bodyIndent) + st.muted.Render(r.key)
+		values := wrapValue(r.value, width-valueIndent)
+		if bodyIndent+lipgloss.Width(r.key)+2 > valueIndent {
+			out = append(out, key)
+		} else {
+			first := values[0]
+			values = values[1:]
+			gap := valueIndent - bodyIndent - lipgloss.Width(r.key)
+			out = append(out, key+strings.Repeat(" ", gap)+st.text.Render(first))
+		}
+		for _, v := range values {
+			out = append(out, pad+st.text.Render(v))
+		}
+	}
+	if e.text != "" {
+		for _, line := range wrapLines(e.text, width-bodyIndent) {
+			out = append(out, strings.Repeat(" ", bodyIndent)+st.faint.Render(line))
+		}
+	}
+	return out
+}
+
+// wrapValue wraps each "\n"-separated line of a value.
+func wrapValue(v string, width int) []string {
+	var out []string
+	for _, line := range strings.Split(v, "\n") {
+		out = append(out, wrapLines(line, width)...)
+	}
+	return out
+}
+
+// renderAlert draws a security alert as a red bordered box spanning the
+// pane, so it cannot be mistaken for routine output.
+func renderAlert(e entry, width int, st styles) []string {
+	boxWidth := min(width, maxAlertWidth)
+	inner := max(boxWidth-4, 8)
+
+	var body []string
+	add := func(style lipgloss.Style, text string) {
+		for _, line := range wrapLines(text, inner) {
+			body = append(body, style.Render(line))
+		}
+	}
+	add(st.alertTitle, "⚠ Server key mismatch · connection blocked")
+	add(st.faint, e.at.Format("15:04:05")+" · "+e.addr)
+	body = append(body, "")
+	add(st.text, "The server presented a public key that does not match the pinned fingerprint. "+
+		"This is what a machine-in-the-middle attack looks like; it can also mean the operator replaced the server key.")
+	body = append(body, "")
+	body = append(body, fingerprintBlock("expected", e.alert.Expected, inner, st)...)
+	body = append(body, fingerprintBlock("presented", e.alert.Presented, inner, st)...)
+	body = append(body, "")
+	add(st.text, "qchat will not reconnect. Confirm the new fingerprint with the server operator over a channel you trust before changing your pin.")
+
+	for i, line := range body {
+		body[i] = padRight(line, inner, lipgloss.NewStyle())
+	}
+	box := st.alertBox.Render(strings.Join(body, "\n"))
+	return strings.Split(box, "\n")
+}
+
+// fingerprintBlock renders a labelled fingerprint, with the label beside the
+// hex groups when there is room and above them otherwise.
+func fingerprintBlock(label string, fp transport.Fingerprint, width int, st styles) []string {
+	const labelWidth = 11
+	if fp.IsZero() {
+		return []string{st.muted.Render(padPlain(label, labelWidth)) + st.faint.Render("unknown")}
+	}
+	if width-labelWidth >= groupsWidth(4) {
+		groups := fingerprintLines(fp, width-labelWidth)
+		out := make([]string, 0, len(groups))
+		for i, g := range groups {
+			prefix := strings.Repeat(" ", labelWidth)
+			if i == 0 {
+				prefix = st.muted.Render(padPlain(label, labelWidth))
+			}
+			out = append(out, prefix+st.text.Render(g))
+		}
+		return out
+	}
+	out := []string{st.muted.Render(label)}
+	for _, g := range fingerprintLines(fp, width) {
+		out = append(out, st.text.Render(g))
+	}
+	return out
+}
+
+// fingerprintLines splits a fingerprint's grouped form into lines of 8, 4,
+// 2 or 1 groups, whichever is the widest that fits.
+func fingerprintLines(fp transport.Fingerprint, width int) []string {
+	groups := strings.Fields(fp.Grouped())
+	per := 1
+	for _, n := range []int{8, 4, 2} {
+		if groupsWidth(n) <= width {
+			per = n
+			break
+		}
+	}
+	var out []string
+	for i := 0; i < len(groups); i += per {
+		out = append(out, strings.Join(groups[i:min(i+per, len(groups))], " "))
+	}
+	return out
+}
+
+// groupsWidth is the width of n space-separated 4-digit groups.
+func groupsWidth(n int) int { return n*5 - 1 }
+
+// shortFingerprint returns the first four groups of a fingerprint.
+func shortFingerprint(fp transport.Fingerprint) string {
+	groups := strings.Fields(fp.Grouped())
+	return strings.Join(groups[:min(4, len(groups))], " ")
+}
+
+func padPlain(s string, width int) string {
+	if gap := width - lipgloss.Width(s); gap > 0 {
+		return s + strings.Repeat(" ", gap)
+	}
+	return s
+}
