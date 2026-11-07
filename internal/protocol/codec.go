@@ -9,12 +9,14 @@ import (
 // make the decoder allocate or recurse without bound.
 //
 // The only arrays in any body are [PrekeyUpload.OneTimePrekeys], which holds
-// at most MaxOneTimePrekeysPerUpload byte strings, and [SendMulti.To], which
-// holds at most MaxMultiRecipients IDs. maxArrayElements leaves headroom
-// above both, so that the body's own validation rather than the decoder
-// reports an oversized list. The elements of such an array are byte
-// strings whose total size is bounded by MaxFrameSize, so the larger limit
-// cannot amplify allocation; maps stay small.
+// at most MaxOneTimePrekeysPerUpload byte strings, [SendMulti.To] and
+// [SendMultiResult.Failed], which hold at most MaxMultiRecipients IDs, and
+// [SendMultiResult.Reasons], which holds as many error codes as Failed
+// holds IDs. maxArrayElements leaves headroom above all of them, so that
+// the body's own validation rather than the decoder reports an oversized
+// list. Every element takes at least one byte of input and the input is
+// bounded by MaxFrameSize, so the larger limit cannot amplify allocation;
+// maps stay small.
 const (
 	maxNestedLevels  = 8
 	maxArrayElements = 2 * MaxMultiRecipients

@@ -85,9 +85,12 @@
 //	  C→S  Send{To, Payload}
 //	  S→C  SendResult{Status}        Accepted, or Error NotFound / QueueFull
 //	  C→S  SendMulti{To, Payload}    one payload for up to MaxMultiRecipients IDs
-//	  S→C  SendResult{Status}        Accepted once every copy is stored, or Error
-//	                                 BadRequest / TooLarge / NotFound / QueueFull
-//	                                 / RateLimited, in which case none is stored
+//	  S→C  SendMultiResult{Status, Failed, Reasons}
+//	                                 Accepted, listing the recipients the
+//	                                 message was not stored for (NotFound /
+//	                                 QueueFull each), or Error BadRequest /
+//	                                 TooLarge / RateLimited, in which case
+//	                                 none is stored
 //	  S→C  Deliver{From, Payload, QueueID}
 //	                                 pushed to every authenticated connection
 //	                                 of the recipient, and again after each
@@ -103,10 +106,13 @@
 // unknown types, which is the intended, backwards compatible failure mode.
 //
 // [SendMulti] lets a client hand the relay one ciphertext for several
-// recipients, as group messaging needs: the relay stores and delivers one
-// copy per recipient, each with its own queue ID, as an ordinary [Deliver],
-// so recipients cannot tell it apart from a Send. It counts as one send per
-// recipient toward rate and queue limits. The relay sees the sender, the
+// recipients, as group messaging needs: the relay stores the message for
+// every recipient that can take it and delivers one copy per recipient,
+// each with its own queue ID, as an ordinary [Deliver], so recipients
+// cannot tell it apart from a Send. One unknown recipient or full queue
+// does not block the others: the [SendMultiResult] lists the recipients
+// the message was not stored for, each with its reason. Each copy counts
+// toward its recipient's queue limits. The relay sees the sender, the
 // recipient list and the payload size, but no group ID, name or membership.
 //
 // # Relay model

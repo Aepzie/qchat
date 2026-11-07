@@ -186,3 +186,145 @@ func TestSendMultiWrongType(t *testing.T) {
 		t.Fatalf("SendMulti body accepted as Send: %v", err)
 	}
 }
+
+func TestSendMultiResultRoundTrip(t *testing.T) {
+	t.Run("AllStored", func(t *testing.T) {
+		roundTrip(t, TypeSendMultiResult, 1, SendMultiResult{Status: SendAccepted})
+	})
+	t.Run("SomeFailed", func(t *testing.T) {
+		roundTrip(t, TypeSendMultiResult, 2, SendMultiResult{
+			Status:  SendAccepted,
+			Failed:  recipients(2),
+			Reasons: []ErrorCode{ErrCodeNotFound, ErrCodeQueueFull},
+		})
+	})
+	t.Run("Pointer", func(t *testing.T) {
+		roundTrip(t, TypeSendMultiResult, 3, &SendMultiResult{Status: SendAccepted, Failed: recipients(1), Reasons: []ErrorCode{ErrCodeQueueFull}})
+	})
+	t.Run("AllFailed", func(t *testing.T) {
+		reasons := make([]ErrorCode, MaxMultiRecipients)
+		for i := range reasons {
+			reasons[i] = ErrCodeNotFound
+		}
+		body := SendMultiResult{Status: SendAccepted, Failed: recipients(MaxMultiRecipients), Reasons: reasons}
+		roundTrip(t, TypeSendMultiResult, 1<<64-1, body)
+		if wire := mustEncode(t, mustFrame(t, TypeSendMultiResult, 1<<64-1, body)); len(wire) > MaxFrameSize {
+			t.Fatalf("maximal SendMultiResult frame is %d bytes", len(wire))
+		}
+	})
+	t.Run("EmptyListsOmitted", func(t *testing.T) {
+		frame := mustFrame(t, TypeSendMultiResult, 1, SendMultiResult{Status: SendAccepted, Failed: [][]byte{}, Reasons: []ErrorCode{}})
+		if !bytes.Equal(frame.Body, mustHex(t, "a1 01 03")) {
+			t.Fatalf("body %x, want empty lists omitted", frame.Body)
+		}
+	})
+}
+
+// TestSendMultiResultGolden pins the wire format of SendMultiResult.
+func TestSendMultiResultGolden(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame Frame
+		hex   string
+	}{
+		{
+			name:  "AllStored",
+			frame: mustFrame(t, TypeSendMultiResult, 1, SendMultiResult{Status: SendAccepted}),
+			hex:   "a4 01 01 02 17 03 01 04 43 a1 01 03",
+		},
+		{
+			name: "OneFailed",
+			frame: mustFrame(t, TypeSendMultiResult, 1, SendMultiResult{
+				Status:  SendAccepted,
+				Failed:  [][]byte{filled(IDSize, 0)},
+				Reasons: []ErrorCode{ErrCodeNotFound},
+			}),
+			hex: "a4 01 01 02 17 03 01 04 58 2a a3 01 03 02 81 58 20" +
+				" 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f" +
+				" 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f" +
+				" 03 81 07",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			want := mustHex(t, tc.hex)
+			got := mustEncode(t, tc.frame)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("Encode = %x, want %x", got, want)
+			}
+			f, err := Decode(want)
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if !reflect.DeepEqual(f, tc.frame) {
+				t.Fatalf("Decode = %+v, want %+v", f, tc.frame)
+			}
+			if _, err := DecodeBody[SendMultiResult](f, TypeSendMultiResult); err != nil {
+				t.Fatalf("DecodeBody: %v", err)
+			}
+		})
+	}
+}
+
+func TestSendMultiResultDecodeRejects(t *testing.T) {
+	id := filled(IDSize, 1)
+	idHex := strings.Repeat("01", IDSize)
+	tooMany := make([]ErrorCode, MaxMultiRecipients+1)
+	for i := range tooMany {
+		tooMany[i] = ErrCodeNotFound
+	}
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"StatusDelivered", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a1 01 01"))},
+		{"StatusUndefined", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a1 01 04"))},
+		{"MissingStatus", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a2 02 81 58 20"+idHex+" 03 81 07"))},
+		{"EmptyFailedEncoded", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a3 01 03 02 80 03 80"))},
+		{"FailedWithoutReasons", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a2 01 03 02 81 58 20"+idHex))},
+		{"ReasonsWithoutFailed", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a2 01 03 03 81 07"))},
+		{"TooFewReasons", decodeErr[SendMultiResult](TypeSendMultiResult, encodeLoose(t, SendMultiResult{
+			Status: SendAccepted, Failed: recipients(2), Reasons: []ErrorCode{ErrCodeNotFound}}))},
+		{"UndefinedReason", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a3 01 03 02 81 58 20"+idHex+" 03 81 00"))},
+		{"ReasonOutOfRange", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a3 01 03 02 81 58 20"+idHex+" 03 81 19 01 00"))},
+		{"ShortID", decodeErr[SendMultiResult](TypeSendMultiResult, encodeLoose(t, SendMultiResult{
+			Status: SendAccepted, Failed: [][]byte{id[:IDSize-1]}, Reasons: []ErrorCode{ErrCodeNotFound}}))},
+		{"DuplicateID", decodeErr[SendMultiResult](TypeSendMultiResult, encodeLoose(t, SendMultiResult{
+			Status: SendAccepted, Failed: [][]byte{id, id}, Reasons: []ErrorCode{ErrCodeNotFound, ErrCodeQueueFull}}))},
+		{"TooManyFailed", decodeErr[SendMultiResult](TypeSendMultiResult, encodeLoose(t, SendMultiResult{
+			Status: SendAccepted, Failed: recipients(MaxMultiRecipients + 1), Reasons: tooMany}))},
+		{"UnknownField", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a2 01 03 04 00"))},
+		{"KeysUnsorted", decodeErr[SendMultiResult](TypeSendMultiResult, mustHex(t, "a3 01 03 03 81 07 02 81 58 20"+idHex))},
+		{"NoBody", decodeErr[SendMultiResult](TypeSendMultiResult, nil)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !errors.Is(tc.err, ErrMalformed) {
+				t.Fatalf("got %v, want ErrMalformed", tc.err)
+			}
+		})
+	}
+}
+
+func TestSendMultiResultNewFrameRejects(t *testing.T) {
+	id := filled(IDSize, 1)
+	tests := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"ZeroStatus", buildErr(TypeSendMultiResult, SendMultiResult{}), ErrMalformed},
+		{"ReasonsMismatch", buildErr(TypeSendMultiResult, SendMultiResult{Status: SendAccepted, Failed: [][]byte{id}}), ErrMalformed},
+		{"NilID", buildErr(TypeSendMultiResult, SendMultiResult{Status: SendAccepted, Failed: [][]byte{nil}, Reasons: []ErrorCode{ErrCodeNotFound}}), ErrMalformed},
+		{"NilPointer", buildErr[*SendMultiResult](TypeSendMultiResult, nil), ErrMalformed},
+		{"AsSendResult", buildErr(TypeSendResult, SendMultiResult{Status: SendAccepted}), ErrUnexpectedType},
+		{"SendResultAsSendMultiResult", buildErr(TypeSendMultiResult, SendResult{Status: SendAccepted}), ErrUnexpectedType},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !errors.Is(tc.err, tc.want) {
+				t.Fatalf("got %v, want %v", tc.err, tc.want)
+			}
+		})
+	}
+}

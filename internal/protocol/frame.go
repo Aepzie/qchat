@@ -93,8 +93,11 @@ const (
 	TypeAck FrameType = 21
 	// TypeSendMulti asks the relay to route one ciphertext to several IDs,
 	// client to server; body [SendMulti]. The relay answers with a
-	// [SendResult].
+	// [SendMultiResult].
 	TypeSendMulti FrameType = 22
+	// TypeSendMultiResult reports the outcome of a SendMulti, server to
+	// client; body [SendMultiResult].
+	TypeSendMultiResult FrameType = 23
 )
 
 // String returns the name of the frame type, or "FrameType(n)" for values
@@ -145,6 +148,8 @@ func (t FrameType) String() string {
 		return "Ack"
 	case TypeSendMulti:
 		return "SendMulti"
+	case TypeSendMultiResult:
+		return "SendMultiResult"
 	default:
 		return fmt.Sprintf("FrameType(%d)", uint8(t))
 	}
@@ -153,7 +158,7 @@ func (t FrameType) String() string {
 // Valid reports whether t is a frame type defined by this version of the
 // protocol.
 func (t FrameType) Valid() bool {
-	return t >= TypeHello && t <= TypeSendMulti
+	return t >= TypeHello && t <= TypeSendMultiResult
 }
 
 // Frame is the unit of transmission: each WebSocket binary message carries
