@@ -12,6 +12,7 @@ import (
 	"github.com/craguS/qchat/internal/e2e"
 	"github.com/craguS/qchat/internal/identity"
 	"github.com/craguS/qchat/internal/protocol"
+	"github.com/craguS/qchat/internal/sealed"
 	"github.com/craguS/qchat/internal/senderkey"
 	"github.com/craguS/qchat/internal/store/clientdb"
 	"github.com/craguS/qchat/internal/tui"
@@ -74,6 +75,9 @@ func (a *App) handleDelivery(ctx context.Context, d client.Delivery) {
 	for _, ev := range append(r.events, events...) {
 		a.emit(ev)
 	}
+	if r.peer != nil {
+		a.shareAccessKey(ctx, *r.peer)
+	}
 }
 
 // received is the result of processing one delivery.
@@ -84,10 +88,16 @@ type received struct {
 	// changed reports a stored group state or sender key.
 	changed bool
 	events  []tui.ChatEvent
+	// peer is the authenticated sender of a pairwise message that was
+	// decrypted, nil otherwise.
+	peer *identity.ID
 }
 
 // receive processes one delivery. a.groupMu must be held.
 func (a *App) receive(ctx context.Context, d client.Delivery) received {
+	if d.IsSealed() {
+		return a.receiveSealed(ctx, d)
+	}
 	from := identity.ID(d.From)
 	if from == a.prof.Identity.ID() {
 		a.countDropped()
@@ -101,20 +111,25 @@ func (a *App) receive(ctx context.Context, d client.Delivery) received {
 		}
 		return out
 	}
+	if sealed.IsEnvelope(d.Payload) {
+		return a.receiveSealedPairwise(ctx, d, &from)
+	}
 	env, err := e2e.ParseEnvelope(d.Payload)
 	if err != nil {
 		a.countDropped()
 		return received{outcome: outcomeDone}
 	}
-	return a.openAndFile(ctx, d.QueueID, from, env)
+	return a.openAndFile(ctx, d.QueueID, from, env, from)
 }
 
-// openAndFile decrypts a pairwise envelope and files its content: a text
-// message in the conversation, group input through applyGroupPayload once
-// the session has been committed. a.groupMu must be held.
-func (a *App) openAndFile(ctx context.Context, queueID uint64, from identity.ID, env e2e.Envelope) received {
+// openAndFile decrypts a pairwise envelope from from and files its
+// content: a text message in the conversation, group input through
+// applyGroupPayload once the session has been committed. A session start
+// counts against the limiter bucket limit (see allowHandshake). a.groupMu
+// must be held.
+func (a *App) openAndFile(ctx context.Context, queueID uint64, from identity.ID, env e2e.Envelope, limit identity.ID) received {
 	a.ratchetMu.Lock()
-	o, err := a.open(ctx, from, env)
+	o, err := a.open(ctx, from, env, limit)
 	if err != nil {
 		a.ratchetMu.Unlock()
 		a.countDropped()
@@ -128,7 +143,14 @@ func (a *App) openAndFile(ctx context.Context, queueID uint64, from identity.ID,
 		if !ack {
 			return received{outcome: outcomeRetry}
 		}
-		return received{outcome: outcomeDone, events: events}
+		return received{outcome: outcomeDone, events: events, peer: &from}
+	case e2e.KindAccessKey:
+		r := a.fileAccessKey(ctx, from, o)
+		a.ratchetMu.Unlock()
+		if r.peer != nil && o.sender != nil && a.adoptBundle(from, o.sender) {
+			r.events = append(r.events, tui.ContactKeyChanged{ContactID: canonicalID(from)})
+		}
+		return r
 	case e2e.KindGroupControl, e2e.KindSenderKey:
 	default:
 		a.ratchetMu.Unlock()
@@ -147,7 +169,7 @@ func (a *App) openAndFile(ctx context.Context, queueID uint64, from identity.ID,
 	}
 	body := slices.Clone(o.plaintext.Body)
 	r := a.applyGroupPayload(ctx, from, o.plaintext.Kind, body, o.sender)
-	out := received{outcome: r.outcome, changed: r.changed, events: append(events, r.events...)}
+	out := received{outcome: r.outcome, changed: r.changed, events: append(events, r.events...), peer: &from}
 	if r.outcome == outcomeWait {
 		out.hold = &pendingGroup{queueID: queueID, from: from, kind: o.plaintext.Kind, body: body, bundle: o.sender}
 	}
@@ -214,8 +236,12 @@ func (a *App) Send(ctx context.Context, contactID, text string) (tui.MessageInfo
 	if err != nil {
 		return tui.MessageInfo{}, err
 	}
-	record := clientdb.Message{Peer: id, MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent, Body: text, Status: clientdb.StatusSent}
-	payload, reason, err := a.sealOutgoing(ctx, c, pt, &record)
+	route, err := a.routeTo(ctx, id)
+	if err != nil {
+		return tui.MessageInfo{}, err
+	}
+	record := clientdb.Message{Peer: id, MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent, Body: text, Status: clientdb.StatusSent, Flags: route.flag()}
+	payload, reason, err := a.sealOutgoing(ctx, c, pt, &record, route)
 	if err != nil {
 		return tui.MessageInfo{}, err
 	}
@@ -230,7 +256,7 @@ func (a *App) Send(ctx context.Context, contactID, text string) (tui.MessageInfo
 	}
 
 	key := messageKey{peer: id, msgID: record.MsgID}
-	status, reason := a.deliver(ctx, id, payload)
+	status, reason := a.deliverPairwise(ctx, c, route, payload)
 	record.Status = status
 	a.mu.Lock()
 	delete(a.inflight, key)
@@ -240,6 +266,9 @@ func (a *App) Send(ctx context.Context, contactID, text string) (tui.MessageInfo
 	info.Error = reason
 	if updateErr != nil {
 		return info, updateErr
+	}
+	if status == clientdb.StatusDelivered {
+		a.shareAccessKey(ctx, id)
 	}
 	return info, nil
 }
@@ -333,6 +362,7 @@ func (a *App) messageInfo(m clientdb.Message) tui.MessageInfo {
 		info.Received = m.Received
 		return info
 	}
+	info.Route = routeOf(m.Flags)
 	switch m.Status {
 	case clientdb.StatusSent:
 		a.mu.Lock()

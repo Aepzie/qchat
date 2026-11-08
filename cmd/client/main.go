@@ -14,6 +14,15 @@
 // uses a fresh random SOCKS user name, so Tor keeps qchat's traffic on
 // circuits of its own. .onion servers are reachable only this way.
 //
+// Messages to contacts whose sealed sender access key is known are sent
+// over a second, anonymous connection that never authenticates, so the
+// relay does not learn who sent them. It is opened on the first sealed send
+// after a random pause of up to ten seconds; with --tor or --socks5 it uses
+// an isolation token of its own and thus its own Tor circuit. Without a
+// proxy it comes from the same address as the authenticated connection, so
+// the relay can still link the two by address and timing; the sender then
+// stays hidden only from the relay's stored queue and from the protocol.
+//
 // On first start qchat creates a profile (identity keys and an encrypted
 // local database) in DIR, by default the per-user directory reported by
 // profile.DefaultDir, and asks for a display name and a passphrase. Later
@@ -457,6 +466,8 @@ func runInterface(t target, p *profile.Profile, invite string, stderr io.Writer)
 	backend.UseSession(sess)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	anon := newAnonymousLink(ctx, func() (*client.Session, error) { return newAnonymousSession(t) }, backend.SealedSenderConnected)
+	backend.UseAnonymousSession(anon)
 	sessionDone := make(chan error, 1)
 	go func() { sessionDone <- sess.Run(ctx) }()
 	appDone := make(chan struct{})
@@ -486,6 +497,10 @@ func runInterface(t target, p *profile.Profile, invite string, stderr io.Writer)
 	select {
 	case <-appDone:
 	case <-grace:
+	}
+	select {
+	case <-anon.stopped():
+	case <-time.After(shutdownGrace):
 	}
 
 	var mismatch *transport.PinMismatchError

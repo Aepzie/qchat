@@ -218,6 +218,34 @@ func TestPlaintextKinds(t *testing.T) {
 	}
 }
 
+func TestAccessKeyKind(t *testing.T) {
+	key := bytes.Repeat([]byte{0xa5}, 16)
+	p, err := NewPlaintext(KindAccessKey, key, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padded, err := MarshalPaddedPlaintext(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParsePaddedPlaintext(padded)
+	if err != nil || got.Kind != KindAccessKey || !bytes.Equal(got.Body, key) || got.Kind.IsText() {
+		t.Fatalf("access key round trip: %+v, %v", got, err)
+	}
+	for _, reserved := range []Kind{0, 5, 6, 7, 9, 255} {
+		if _, err := NewPlaintext(reserved, key, testNow); !errors.Is(err, ErrInvalidMessage) {
+			t.Errorf("NewPlaintext(kind %d) = %v, want ErrInvalidMessage", reserved, err)
+		}
+		b, err := encMode.Marshal(plaintextWire{MsgID: p.MsgID[:], Sent: p.Sent.UnixMilli(), Kind: uint8(reserved), Body: key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParsePlaintext(b); !errors.Is(err, ErrMalformed) {
+			t.Errorf("ParsePlaintext(kind %d) = %v, want ErrMalformed", reserved, err)
+		}
+	}
+}
+
 func TestClockSkewed(t *testing.T) {
 	for _, c := range []struct {
 		offset time.Duration

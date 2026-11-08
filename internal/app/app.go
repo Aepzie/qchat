@@ -12,6 +12,9 @@
 // and sender keys travel over the pairwise sessions, group messages are
 // encrypted once with the sender's sender key and fanned out by the relay
 // (see groups.go for the rules, groupapi.go for the interface side).
+// Sealed sender (docs/design/phase-5-metadata.md) moves sending onto an
+// anonymous session once the recipient's access key is known, so that the
+// relay does not learn who sent a message (see sealed.go).
 //
 // Behaviour worth knowing:
 //
@@ -54,6 +57,7 @@ import (
 	"github.com/craguS/qchat/internal/identity"
 	"github.com/craguS/qchat/internal/profile"
 	"github.com/craguS/qchat/internal/protocol"
+	"github.com/craguS/qchat/internal/sealed"
 	"github.com/craguS/qchat/internal/store/clientdb"
 	"github.com/craguS/qchat/internal/transport"
 	"github.com/craguS/qchat/internal/tui"
@@ -89,8 +93,15 @@ type App struct {
 	selfRaw []byte
 	now     func() time.Time
 
+	// sess is the authenticated session; anon the anonymous one used for
+	// sealed sends (see sealed.go), nil if there is none.
 	sessMu sync.RWMutex
 	sess   Requester
+	anon   Requester
+
+	// keyMu guards accessKey, the own sealed sender access key.
+	keyMu     sync.RWMutex
+	accessKey sealed.AccessKey
 
 	tuiEvents chan client.Event
 	chat      chan tui.ChatEvent
@@ -141,6 +152,18 @@ type App struct {
 	backlogUntil   time.Time
 	dropped        int
 	denied         *client.RegistrationDenied
+	// anonUp is the last reported state of the anonymous session;
+	// prefetched holds prekeys fetched ahead of sealed session starts and
+	// prefetching the peers a fetch is scheduled for (see sealed.go).
+	anonUp      bool
+	prefetched  map[identity.ID]prefetched
+	prefetching map[identity.ID]bool
+
+	// shareDelay and prefetchDelay return the random pauses before the own
+	// access key is shared with the next peer after a rotation and before
+	// prekeys are fetched for a sealed session start.
+	shareDelay    func() time.Duration
+	prefetchDelay func() time.Duration
 }
 
 // New returns an App for an unlocked profile. invite is the invite code
@@ -158,11 +181,16 @@ func New(p *profile.Profile, invite string) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app: own bundle is invalid: %w", err)
 	}
+	accessKey, err := loadOrCreateAccessKey(context.Background(), p.DB)
+	if err != nil {
+		return nil, fmt.Errorf("app: access key: %w", err)
+	}
 	return &App{
 		prof:           p,
 		invite:         invite,
 		self:           self,
 		selfRaw:        raw,
+		accessKey:      accessKey,
 		now:            time.Now,
 		tuiEvents:      make(chan client.Event, eventBuffer),
 		chat:           make(chan tui.ChatEvent, eventBuffer),
@@ -177,6 +205,10 @@ func New(p *profile.Profile, invite string) (*App, error) {
 		groupStatus:    map[messageKey]uint8{},
 		shadows:        map[identity.ID]shadowSession{},
 		handshakes:     map[identity.ID][]time.Time{},
+		prefetched:     map[identity.ID]prefetched{},
+		prefetching:    map[identity.ID]bool{},
+		shareDelay:     func() time.Duration { return randomDelay(maxShareDelay) },
+		prefetchDelay:  func() time.Duration { return randomDelay(maxPrefetchDelay) },
 	}, nil
 }
 

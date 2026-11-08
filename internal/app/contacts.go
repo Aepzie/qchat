@@ -126,6 +126,7 @@ func (a *App) AddContact(ctx context.Context, idText, displayName string) (tui.C
 	if keyChanged {
 		a.emit(tui.ContactKeyChanged{ContactID: info.ID})
 	}
+	a.shareAccessKey(ctx, id)
 	return info, nil
 }
 
@@ -232,6 +233,7 @@ func (a *App) RemoveContact(contactID string) error {
 		return err
 	}
 	delete(a.unread, id)
+	a.revokeAccessKey()
 	return nil
 }
 

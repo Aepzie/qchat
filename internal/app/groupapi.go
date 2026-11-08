@@ -12,7 +12,7 @@ import (
 	"github.com/craguS/qchat/internal/e2e"
 	"github.com/craguS/qchat/internal/group"
 	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/craguS/qchat/internal/sealed"
 	"github.com/craguS/qchat/internal/senderkey"
 	"github.com/craguS/qchat/internal/store/clientdb"
 	"github.com/craguS/qchat/internal/tui"
@@ -308,6 +308,9 @@ func (a *App) ChangeGroup(ctx context.Context, groupID string, change tui.GroupC
 	if notice := joinNotices(notices...); notice != "" {
 		later = append(later, tui.GroupChanged{GroupID: groupID, Notice: notice})
 	}
+	if op == group.OpLeave || op == group.OpRemove {
+		a.revokeAccessKey()
+	}
 	return a.currentGroupInfo(ctx, gid)
 }
 
@@ -385,15 +388,16 @@ func (a *App) sendGroup(ctx context.Context, groupID, text string) (tui.MessageI
 		return tui.MessageInfo{}, errors.New("message is not valid UTF-8")
 	}
 	a.awaitBacklog(ctx)
-	m, envelope, to, notice, err := a.sealGroup(ctx, gid, text)
+	out, notice, err := a.sealGroup(ctx, gid, text)
 	if notice != "" {
 		a.emit(tui.GroupChanged{GroupID: groupID, Notice: notice})
 	}
 	if err != nil {
 		return tui.MessageInfo{}, err
 	}
+	m := out.message
 	key := messageKey{peer: identity.ID(gid), msgID: m.MsgID}
-	status, reason, missed := a.deliverMulti(ctx, to, envelope)
+	status, reason, missed := a.deliverMulti(ctx, out.to, out.proofs, out.envelope)
 	if len(missed) > 0 {
 		labels := make([]string, len(missed))
 		for i, id := range missed {
@@ -415,14 +419,26 @@ func (a *App) sendGroup(ctx context.Context, groupID, text string) (tui.MessageI
 	return info, updateErr
 }
 
+// sealedGroupMessage is a group message ready to be handed to the relay.
+type sealedGroupMessage struct {
+	// message is the stored outgoing message.
+	message  clientdb.GroupMessage
+	envelope []byte
+	// to lists the recipients; proofs holds the access proofs of those
+	// reached with SealedSendMulti, the others get SendMulti.
+	to     []identity.ID
+	proofs map[identity.ID][sealed.VerifierSize]byte
+}
+
 // sealGroup encrypts a group message, starting a sender key generation
 // first if there is none or the current one NeedsRotation, and commits the
 // advanced sender key together with the outgoing message. It returns the
-// stored message, the envelope, the recipients and a notice for members
-// a new sender key could not reach.
-func (a *App) sealGroup(ctx context.Context, gid group.ID, text string) (clientdb.GroupMessage, []byte, []identity.ID, string, error) {
-	fail := func(err error) (clientdb.GroupMessage, []byte, []identity.ID, string, error) {
-		return clientdb.GroupMessage{}, nil, nil, "", err
+// message to deliver and a notice for members a new sender key could not
+// reach. The stored message records whether it goes sealed to every
+// recipient or identified to at least one.
+func (a *App) sealGroup(ctx context.Context, gid group.ID, text string) (sealedGroupMessage, string, error) {
+	fail := func(err error) (sealedGroupMessage, string, error) {
+		return sealedGroupMessage{}, "", err
 	}
 	a.groupMu.Lock()
 	defer a.groupMu.Unlock()
@@ -474,47 +490,57 @@ func (a *App) sealGroup(ctx context.Context, gid group.ID, text string) (clientd
 		return fail(err)
 	}
 	defer clear(state)
-	m := clientdb.GroupMessage{Group: gid, Sender: a.selfID(), MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent, Body: text, Status: clientdb.StatusSent}
+	proofs := a.groupProofs(ctx, to)
+	m := clientdb.GroupMessage{Group: gid, Sender: a.selfID(), MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent, Body: text, Status: clientdb.StatusSent, Flags: flagSentIdentified}
+	if len(proofs) == len(to) {
+		m.Flags = flagSentSealed
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := a.prof.DB.CommitGroupSend(ctx, state, m); err != nil {
-		return clientdb.GroupMessage{}, nil, nil, notice, err
+		return sealedGroupMessage{}, notice, err
 	}
 	a.inflight[messageKey{peer: identity.ID(gid), msgID: m.MsgID}] = struct{}{}
-	return m, envelope, to, notice, nil
+	return sealedGroupMessage{message: m, envelope: envelope, to: to, proofs: proofs}, notice, nil
 }
 
-// deliverMulti hands a group envelope to the relay for every recipient.
-// The relay may store it for some recipients only; those it could not
-// reach are returned. The message counts as sent when at least one
-// recipient got it.
-func (a *App) deliverMulti(ctx context.Context, to []identity.ID, payload []byte) (uint8, string, []identity.ID) {
-	sess := a.session()
-	if sess == nil {
-		return clientdb.StatusFailed, "not connected", nil
-	}
-	ids := make([][]byte, len(to))
-	for i, id := range to {
-		ids[i] = id[:]
-	}
-	frame, err := sess.Request(ctx, protocol.TypeSendMulti, protocol.SendMulti{To: ids, Payload: payload})
-	if reason := relayFailure(err); reason != "" {
-		return clientdb.StatusFailed, reason, nil
-	}
-	result, err := protocol.DecodeBody[protocol.SendMultiResult](frame, protocol.TypeSendMultiResult)
-	if err != nil || result.Status != protocol.SendAccepted {
-		return clientdb.StatusFailed, "unexpected answer from the server", nil
-	}
-	var missed []identity.ID
-	for _, raw := range result.Failed {
-		if len(raw) == identity.IDSize && slices.Contains(to, identity.ID(raw)) {
-			missed = append(missed, identity.ID(raw))
+// deliverMulti hands a group envelope to the relay for every recipient:
+// with SealedSendMulti on the anonymous session to those with a proof in
+// proofs, with SendMulti to the others. The relay may store it for some
+// recipients only; those it could not reach are returned. The message
+// counts as sent when at least one recipient got it.
+func (a *App) deliverMulti(ctx context.Context, to []identity.ID, proofs map[identity.ID][sealed.VerifierSize]byte, payload []byte) (uint8, string, []identity.ID) {
+	var sealedTo, identifiedTo []identity.ID
+	for _, id := range to {
+		if _, ok := proofs[id]; ok {
+			sealedTo = append(sealedTo, id)
+		} else {
+			identifiedTo = append(identifiedTo, id)
 		}
 	}
-	if len(missed) == len(to) {
-		return clientdb.StatusFailed, "the server could not store it for any member", missed
+	var missed, lost []identity.ID
+	var reasons []string
+	collect := func(failed []identity.ID, reason string) {
+		if reason != "" {
+			lost = append(lost, failed...)
+			reasons = append(reasons, reason)
+			return
+		}
+		missed = append(missed, failed...)
 	}
-	return clientdb.StatusDelivered, "", missed
+	if len(sealedTo) > 0 {
+		collect(a.sealedMulti(ctx, sealedTo, proofs, payload))
+	}
+	if len(identifiedTo) > 0 {
+		collect(a.identifiedMulti(ctx, identifiedTo, payload))
+	}
+	if len(missed)+len(lost) < len(to) {
+		return clientdb.StatusDelivered, "", append(missed, lost...)
+	}
+	if len(reasons) > 0 {
+		return clientdb.StatusFailed, strings.Join(reasons, "; "), missed
+	}
+	return clientdb.StatusFailed, "the server could not store it for any member", missed
 }
 
 // groupHistory returns the latest messages of a group, oldest first.

@@ -274,14 +274,18 @@ func (a *App) sendPairwise(ctx context.Context, id identity.ID, kind e2e.Kind, b
 	if err != nil {
 		return err.Error()
 	}
-	payload, reason, err := a.sealOutgoing(ctx, c, pt, nil)
+	route, err := a.routeTo(ctx, id)
+	if err != nil {
+		return err.Error()
+	}
+	payload, reason, err := a.sealOutgoing(ctx, c, pt, nil, route)
 	switch {
 	case err != nil:
 		return err.Error()
 	case reason != "":
 		return reason
 	}
-	if status, reason := a.deliver(ctx, id, payload); status == clientdb.StatusFailed {
+	if status, reason := a.deliverPairwise(ctx, c, route, payload); status == clientdb.StatusFailed {
 		return reason
 	}
 	return ""
@@ -913,34 +917,48 @@ func (a *App) undecryptable(ctx context.Context, gid group.ID, sender identity.I
 }
 
 // headerCandidates returns the header keys of every installed generation of
-// from in the groups the user is a member of. Group envelopes are routed
-// only among the generations of the member the relay names as the sender.
+// from in the groups the user is a member of. Identified group envelopes
+// are routed only among the generations of the member the relay names as
+// the sender; for a sealed one (from is the zero ID) the candidates are the
+// generations of every other current member and the user's own current
+// generation, which recognises the echo of an own sealed fan-out.
 func (a *App) headerCandidates(ctx context.Context, from identity.ID) ([]senderkey.HeaderCandidate, error) {
 	list, err := a.prof.DB.ListGroups(ctx)
 	if err != nil {
 		return nil, err
 	}
+	self := a.selfID()
 	var out []senderkey.HeaderCandidate
 	for _, g := range list {
 		if g.Left {
 			continue
 		}
 		e, err := parseGroupEntry(g.State, g.Left)
-		if err != nil || !e.state.IsMember(from) {
+		if err != nil {
 			continue
 		}
-		for _, ig := range e.installed[from] {
-			r, err := a.loadReceiver(ctx, g.ID, from, ig.gen)
-			if err != nil {
-				return nil, err
+		if from.IsZero() && e.state.IsMember(self) {
+			if c, ok := a.ownHeaderCandidate(ctx, g.ID, e.state.Epoch); ok {
+				out = append(out, c)
 			}
-			if r == nil {
+		}
+		for member, gens := range e.installed {
+			if member == self || !e.state.IsMember(member) || (!from.IsZero() && member != from) {
 				continue
 			}
-			c, err := r.HeaderCandidate()
-			r.Destroy()
-			if err == nil {
-				out = append(out, c)
+			for _, ig := range gens {
+				r, err := a.loadReceiver(ctx, g.ID, member, ig.gen)
+				if err != nil {
+					return nil, err
+				}
+				if r == nil {
+					continue
+				}
+				c, err := r.HeaderCandidate()
+				r.Destroy()
+				if err == nil {
+					out = append(out, c)
+				}
 			}
 		}
 	}
@@ -948,7 +966,10 @@ func (a *App) headerCandidates(ctx context.Context, from identity.ID) ([]senderk
 }
 
 // receiveGroupEnvelope decrypts and files a group message relayed from
-// from. a.groupMu must be held.
+// from, or a sealed one if from is the zero ID: it is then routed by the
+// sender named in its decrypted header, which must be a current member,
+// and the sender's signature, checked by Decrypt, authenticates it.
+// a.groupMu must be held.
 func (a *App) receiveGroupEnvelope(ctx context.Context, from identity.ID, payload []byte) groupResult {
 	candidates, err := a.headerCandidates(ctx, from)
 	if err != nil {
@@ -961,7 +982,9 @@ func (a *App) receiveGroupEnvelope(ctx context.Context, from identity.ID, payloa
 	switch {
 	case errors.Is(err, senderkey.ErrNoHeaderKey):
 		return waitResult()
-	case err != nil || idx < 0 || hdr.Sender != from:
+	case err == nil && idx >= 0 && from.IsZero() && hdr.Sender == a.selfID():
+		return doneResult()
+	case err != nil || idx < 0 || hdr.Sender == a.selfID() || (!from.IsZero() && hdr.Sender != from):
 		return a.dropResult()
 	}
 	gid, sender, gen := hdr.Group, hdr.Sender, hdr.Generation

@@ -68,9 +68,14 @@ const (
 	maxShadowSessions = 64
 	// handshakeBurst and handshakeWindow rate limit Init processing per
 	// sender; maxHandshakeSenders bounds the memory of that limiter.
-	handshakeBurst      = 5
-	handshakeWindow     = time.Minute
-	maxHandshakeSenders = 1024
+	// Session starts that arrive sealed share one bucket (the zero ID) of
+	// sealedHandshakeBurst instead: their sender is only a claim until the
+	// Init verifies, so a forgery must not spend the claimed sender's
+	// budget.
+	handshakeBurst       = 5
+	sealedHandshakeBurst = 4 * handshakeBurst
+	handshakeWindow      = time.Minute
+	maxHandshakeSenders  = 1024
 	// responderMarkSize is the size of a responder mark.
 	responderMarkSize = sha256.Size + 1
 	// initRefreshAge is the age after which an own session that never
@@ -231,9 +236,10 @@ func (a *App) loadSession(ctx context.Context, peer identity.ID) (clientdb.Sessi
 	return s, true, nil
 }
 
-// open decrypts an envelope from from. a.ratchetMu must be held. Errors
-// are permanent unless isTransient says otherwise.
-func (a *App) open(ctx context.Context, from identity.ID, env e2e.Envelope) (opened, error) {
+// open decrypts an envelope from from, counting a session start against
+// the limiter bucket limit (see allowHandshake). a.ratchetMu must be held.
+// Errors are permanent unless isTransient says otherwise.
+func (a *App) open(ctx context.Context, from identity.ID, env e2e.Envelope, limit identity.ID) (opened, error) {
 	cur, found, err := a.loadSession(ctx, from)
 	if err != nil {
 		return opened{}, dbError(err)
@@ -242,9 +248,9 @@ func (a *App) open(ctx context.Context, from identity.ID, env e2e.Envelope) (ope
 	case routeExisting:
 		return a.openExisting(cur, env)
 	case routeAccept:
-		return a.openAccepted(ctx, from, env)
+		return a.openAccepted(ctx, from, env, limit)
 	case routeShadow:
-		return a.openShadow(ctx, from, cur, env)
+		return a.openShadow(ctx, from, cur, env, limit)
 	default:
 		return opened{}, errUndecryptable
 	}
@@ -271,8 +277,8 @@ func (a *App) openExisting(cur clientdb.Session, env e2e.Envelope) (opened, erro
 
 // openAccepted accepts the envelope's Init as a new responder session and
 // decrypts with it.
-func (a *App) openAccepted(ctx context.Context, from identity.ID, env e2e.Envelope) (opened, error) {
-	st, acc, seen, err := a.acceptInit(ctx, from, env.Init)
+func (a *App) openAccepted(ctx context.Context, from identity.ID, env e2e.Envelope, limit identity.ID) (opened, error) {
+	st, acc, seen, err := a.acceptInit(ctx, from, env.Init, limit)
 	if err != nil {
 		return opened{}, err
 	}
@@ -300,7 +306,7 @@ func (a *App) openAccepted(ctx context.Context, from identity.ID, env e2e.Envelo
 
 // openShadow decrypts a message of the peer's losing session start and
 // leaves the stored session cur unchanged.
-func (a *App) openShadow(ctx context.Context, from identity.ID, cur clientdb.Session, env e2e.Envelope) (opened, error) {
+func (a *App) openShadow(ctx context.Context, from identity.ID, cur clientdb.Session, env e2e.Envelope, limit identity.ID) (opened, error) {
 	digest := sha256.Sum256(env.Init)
 	var (
 		st   *ratchet.State
@@ -311,7 +317,7 @@ func (a *App) openShadow(ctx context.Context, from identity.ID, cur clientdb.Ses
 	if sh, ok := a.shadows[from]; ok && sh.digest == digest {
 		st, err = ratchet.Unmarshal(sh.state)
 	} else {
-		st, acc, seen, err = a.acceptInit(ctx, from, env.Init)
+		st, acc, seen, err = a.acceptInit(ctx, from, env.Init, limit)
 	}
 	if err != nil {
 		return opened{}, err
@@ -336,8 +342,8 @@ func (a *App) openShadow(ctx context.Context, from identity.ID, cur clientdb.Ses
 // acceptInit verifies a peer's Init, checks its sender bundle against the
 // stored contact and returns the new responder ratchet state together with
 // the replay set entry to record when the first message is committed.
-func (a *App) acceptInit(ctx context.Context, from identity.ID, init []byte) (*ratchet.State, *handshake.Accepted, *clientdb.SeenInit, error) {
-	st, acc, retireAt, err := a.acceptInitState(ctx, from, init)
+func (a *App) acceptInit(ctx context.Context, from identity.ID, init []byte, limit identity.ID) (*ratchet.State, *handshake.Accepted, *clientdb.SeenInit, error) {
+	st, acc, retireAt, err := a.acceptInitState(ctx, from, init, limit)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -350,8 +356,8 @@ func (a *App) acceptInit(ctx context.Context, from identity.ID, init []byte) (*r
 
 // acceptInitState is acceptInit without the replay set entry; it also
 // returns the RetireAt of the signed prekey the Init used.
-func (a *App) acceptInitState(ctx context.Context, from identity.ID, init []byte) (*ratchet.State, *handshake.Accepted, time.Time, error) {
-	if !a.allowHandshake(from) {
+func (a *App) acceptInitState(ctx context.Context, from identity.ID, init []byte, limit identity.ID) (*ratchet.State, *handshake.Accepted, time.Time, error) {
+	if !a.allowHandshake(limit) {
 		return nil, nil, time.Time{}, errHandshakeLimited
 	}
 	var retireAt time.Time
@@ -423,8 +429,17 @@ func (a *App) checkSender(ctx context.Context, from identity.ID, sender *identit
 	}
 }
 
-// allowHandshake records a session start from sender and reports whether
-// it is within the rate limit. a.ratchetMu must be held.
+// handshakeBurstFor returns the burst of the limiter bucket key.
+func handshakeBurstFor(key identity.ID) int {
+	if key.IsZero() {
+		return sealedHandshakeBurst
+	}
+	return handshakeBurst
+}
+
+// allowHandshake records a session start in the limiter bucket sender (the
+// relay-reported sender, or the zero ID for sealed deliveries) and reports
+// whether it is within the rate limit. a.ratchetMu must be held.
 func (a *App) allowHandshake(sender identity.ID) bool {
 	now := a.now()
 	recent := func(times []time.Time) []time.Time {
@@ -448,7 +463,7 @@ func (a *App) allowHandshake(sender identity.ID) bool {
 			return false
 		}
 	}
-	if len(times) >= handshakeBurst {
+	if len(times) >= handshakeBurstFor(sender) {
 		a.handshakes[sender] = times
 		return false
 	}
@@ -658,7 +673,9 @@ func (a *App) adoptBundle(id identity.ID, fresh *identity.Bundle) bool {
 //
 // An own session that has not received anything for so long that the peer
 // would reject its Init as stale (initRefreshAge) is replaced by a new one.
-func (a *App) sealOutgoing(ctx context.Context, c clientdb.Contact, pt e2e.Plaintext, record *clientdb.Message) (payload []byte, reason string, err error) {
+// For a sealed route a new session is started only from prekeys fetched
+// earlier (sealedSessionStart), never with a fetch right before the send.
+func (a *App) sealOutgoing(ctx context.Context, c clientdb.Contact, pt e2e.Plaintext, record *clientdb.Message, route sendRoute) (payload []byte, reason string, err error) {
 	id := identity.ID(c.ID)
 	usable := func() (clientdb.Session, bool, error) {
 		cur, found, err := a.loadSession(ctx, id)
@@ -675,7 +692,11 @@ func (a *App) sealOutgoing(ctx context.Context, c clientdb.Contact, pt e2e.Plain
 	}
 	if !found {
 		a.ratchetMu.Unlock()
-		started, reason, err := a.startSession(ctx, c)
+		start := a.startSession
+		if route.sealed {
+			start = a.sealedSessionStart
+		}
+		started, reason, err := start(ctx, c)
 		if reason != "" || err != nil {
 			return nil, reason, err
 		}
@@ -738,25 +759,42 @@ func (a *App) sealOutgoing(ctx context.Context, c clientdb.Contact, pt e2e.Plain
 // and returns a new initiator session, not yet stored. A non-empty reason
 // explains a relay-side failure.
 func (a *App) startSession(ctx context.Context, c clientdb.Contact) (clientdb.Session, string, error) {
-	id := identity.ID(c.ID)
+	resp, reason := a.requestPrekeys(ctx, identity.ID(c.ID))
+	if reason != "" {
+		return clientdb.Session{}, reason, nil
+	}
+	return a.sessionFromPrekeys(ctx, c, resp)
+}
+
+// requestPrekeys fetches the prekey bundle of id from the relay. A
+// non-empty reason explains a failure.
+func (a *App) requestPrekeys(ctx context.Context, id identity.ID) (protocol.PrekeyResponse, string) {
 	sess := a.session()
 	if sess == nil {
-		return clientdb.Session{}, "not connected", nil
+		return protocol.PrekeyResponse{}, "not connected"
 	}
 	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	frame, err := sess.Request(rctx, protocol.TypePrekeyRequest, protocol.PrekeyRequest{ID: id[:]})
 	var remote *client.RemoteError
 	if errors.As(err, &remote) && remote.Code == protocol.ErrCodeNotFound {
-		return clientdb.Session{}, "this contact has no keys on the server yet; they need to connect once", nil
+		return protocol.PrekeyResponse{}, "this contact has no keys on the server yet; they need to connect once"
 	}
 	if reason := relayFailure(err); reason != "" {
-		return clientdb.Session{}, reason, nil
+		return protocol.PrekeyResponse{}, reason
 	}
 	resp, err := protocol.DecodeBody[protocol.PrekeyResponse](frame, protocol.TypePrekeyResponse)
 	if err != nil {
-		return clientdb.Session{}, "unexpected answer from the server", nil
+		return protocol.PrekeyResponse{}, "unexpected answer from the server"
 	}
+	return resp, ""
+}
+
+// sessionFromPrekeys returns a new initiator session with the contact c
+// from its prekey bundle resp, not yet stored. A non-empty reason explains
+// a bundle that cannot be used.
+func (a *App) sessionFromPrekeys(ctx context.Context, c clientdb.Contact, resp protocol.PrekeyResponse) (clientdb.Session, string, error) {
+	id := identity.ID(c.ID)
 	fresh, err := identity.ParseBundleForID(resp.Bundle, id)
 	if err != nil {
 		return clientdb.Session{}, "the server returned keys that do not belong to this contact", nil

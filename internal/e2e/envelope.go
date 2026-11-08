@@ -14,10 +14,11 @@ import (
 // Kind is the content type of a message.
 type Kind uint8
 
-// Message kinds. Kinds 1 to 3 travel over pairwise ratchet sessions inside
-// an [Envelope]; kind 4 is only ever encrypted with a group sender key
-// (package senderkey) and must be rejected when it arrives pairwise, just as
-// kinds 1 to 3 must be rejected inside a group envelope.
+// Message kinds. Kinds 1 to 3 and 8 travel over pairwise ratchet sessions
+// inside an [Envelope]; kind 4 is only ever encrypted with a group sender
+// key (package senderkey) and must be rejected when it arrives pairwise,
+// just as the pairwise kinds must be rejected inside a group envelope.
+// Kinds 5 to 7 are reserved and rejected.
 const (
 	// KindText is a UTF-8 text message.
 	KindText Kind = 1
@@ -30,7 +31,17 @@ const (
 	// KindGroupText is a UTF-8 text message to a group, encrypted with the
 	// sender's group sender key.
 	KindGroupText Kind = 4
+	// KindAccessKey carries the sender's sealed sender access key (package
+	// sealed, docs/design/phase-5-metadata.md) as its body: the secret that
+	// lets the recipient send sealed messages to the sender. The body is
+	// binary; its exact format is checked by the application.
+	KindAccessKey Kind = 8
 )
+
+// known reports whether k is a kind this package encodes and parses.
+func (k Kind) known() bool {
+	return (k >= KindText && k <= KindGroupText) || k == KindAccessKey
+}
 
 // IsText reports whether k is a kind whose body is UTF-8 text shown to the
 // user.
@@ -183,7 +194,7 @@ type plaintextWire struct {
 
 // checkContent enforces the kind and body rules.
 func checkContent(kind Kind, body []byte) error {
-	if kind < KindText || kind > KindGroupText {
+	if !kind.known() {
 		return fmt.Errorf("unknown kind %d", kind)
 	}
 	if len(body) == 0 || len(body) > MaxBodySize {

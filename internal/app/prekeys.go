@@ -37,15 +37,18 @@ const (
 	keyIDAttempts = 8
 )
 
-// startMaintenance runs maintainPrekeys, then pruneGroupKeys, in the
-// background. Prekey maintenance runs never
-// overlap; a run requested while one is in progress is skipped.
+// startMaintenance uploads the verifier of the own access key, then runs
+// maintainPrekeys, prefetchPrekeys and pruneGroupKeys, in the background. Prekey
+// maintenance runs never overlap; a run requested while one is in progress
+// is skipped.
 func (a *App) startMaintenance(ctx context.Context) {
 	a.bg.Add(1)
 	go func() {
 		defer a.bg.Done()
 		defer a.maintRuns.Add(1)
+		_ = a.publishAccessKey(ctx)
 		_ = a.maintainPrekeys(ctx)
+		a.prefetchPrekeys(ctx)
 		_ = a.pruneGroupKeys(ctx)
 	}()
 }
