@@ -44,16 +44,19 @@
 //     queue rows referring to the payload; a trigger on queue decrements it
 //     whenever a row is deleted, by acknowledgement, expiry or a deleted
 //     identity, and deletes the payload with its last reference.
-//   - access_keys(id, verifier, allow_unidentified): per identity, the
-//     verifier of its sealed sender access key (an HMAC output, never the
-//     key itself) and whether it accepts sealed messages from anyone. A new
-//     setting replaces the old one.
+//   - access_keys(id, verifier_hash, allow_unidentified): per identity, the
+//     SHA-256 hash of the verifier of its sealed sender access key and
+//     whether it accepts sealed messages from anyone. The verifier (an
+//     HMAC output of the key) is the bearer proof senders present, so only
+//     its hash is stored. A new setting replaces the old one.
 //
 // Schema version 3 moved the payloads of existing queue rows into
 // queue_payloads, one payload per row, keeping their queue IDs and the
 // queue ID sequence. Schema version 4 rebuilt queue with a nullable sender
 // column, keeping every row, its queue ID and the sequence, and added
-// access_keys.
+// access_keys. Schema version 5 replaced every stored verifier by its
+// SHA-256 hash, renaming the column to verifier_hash, and deleted
+// all-zero verifiers, which are no longer accepted.
 //
 // Prekeys, queued messages and access keys reference the identity they belong to, by
 // foreign key with ON DELETE CASCADE.

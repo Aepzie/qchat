@@ -1,13 +1,20 @@
 package serverdb
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// stored returns the stored form of key.
+func stored(key AccessKey) StoredAccessKey {
+	return StoredAccessKey{VerifierHash: sha256.Sum256(key.Verifier[:]), AllowUnidentified: key.AllowUnidentified}
+}
 
 func TestAccessKeys(t *testing.T) {
 	db, _ := openTestDB(t)
@@ -28,15 +35,29 @@ func TestAccessKeys(t *testing.T) {
 	if err := db.SetAccessKey(ctx, alice, first); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := db.GetAccessKey(ctx, alice); err != nil || got != first {
-		t.Fatalf("GetAccessKey = %+v, %v; want %+v", got, err, first)
+	got, err := db.GetAccessKey(ctx, alice)
+	if err != nil || got != stored(first) {
+		t.Fatalf("GetAccessKey = %+v, %v; want %+v", got, err, stored(first))
+	}
+	if !got.Matches(first.Verifier[:]) || got.Matches(got.VerifierHash[:]) || got.Matches(first.Verifier[:31]) {
+		t.Fatal("Matches accepts the wrong proofs")
+	}
+	var raw []byte
+	if err := db.sql.QueryRow("SELECT verifier_hash FROM access_keys WHERE id = ?", alice[:]).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(raw, first.Verifier[:]) {
+		t.Fatal("the verifier itself is stored")
 	}
 	second := AccessKey{Verifier: testID(0x42), AllowUnidentified: true}
 	if err := db.SetAccessKey(ctx, alice, second); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := db.GetAccessKey(ctx, alice); err != nil || got != second {
-		t.Fatalf("GetAccessKey after replace = %+v, %v; want %+v", got, err, second)
+	if got, err := db.GetAccessKey(ctx, alice); err != nil || got != stored(second) || got.Matches(first.Verifier[:]) {
+		t.Fatalf("GetAccessKey after replace = %+v, %v; want %+v", got, err, stored(second))
+	}
+	if err := db.SetAccessKey(ctx, alice, AccessKey{AllowUnidentified: true}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("SetAccessKey(zero verifier) = %v, want ErrInvalidArgument", err)
 	}
 	var rows int
 	if err := db.sql.QueryRow("SELECT count(*) FROM access_keys").Scan(&rows); err != nil || rows != 1 {
@@ -55,8 +76,8 @@ func TestAccessKeyColumnChecks(t *testing.T) {
 	alice := testID(1)
 	registerTestIdentity(t, db, alice)
 	for name, stmt := range map[string]string{
-		"ShortVerifier": "INSERT INTO access_keys (id, verifier, allow_unidentified) VALUES (?, x'01', 0)",
-		"BadFlag":       "INSERT INTO access_keys (id, verifier, allow_unidentified) VALUES (?, zeroblob(32), 2)",
+		"ShortVerifier": "INSERT INTO access_keys (id, verifier_hash, allow_unidentified) VALUES (?, x'01', 0)",
+		"BadFlag":       "INSERT INTO access_keys (id, verifier_hash, allow_unidentified) VALUES (?, zeroblob(32), 2)",
 	} {
 		if _, err := db.sql.Exec(stmt, alice[:]); err == nil {
 			t.Errorf("%s accepted", name)
@@ -144,6 +165,117 @@ func TestEnqueueSealed(t *testing.T) {
 	}
 	if _, err := db.EnqueueSealedMulti(ctx, [][32]byte{bob, bob}, []byte("x"), now, now.Add(time.Hour), testLimits); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("EnqueueSealedMulti(duplicate) = %v", err)
+	}
+}
+
+func TestSealedQueueCap(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	alice, bob := testID(1), testID(2)
+	registerTestIdentity(t, db, bob)
+	now := time.Unix(1_700_000_000, 0)
+	limits := QueueLimits{MaxMessages: 4, MaxBytes: 1 << 20, MaxSealedMessages: 2, MaxSealedBytes: 1 << 20}
+	for i := range 2 {
+		if _, err := db.EnqueueSealed(ctx, bob, []byte("junk"), now, now.Add(time.Hour), limits); err != nil {
+			t.Fatalf("sealed %d: %v", i, err)
+		}
+	}
+	if _, err := db.EnqueueSealed(ctx, bob, []byte("junk"), now, now.Add(time.Hour), limits); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("sealed above the sealed cap = %v, want ErrQueueFull", err)
+	}
+	outcomes, err := db.EnqueueSealedMulti(ctx, [][32]byte{bob}, []byte("junk"), now, now.Add(time.Hour), limits)
+	if err != nil || !errors.Is(outcomes[0].Err, ErrQueueFull) {
+		t.Fatalf("sealed multi above the sealed cap = %+v, %v", outcomes, err)
+	}
+	for i := range 2 {
+		if _, err := db.Enqueue(ctx, bob, alice, []byte("identified"), now, now.Add(time.Hour), limits); err != nil {
+			t.Fatalf("identified %d next to sealed junk: %v", i, err)
+		}
+	}
+	if _, err := db.Enqueue(ctx, bob, alice, []byte("identified"), now, now.Add(time.Hour), limits); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("identified above MaxMessages = %v, want ErrQueueFull", err)
+	}
+	later := now.Add(2 * time.Hour)
+	if _, err := db.EnqueueSealed(ctx, bob, []byte("fresh"), later, later.Add(time.Hour), limits); err != nil {
+		t.Fatalf("sealed after the junk expired: %v", err)
+	}
+
+	carol := testID(3)
+	registerTestIdentity(t, db, carol)
+	bytesCap := QueueLimits{MaxMessages: 100, MaxBytes: 1 << 20, MaxSealedBytes: 10}
+	if _, err := db.EnqueueSealed(ctx, carol, bytes.Repeat([]byte{1}, 6), now, now.Add(time.Hour), bytesCap); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnqueueSealed(ctx, carol, bytes.Repeat([]byte{1}, 6), now, now.Add(time.Hour), bytesCap); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("sealed above MaxSealedBytes = %v, want ErrQueueFull", err)
+	}
+	if _, err := db.Enqueue(ctx, carol, alice, bytes.Repeat([]byte{1}, 6), now, now.Add(time.Hour), bytesCap); err != nil {
+		t.Fatalf("identified next to sealed bytes: %v", err)
+	}
+	if _, err := db.EnqueueSealed(ctx, carol, []byte("x"), now, now.Add(time.Hour), QueueLimits{MaxMessages: 1, MaxBytes: 1, MaxSealedMessages: -1}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("negative sealed cap = %v, want ErrInvalidArgument", err)
+	}
+}
+
+// TestMigrateHashesVerifiers opens a schema version 4 database holding a
+// plain verifier and a zero verifier and checks that migration 5 hashes
+// the first in place and drops the second.
+func TestMigrateHashesVerifiers(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "qchat.db")
+	alice, bob := testID(1), testID(2)
+	verifier := testID(0x41)
+
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		"PRAGMA foreign_keys = ON",
+		"CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY) STRICT",
+		migrations[0],
+		migrations[1],
+		migrations[2],
+		migrations[3],
+		"INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4)",
+	}
+	for _, stmt := range statements {
+		if _, err := conn.Exec(stmt); err != nil {
+			t.Fatalf("build version 4 schema: %v", err)
+		}
+	}
+	for _, id := range [][32]byte{alice, bob} {
+		if _, err := conn.Exec("INSERT INTO identities (id, bundle, serial) VALUES (?, x'01', 1)", id[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec("INSERT INTO access_keys (id, verifier, allow_unidentified) VALUES (?, ?, 1)", alice[:], verifier[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec("INSERT INTO access_keys (id, verifier, allow_unidentified) VALUES (?, zeroblob(32), 0)", bob[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open version 4 database: %v", err)
+	}
+	defer db.Close()
+	if got := countMigrations(t, path); got != len(migrations) {
+		t.Fatalf("schema_migrations has %d rows, want %d", got, len(migrations))
+	}
+	key, err := db.GetAccessKey(ctx, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != stored(AccessKey{Verifier: verifier, AllowUnidentified: true}) || !key.Matches(verifier[:]) {
+		t.Fatalf("migrated access key %+v", key)
+	}
+	if _, err := db.GetAccessKey(ctx, bob); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("zero verifier after migration: %v, want ErrNotFound", err)
 	}
 }
 

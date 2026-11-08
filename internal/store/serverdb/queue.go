@@ -23,6 +23,16 @@ type QueueLimits struct {
 	// with the full size of its payload, even when the payload is shared
 	// with other recipients.
 	MaxBytes int64
+	// MaxSealedMessages, if positive, is the largest number of unexpired
+	// sealed messages (stored without a sender) for a recipient. It is
+	// checked in addition to MaxMessages, so anyone holding the
+	// recipient's access key can fill at most this share of the queue and
+	// identified senders still find room. 0 means no separate cap.
+	MaxSealedMessages int
+	// MaxSealedBytes, if positive, bounds the total payload size of the
+	// unexpired sealed messages for a recipient in the same way. 0 means
+	// no separate cap.
+	MaxSealedBytes int64
 }
 
 // Queued is a message stored for a recipient.
@@ -151,7 +161,7 @@ func checkEnqueueArgs(payload []byte, now, expires time.Time, limits QueueLimits
 	if len(payload) == 0 || len(payload) > MaxQueuedPayloadSize {
 		return fmt.Errorf("%w: payload size %d not between 1 and %d", ErrInvalidArgument, len(payload), MaxQueuedPayloadSize)
 	}
-	if limits.MaxMessages < 1 || limits.MaxBytes < 1 {
+	if limits.MaxMessages < 1 || limits.MaxBytes < 1 || limits.MaxSealedMessages < 0 || limits.MaxSealedBytes < 0 {
 		return fmt.Errorf("%w: queue limits must be positive", ErrInvalidArgument)
 	}
 	if !expires.After(now) {
@@ -170,7 +180,7 @@ func enqueueSharedTx(ctx context.Context, tx *sql.Tx, recipients [][32]byte, sen
 	outcomes := make([]Enqueued, len(recipients))
 	accepted := make([]int, 0, len(recipients))
 	for i, r := range recipients {
-		err := checkRoomTx(ctx, tx, r, int64(len(payload)), now, limits)
+		err := checkRoomTx(ctx, tx, r, int64(len(payload)), sender == nil, now, limits)
 		switch {
 		case err == nil:
 			accepted = append(accepted, i)
@@ -206,21 +216,33 @@ func enqueueSharedTx(ctx context.Context, tx *sql.Tx, recipients [][32]byte, sen
 
 // checkRoomTx deletes the expired messages of recipient within tx and
 // reports ErrNotFound if recipient is not a stored identity, or
-// ErrQueueFull if one more message of size bytes would exceed limits.
-func checkRoomTx(ctx context.Context, tx *sql.Tx, recipient [32]byte, size int64, now time.Time, limits QueueLimits) error {
+// ErrQueueFull if one more message of size bytes, sealed or not, would
+// exceed limits.
+func checkRoomTx(ctx context.Context, tx *sql.Tx, recipient [32]byte, size int64, sealed bool, now time.Time, limits QueueLimits) error {
 	if err := requireIdentity(ctx, tx, recipient); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM queue WHERE recipient = ? AND expires <= ?", recipient[:], now.Unix()); err != nil {
 		return fmt.Errorf("serverdb: prune queue: %w", err)
 	}
-	var count int
-	var used int64
-	if err := tx.QueryRowContext(ctx, "SELECT count(*), coalesce(sum(size), 0) FROM queue WHERE recipient = ?",
-		recipient[:]).Scan(&count, &used); err != nil {
+	var count, sealedCount int
+	var used, sealedUsed int64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(size), 0),
+		coalesce(sum(sender IS NULL), 0), coalesce(sum(CASE WHEN sender IS NULL THEN size ELSE 0 END), 0)
+		FROM queue WHERE recipient = ?`,
+		recipient[:]).Scan(&count, &used, &sealedCount, &sealedUsed); err != nil {
 		return fmt.Errorf("serverdb: read queue usage: %w", err)
 	}
 	if count >= limits.MaxMessages || used+size > limits.MaxBytes {
+		return ErrQueueFull
+	}
+	if !sealed {
+		return nil
+	}
+	if limits.MaxSealedMessages > 0 && sealedCount >= limits.MaxSealedMessages {
+		return ErrQueueFull
+	}
+	if limits.MaxSealedBytes > 0 && sealedUsed+size > limits.MaxSealedBytes {
 		return ErrQueueFull
 	}
 	return nil
