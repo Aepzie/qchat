@@ -101,14 +101,39 @@ func (AuthOK) validate() error { return nil }
 
 // KeyRequest asks the relay for the identity bundle registered for ID. The
 // relay answers with a [KeyResponse] or an [ErrorBody].
+//
+// On an authenticated connection AccessProof must be absent. On an
+// anonymous connection it is required: the relay answers only if it
+// grants access to ID exactly as for a [SealedSend], and with
+// ErrCodeNotFound otherwise, so a sealed sender can fetch its contact's
+// bundle without identifying itself. A request with a proof commits an
+// undecided connection to being anonymous.
 type KeyRequest struct {
 	// ID is the identity to look up, exactly IDSize bytes.
 	ID []byte `cbor:"1,keyasint"`
+	// AccessProof is the access verifier of ID, exactly
+	// AccessVerifierSize bytes, or absent. An absent proof is encoded by
+	// omitting the field; an explicitly encoded empty byte string is not
+	// canonical and is rejected.
+	AccessProof []byte `cbor:"2,keyasint,omitempty"`
 }
 
 func (KeyRequest) frameType() FrameType { return TypeKeyRequest }
 
-func (k KeyRequest) validate() error { return checkFixed("ID", k.ID, IDSize) }
+func (k KeyRequest) validate() error {
+	if err := checkFixed("ID", k.ID, IDSize); err != nil {
+		return err
+	}
+	return checkOptionalProof(k.AccessProof)
+}
+
+// checkOptionalProof validates an access proof that may be absent.
+func checkOptionalProof(proof []byte) error {
+	if proof == nil {
+		return nil
+	}
+	return checkFixed("access proof", proof, AccessVerifierSize)
+}
 
 // KeyResponse returns the identity bundle requested by a [KeyRequest]. The
 // receiver must verify the bundle and check that its ID equals the requested
@@ -204,7 +229,9 @@ func (s SendResult) validate() error {
 // example after the next authentication, so recipients must tolerate
 // duplicates.
 type Deliver struct {
-	// From is the authenticated identity of the sender, exactly IDSize bytes.
+	// From is the authenticated identity of the sender, exactly IDSize
+	// bytes, or SealedFrom for a message sent with SealedSend or
+	// SealedSendMulti, whose sender the relay does not know.
 	From []byte `cbor:"1,keyasint"`
 	// Payload is the end-to-end encrypted ciphertext exactly as sent, between
 	// 1 and MaxPayloadSize bytes.
@@ -212,6 +239,12 @@ type Deliver struct {
 	// QueueID identifies the stored message on the relay; it is at least 1.
 	// Queue IDs increase in the order in which the relay accepted messages.
 	QueueID uint64 `cbor:"3,keyasint"`
+}
+
+// IsSealed reports whether d carries a sealed message, one whose From is
+// SealedFrom.
+func (d Deliver) IsSealed() bool {
+	return len(d.From) == IDSize && [IDSize]byte(d.From) == SealedFrom
 }
 
 func (Deliver) frameType() FrameType { return TypeDeliver }

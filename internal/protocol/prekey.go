@@ -69,14 +69,27 @@ func (p PrekeyStatus) validate() error {
 
 // PrekeyRequest asks the relay for the prekey bundle of the identity ID. The
 // relay answers with a [PrekeyResponse] or an [ErrorBody].
+//
+// AccessProof follows the rules of [KeyRequest]: absent on an
+// authenticated connection, required on an anonymous one, where a missing
+// grant is answered with ErrCodeNotFound like an unknown ID or an ID
+// without prekeys.
 type PrekeyRequest struct {
 	// ID is the identity to look up, exactly IDSize bytes.
 	ID []byte `cbor:"1,keyasint"`
+	// AccessProof is the access verifier of ID, exactly
+	// AccessVerifierSize bytes, or absent; see [KeyRequest.AccessProof].
+	AccessProof []byte `cbor:"2,keyasint,omitempty"`
 }
 
 func (PrekeyRequest) frameType() FrameType { return TypePrekeyRequest }
 
-func (p PrekeyRequest) validate() error { return checkFixed("ID", p.ID, IDSize) }
+func (p PrekeyRequest) validate() error {
+	if err := checkFixed("ID", p.ID, IDSize); err != nil {
+		return err
+	}
+	return checkOptionalProof(p.AccessProof)
+}
 
 // PrekeyResponse returns the prekey bundle requested by a [PrekeyRequest].
 // The relay hands out each one-time prekey at most once. The receiver must

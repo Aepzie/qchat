@@ -167,6 +167,9 @@ func (m Model) renderStatus(width int) string {
 		statusSegment{st.barFaint.Render("pin ") + st.barMuted.Render(shortFingerprint(m.cfg.Pin)), 20},
 		statusSegment{st.barFaint.Render("Tor: ") + st.barMuted.Render(onOff(m.cfg.Tor)), 10},
 	)
+	if m.sealed {
+		segments = append(segments, statusSegment{st.barMuted.Render("sealed"), 35})
+	}
 	if m.conn.state == client.Connected && m.conn.hasRTT {
 		segments = append(segments, statusSegment{st.bar.Foreground(t.Text).Render(formatRTT(m.conn.rtt)), 30})
 	}

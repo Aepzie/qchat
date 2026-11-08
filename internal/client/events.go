@@ -110,7 +110,9 @@ type Authenticated struct {
 // Delivery is a payload the relay routed to the local identity. Delivery
 // events are never dropped.
 type Delivery struct {
-	// From is the sender's identity as authenticated by the relay.
+	// From is the sender's identity as authenticated by the relay, or all
+	// zeros (protocol.SealedFrom) for a sealed message, whose sender the
+	// relay does not know; see IsSealed.
 	From [32]byte
 	// Payload is the end-to-end encrypted ciphertext. It is a copy owned by
 	// the receiver.
@@ -166,3 +168,8 @@ type ConnectionInfo struct {
 	// ConnectedAt is when the handshake completed.
 	ConnectedAt time.Time
 }
+
+// IsSealed reports whether d carries a sealed message: one sent with
+// SealedSend or SealedSendMulti, whose From is all zeros. The sender is
+// named, unauthenticated, inside the payload.
+func (d Delivery) IsSealed() bool { return d.From == protocol.SealedFrom }

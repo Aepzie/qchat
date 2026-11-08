@@ -30,7 +30,7 @@ const (
 	DefaultMaxConnectionsPerIP      = 16
 	DefaultMaxPendingHandshakes     = 64
 	DefaultMaxFrameSize             = protocol.MaxFrameSize
-	DefaultMaxMessageSize           = 256 << 10
+	DefaultMaxMessageSize           = 264 << 10
 	DefaultMaxQueueBytes            = 2 << 20
 	DefaultMaxTotalQueueBytes       = 256 << 20
 	DefaultMaxSessionsPerID         = 4
@@ -44,6 +44,11 @@ const (
 	DefaultPrekeyRequestsPerHour    = 120
 	DefaultMultiRecipientsPerMinute = 3000
 	DefaultLogLevel                 = "info"
+
+	DefaultSealedRecipientsPerMinute      = 3000
+	DefaultSealedRecipientsPerMinutePerIP = 6000
+	DefaultMaxQueuedSealedMessages        = 500
+	DefaultAnonymousLookupsPerHourPerIP   = 1200
 )
 
 // Values of Config.Registration.
@@ -87,6 +92,37 @@ const (
 // SendMulti requests at once above Limits.MultiRecipientsPerMinute: two
 // requests with the most recipients the protocol allows.
 const MultiRecipientsBurst = 2 * protocol.MaxMultiRecipients
+
+// Bursts and bounds of the sealed sender rate limits. A connection may name
+// SealedRecipientsBurst recipients at once above
+// Limits.SealedRecipientsPerMinute (two maximal SealedSendMulti requests),
+// and all anonymous connections from one address together
+// SealedRecipientsBurstPerIP above Limits.SealedRecipientsPerMinutePerIP.
+const (
+	SealedRecipientsBurst        = 2 * protocol.MaxMultiRecipients
+	SealedRecipientsBurstPerIP   = 4 * protocol.MaxMultiRecipients
+	MaxSealedRecipientsPerMinute = 1_000_000
+)
+
+// Bursts and bounds of the anonymous key lookups (KeyRequest and
+// PrekeyRequest with an access proof). All anonymous connections from one
+// address together may make AnonymousLookupsBurstPerIP granted lookups at
+// once above Limits.AnonymousLookupsPerHourPerIP.
+const (
+	AnonymousLookupsBurstPerIP   = 120
+	MaxAnonymousLookupsPerHourIP = 1_000_000
+)
+
+// Rate of the per-connection budget for sealed entries and anonymous
+// lookups whose access proof is refused. Refused entries never spend the
+// per-address budgets, so a client sending junk proofs, for example to an
+// onion service where every client shares one address, exhausts only its
+// own connection's budget: SealedRefusalsBurst at once, then
+// SealedRefusalsPerMinute.
+const (
+	SealedRefusalsBurst     = protocol.MaxMultiRecipients
+	SealedRefusalsPerMinute = 256
+)
 
 // Bounds enforced by Config.Validate.
 const (
@@ -226,6 +262,34 @@ type Limits struct {
 	// MultiRecipientsBurst. Each SendMulti also counts as one frame
 	// toward FramesPerSecond.
 	MultiRecipientsPerMinute int `toml:"multi_recipients_per_minute" comment:"Recipients a session may address per minute with SendMulti (1 to 1000000),\nwith a burst of 512. Each SendMulti also counts as one frame."`
+	// SealedRecipientsPerMinute is the sustained number of recipients one
+	// anonymous connection may name per minute across its SealedSend and
+	// SealedSendMulti requests, between 1 and
+	// MaxSealedRecipientsPerMinute, with a burst of SealedRecipientsBurst.
+	SealedRecipientsPerMinute int `toml:"sealed_recipients_per_minute" comment:"Recipients an anonymous connection may address per minute with sealed sends\n(1 to 1000000), with a burst of 512."`
+	// SealedRecipientsPerMinutePerIP is the sustained number of recipients
+	// all anonymous connections from one IPv4 address or IPv6 /64 together
+	// may name per minute, between 1 and MaxSealedRecipientsPerMinute, with
+	// a burst of SealedRecipientsBurstPerIP. Addresses are held in memory
+	// only, never logged or stored. Behind a Tor onion service every
+	// client shares one address, so raise it there.
+	SealedRecipientsPerMinutePerIP int `toml:"sealed_recipients_per_minute_per_ip" comment:"Recipients all anonymous connections from one IPv4 address or IPv6 /64 may\naddress per minute with sealed sends (1 to 1000000), with a burst of 1024.\nOnly recipients whose access proof is accepted count.\nBehind a Tor onion service all clients share 127.0.0.1: raise it there."`
+	// MaxQueuedSealedMessages is the largest number of unacknowledged
+	// sealed messages stored for one recipient, between 1 and
+	// MaxQueuedMessages. Sealed messages also count toward
+	// MaxQueuedMessages, and their payload bytes may take at most half of
+	// MaxQueuedBytes, so whoever holds a recipient's access key cannot fill
+	// the queue that identified senders use. A value at or above
+	// MaxQueuedMessages leaves only the byte share as a separate cap.
+	MaxQueuedSealedMessages int `toml:"max_queued_sealed_messages" comment:"Unacknowledged sealed messages stored per recipient (1 to 1000000),\nbelow max_queued_messages. They also count toward max_queued_messages and may take at most half of\nmax_queued_bytes, so sealed junk cannot block identified delivery."`
+	// AnonymousLookupsPerHourPerIP is the sustained number of granted
+	// anonymous key and prekey lookups all anonymous connections from one
+	// IPv4 address or IPv6 /64 together may make per hour, between 1 and
+	// MaxAnonymousLookupsPerHourIP, with a burst of
+	// AnonymousLookupsBurstPerIP. Each anonymous connection is also held
+	// to PrekeyRequestsPerHour. Behind a Tor onion service every client
+	// shares one address, so raise it there.
+	AnonymousLookupsPerHourPerIP int `toml:"anonymous_lookups_per_hour_per_ip" comment:"Key and prekey lookups with an access proof that all anonymous connections\nfrom one IPv4 address or IPv6 /64 may make per hour (1 to 1000000), with a\nburst of 120. Only lookups whose proof is accepted count.\nBehind a Tor onion service all clients share 127.0.0.1: raise it there."`
 }
 
 // LogConfig configures logging.
@@ -261,6 +325,11 @@ func DefaultConfig() Config {
 			MaxQueuedBytes:           DefaultMaxQueuedBytes,
 			PrekeyRequestsPerHour:    DefaultPrekeyRequestsPerHour,
 			MultiRecipientsPerMinute: DefaultMultiRecipientsPerMinute,
+
+			SealedRecipientsPerMinute:      DefaultSealedRecipientsPerMinute,
+			SealedRecipientsPerMinutePerIP: DefaultSealedRecipientsPerMinutePerIP,
+			MaxQueuedSealedMessages:        DefaultMaxQueuedSealedMessages,
+			AnonymousLookupsPerHourPerIP:   DefaultAnonymousLookupsPerHourPerIP,
 		},
 		Log: LogConfig{Level: DefaultLogLevel},
 	}
@@ -422,6 +491,14 @@ func (l Limits) validate() error {
 		return fmt.Errorf("config: limits.prekey_requests_per_hour must be between 1 and %d", MaxPrekeyRequestsPerHour)
 	case l.MultiRecipientsPerMinute < 1 || l.MultiRecipientsPerMinute > MaxMultiRecipientsPerMinute:
 		return fmt.Errorf("config: limits.multi_recipients_per_minute must be between 1 and %d", MaxMultiRecipientsPerMinute)
+	case l.SealedRecipientsPerMinute < 1 || l.SealedRecipientsPerMinute > MaxSealedRecipientsPerMinute:
+		return fmt.Errorf("config: limits.sealed_recipients_per_minute must be between 1 and %d", MaxSealedRecipientsPerMinute)
+	case l.SealedRecipientsPerMinutePerIP < 1 || l.SealedRecipientsPerMinutePerIP > MaxSealedRecipientsPerMinute:
+		return fmt.Errorf("config: limits.sealed_recipients_per_minute_per_ip must be between 1 and %d", MaxSealedRecipientsPerMinute)
+	case l.MaxQueuedSealedMessages < 1 || l.MaxQueuedSealedMessages > MaxQueuedMessages:
+		return fmt.Errorf("config: limits.max_queued_sealed_messages must be between 1 and %d", MaxQueuedMessages)
+	case l.AnonymousLookupsPerHourPerIP < 1 || l.AnonymousLookupsPerHourPerIP > MaxAnonymousLookupsPerHourIP:
+		return fmt.Errorf("config: limits.anonymous_lookups_per_hour_per_ip must be between 1 and %d", MaxAnonymousLookupsPerHourIP)
 	}
 	return validatePingInterval(l.PingInterval.Std())
 }

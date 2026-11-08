@@ -10,6 +10,7 @@ import (
 
 	"github.com/craguS/qchat/internal/crypto/hybridsig"
 	"github.com/craguS/qchat/internal/identity"
+	"github.com/craguS/qchat/internal/padding"
 )
 
 // ReceiverStateVersion is the version of the serialised [Receiver] format.
@@ -263,14 +264,25 @@ func (r *Receiver) findSkipped(iteration uint32) (int, bool) {
 	})
 }
 
-// openCommitted checks the header's commitment to message key mk and then
-// decrypts the ciphertext. Every failure is [ErrDecrypt].
+// openCommitted checks the header's commitment to message key mk, decrypts
+// the ciphertext and strips its padding. Every failure is [ErrDecrypt]; an
+// authentic message with invalid padding can only come from a broken or
+// malicious sender and is rejected like a forgery, before r's state changes.
 func openCommitted(mk [keySize]byte, h header, headerBytes, ciphertext []byte) ([]byte, error) {
 	commitment := commitMessageKey(mk)
 	if !hmac.Equal(commitment[:], h.commitment[:]) {
 		return nil, ErrDecrypt
 	}
-	return openMessage(mk, h.salt[:], ciphertext, headerBytes)
+	padded, err := openMessage(mk, h.salt[:], ciphertext, headerBytes)
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := padding.Unpad(padded)
+	if err != nil {
+		clear(padded)
+		return nil, ErrDecrypt
+	}
+	return plaintext, nil
 }
 
 // decryptSkipped decrypts a message that arrived after later ones, with a

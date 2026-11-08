@@ -50,6 +50,7 @@ The server never logs IP addresses. Planned measures include sealed sender, padd
 - Messages sent with v0.2.0 (static keys, no forward secrecy) remain decryptable by whoever obtains that version's long-term key.
 - A relay can serve an older, validly signed key bundle to someone who has never seen a newer one (first contact); later rollbacks are detected via the bundle serial.
 - **Group protocol limits (v0.4.0).** Groups are a composition inspired by Signal's Sender Keys, not MLS, and are not independently analysed. There is no ordering authority for membership changes: concurrent admin actions are resolved by a fixed rule (revocations beat grants, seniority decides between revocations), and a conflicting change that arrives late is dropped, so members can end up with different views; this is flagged ("out of sync") but not repaired automatically. Sender keys give forward secrecy per message chain but no post-compromise security except through rotation (on removal, after 1000 messages or 7 days). A removed member is cut off only once every remaining member has rotated. The relay sees the recipient list of every group message (approximating membership), the sender and the size, but not group IDs, names or which group a message belongs to.
+- **Sealed sender limits (v0.5.0).** The first message to a new contact is sent identified (access keys are exchanged inside the encrypted session). The relay sees which recipients each anonymous connection writes to, which can fingerprint a contact list; access-key redistribution after a removal reaches all remaining contacts within minutes. Without Tor the relay can link anonymous and authenticated connections by IP address and timing; behind an onion service the operator's tor can link streams on one circuit. Group creation, rotation and removal traffic is distinguishable by size from chat. Tor does not protect against a global passive adversary.
 - Denial of service by the server (it can drop or delay messages).
 - Side channels in dependencies.
 - Bugs in unaudited code.
@@ -62,8 +63,8 @@ The server never logs IP addresses. Planned measures include sealed sender, padd
 | 1 (v0.1.0) | Transport only: TLS 1.3 with X25519MLKEM768 and SPKI pinning. No end-to-end encryption. |
 | 2 (v0.2.0) | Hybrid identity keys; self-authenticating IDs; 1:1 end-to-end encrypted and signed messages (no forward secrecy); safety numbers; passphrase-encrypted local storage; online-only delivery. |
 | 3 (v0.3.0) | Signed hybrid prekeys; KEM-based asynchronous session start; per-direction hybrid KEM double ratchet (forward secrecy, post-compromise security); ciphertext-only offline delivery with acknowledgements; no presence probing via send results. |
-| 4 (v0.4.0, current) | Groups up to 256 members: admin-signed membership controls, sender keys with hybrid-signed messages and encrypted headers, key rotation by every remaining member on removal, verified join history, out-of-sync detection. |
-| 5 | Sealed sender, padding, optional Tor. |
+| 4 (v0.4.0) | Groups up to 256 members: admin-signed membership controls, sender keys with hybrid-signed messages and encrypted headers, key rotation by every remaining member on removal, verified join history, out-of-sync detection. |
+| 5 (v0.5.0, current) | Padding inside the encryption; sealed sender over separate anonymous sessions with access keys and anonymous key lookups; optional Tor (SOCKS5, onion service). See the limits below and docs/design/phase-5-metadata.md. |
 | 6-8 | Installer builder, UI, tests, fuzzing, release pipeline. |
 
 Planned phases are goals, not guarantees.

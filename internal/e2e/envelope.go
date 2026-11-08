@@ -8,15 +8,17 @@ import (
 	"unicode/utf8"
 
 	"github.com/craguS/qchat/internal/handshake"
+	"github.com/craguS/qchat/internal/padding"
 )
 
 // Kind is the content type of a message.
 type Kind uint8
 
-// Message kinds. Kinds 1 to 3 travel over pairwise ratchet sessions inside
-// an [Envelope]; kind 4 is only ever encrypted with a group sender key
-// (package senderkey) and must be rejected when it arrives pairwise, just as
-// kinds 1 to 3 must be rejected inside a group envelope.
+// Message kinds. Kinds 1 to 3 and 8 travel over pairwise ratchet sessions
+// inside an [Envelope]; kind 4 is only ever encrypted with a group sender
+// key (package senderkey) and must be rejected when it arrives pairwise,
+// just as the pairwise kinds must be rejected inside a group envelope.
+// Kinds 5 to 7 are reserved and rejected.
 const (
 	// KindText is a UTF-8 text message.
 	KindText Kind = 1
@@ -29,7 +31,17 @@ const (
 	// KindGroupText is a UTF-8 text message to a group, encrypted with the
 	// sender's group sender key.
 	KindGroupText Kind = 4
+	// KindAccessKey carries the sender's sealed sender access key (package
+	// sealed, docs/design/phase-5-metadata.md) as its body: the secret that
+	// lets the recipient send sealed messages to the sender. The body is
+	// binary; its exact format is checked by the application.
+	KindAccessKey Kind = 8
 )
+
+// known reports whether k is a kind this package encodes and parses.
+func (k Kind) known() bool {
+	return (k >= KindText && k <= KindGroupText) || k == KindAccessKey
+}
 
 // IsText reports whether k is a kind whose body is UTF-8 text shown to the
 // user.
@@ -37,8 +49,10 @@ func (k Kind) IsText() bool { return k == KindText || k == KindGroupText }
 
 // Format parameters and limits.
 const (
-	// Version is the envelope format version.
-	Version = 2
+	// Version is the envelope format version. Version 3 differs from
+	// version 2 only in that the ciphertext seals a padded plaintext
+	// ([MarshalPaddedPlaintext]); envelopes of other versions are rejected.
+	Version = 3
 
 	// MsgIDSize is the length of a message ID.
 	MsgIDSize = 16
@@ -50,9 +64,13 @@ const (
 	// generous room for the message ID, time, kind and CBOR framing.
 	MaxPlaintextSize = MaxBodySize + 64
 
+	// MaxPaddedPlaintextSize is the padded size of a maximal encoded
+	// Plaintext: the padding bucket of MaxPlaintextSize bytes, 128 KiB.
+	MaxPaddedPlaintextSize = 128 << 10
+
 	// MaxCiphertextSize bounds Envelope.Ciphertext: an encrypted maximal
-	// Plaintext with its 16-byte authentication tag.
-	MaxCiphertextSize = MaxPlaintextSize + 16
+	// padded Plaintext with its 16-byte authentication tag.
+	MaxCiphertextSize = MaxPaddedPlaintextSize + 16
 
 	// MaxHeaderSize bounds Envelope.Header, the encoded ratchet header
 	// (ratchet public key, KEM ciphertext, target and counters). It equals
@@ -64,8 +82,8 @@ const (
 
 	// MaxEnvelopeSize is the largest relay payload [ParseEnvelope] accepts:
 	// every field at its maximum plus room for the CBOR framing. Anything
-	// larger is rejected before it is decoded. It is well below the
-	// relay's default max_message_size.
+	// larger is rejected before it is decoded. It is below the relay's
+	// default max_message_size of 256 KiB.
 	MaxEnvelopeSize = MaxInitSize + MaxHeaderSize + MaxCiphertextSize + 64
 
 	// ClockSkewTolerance is how far a sender timestamp may differ from the
@@ -105,7 +123,7 @@ type envelopeWire struct {
 
 func (e Envelope) check() error {
 	if e.Init != nil && (len(e.Init) == 0 || len(e.Init) > MaxInitSize) {
-		return fmt.Errorf("Init must be absent or 1 to %d bytes", MaxInitSize)
+		return fmt.Errorf("init must be absent or 1 to %d bytes", MaxInitSize)
 	}
 	if len(e.Header) == 0 || len(e.Header) > MaxHeaderSize {
 		return fmt.Errorf("header must be 1 to %d bytes", MaxHeaderSize)
@@ -131,7 +149,7 @@ func MarshalEnvelope(e Envelope) ([]byte, error) {
 }
 
 // ParseEnvelope decodes a relay payload. It accepts only the canonical
-// encoding of a version 2 envelope whose fields are within their limits,
+// encoding of a version [Version] envelope whose fields are within their limits,
 // and returns [ErrMalformed] otherwise. The returned slices do not alias b.
 func ParseEnvelope(b []byte) (Envelope, error) {
 	if len(b) > MaxEnvelopeSize {
@@ -176,7 +194,7 @@ type plaintextWire struct {
 
 // checkContent enforces the kind and body rules.
 func checkContent(kind Kind, body []byte) error {
-	if kind < KindText || kind > KindGroupText {
+	if !kind.known() {
 		return fmt.Errorf("unknown kind %d", kind)
 	}
 	if len(body) == 0 || len(body) > MaxBodySize {
@@ -237,6 +255,42 @@ func ParsePlaintext(b []byte) (Plaintext, error) {
 		return Plaintext{}, fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
 	return Plaintext{MsgID: [MsgIDSize]byte(w.MsgID), Sent: time.UnixMilli(w.Sent), Kind: Kind(w.Kind), Body: w.Body}, nil
+}
+
+// MarshalPaddedPlaintext returns the canonical encoding of p padded with
+// [padding.Pad] to its size bucket. This is what the ratchet encrypts: the
+// padding sits inside the AEAD, so the ciphertext length reveals only the
+// bucket. It returns [ErrInvalidMessage] for content NewPlaintext would
+// refuse. The result contains the message body; the caller should clear it
+// after encryption.
+func MarshalPaddedPlaintext(p Plaintext) ([]byte, error) {
+	b, err := MarshalPlaintext(p)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(b)
+	padded, err := padding.Pad(b)
+	if err != nil {
+		return nil, fmt.Errorf("e2e: padding plaintext: %w", err)
+	}
+	return padded, nil
+}
+
+// ParsePaddedPlaintext strips the padding of a decrypted plaintext with
+// [padding.Unpad], which accepts only a bucket-sized input ending in the
+// padding marker and zero bytes, and then decodes the rest like
+// [ParsePlaintext]. It returns [ErrMalformed] for input above
+// [MaxPaddedPlaintextSize], for invalid padding and for an invalid
+// plaintext. The returned body does not alias b.
+func ParsePaddedPlaintext(b []byte) (Plaintext, error) {
+	if len(b) > MaxPaddedPlaintextSize {
+		return Plaintext{}, fmt.Errorf("%w: padded plaintext of %d bytes exceeds %d", ErrMalformed, len(b), MaxPaddedPlaintextSize)
+	}
+	unpadded, err := padding.Unpad(b)
+	if err != nil {
+		return Plaintext{}, fmt.Errorf("%w: %w", ErrMalformed, err)
+	}
+	return ParsePlaintext(unpadded)
 }
 
 // ClockSkewed reports whether a sender's claimed send time differs from

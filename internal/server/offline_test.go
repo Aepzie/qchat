@@ -29,6 +29,13 @@ func (c *testClock) now() time.Time { return time.Unix(0, c.unixNano.Load()) }
 
 func (c *testClock) advance(d time.Duration) { c.unixNano.Add(int64(d)) }
 
+// alignToHour moves the clock forward to the next full hour, where stored
+// messages get their expiry rounded to.
+func (c *testClock) alignToHour() {
+	now := c.now()
+	c.advance(roundUpToHour(now).Sub(now))
+}
+
 // fastFrames lifts the per-session frame rate limit for tests that send
 // many frames.
 func fastFrames(c *Config) {
@@ -254,6 +261,7 @@ func TestUndeliveredMessagesExpire(t *testing.T) {
 	alice, bob := newUser(t), newUser(t)
 	aliceConn := online(t, ts, alice)
 	registerOffline(t, ts, bob)
+	clock.alignToHour()
 	sendAccepted(t, aliceConn, 1, bob.id(), "expires")
 	clock.advance(30 * time.Minute)
 	sendAccepted(t, aliceConn, 2, bob.id(), "survives")
@@ -268,7 +276,7 @@ func TestUndeliveredMessagesExpire(t *testing.T) {
 	expectAlive(t, bobConn)
 	bobConn.Close(websocket.StatusNormalClosure, "")
 
-	clock.advance(30 * time.Minute)
+	clock.advance(60 * time.Minute)
 	again := login(t, ts, bob)
 	expectAlive(t, again)
 }

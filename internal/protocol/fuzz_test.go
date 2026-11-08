@@ -88,6 +88,7 @@ func relaySeedFrames(f *testing.F) []Frame {
 		mustFrame(f, TypeAuthProof, 3, AuthProof{Sig: []byte("signature")}),
 		mustFrame(f, TypeAuthOK, 3, AuthOK{}),
 		mustFrame(f, TypeKeyRequest, 4, KeyRequest{ID: id}),
+		mustFrame(f, TypeKeyRequest, 4, KeyRequest{ID: id, AccessProof: bytes.Repeat([]byte{0x44}, AccessVerifierSize)}),
 		mustFrame(f, TypeKeyResponse, 4, KeyResponse{Bundle: []byte("bundle")}),
 		mustFrame(f, TypeSend, 5, Send{To: id, Payload: []byte("ciphertext")}),
 		mustFrame(f, TypeSendResult, 5, SendResult{Status: SendDelivered}),
@@ -98,6 +99,7 @@ func relaySeedFrames(f *testing.F) []Frame {
 		mustFrame(f, TypePrekeyUpload, 8, PrekeyUpload{SignedPrekey: []byte("spk"), OneTimePrekeys: [][]byte{{1}, {2, 3}}}),
 		mustFrame(f, TypePrekeyStatus, 8, PrekeyStatus{OneTimeRemaining: 50, SignedPrekeyExpires: 1700000000}),
 		mustFrame(f, TypePrekeyRequest, 9, PrekeyRequest{ID: id}),
+		mustFrame(f, TypePrekeyRequest, 9, PrekeyRequest{ID: id, AccessProof: bytes.Repeat([]byte{0x44}, AccessVerifierSize)}),
 		mustFrame(f, TypePrekeyResponse, 9, PrekeyResponse{Bundle: []byte("b"), SignedPrekey: []byte("s")}),
 		mustFrame(f, TypePrekeyResponse, 9, PrekeyResponse{Bundle: []byte("b"), SignedPrekey: []byte("s"), OneTimePrekey: []byte("o")}),
 		mustFrame(f, TypeAck, 0, Ack{QueueID: 1 << 40}),
@@ -109,6 +111,18 @@ func relaySeedFrames(f *testing.F) []Frame {
 			Failed:  [][]byte{id, bytes.Repeat([]byte{0x33}, IDSize)},
 			Reasons: []ErrorCode{ErrCodeNotFound, ErrCodeQueueFull},
 		}),
+		mustFrame(f, TypeSetAccessKey, 11, SetAccessKey{Verifier: bytes.Repeat([]byte{0x44}, AccessVerifierSize)}),
+		mustFrame(f, TypeSetAccessKey, 11, SetAccessKey{Verifier: bytes.Repeat([]byte{0x44}, AccessVerifierSize), AllowUnidentified: true}),
+		mustFrame(f, TypeAccessKeySet, 11, AccessKeySet{}),
+		mustFrame(f, TypeSealedSend, 12, SealedSend{To: id, AccessProof: bytes.Repeat([]byte{0x44}, AccessVerifierSize), Payload: []byte("sealed")}),
+		mustFrame(f, TypeSealedSendMulti, 13, SealedSendMulti{
+			Entries: []SealedRecipient{
+				{To: id, AccessProof: bytes.Repeat([]byte{0x44}, AccessVerifierSize)},
+				{To: bytes.Repeat([]byte{0x33}, IDSize), AccessProof: bytes.Repeat([]byte{0x55}, AccessVerifierSize)},
+			},
+			Payload: []byte("group"),
+		}),
+		mustFrame(f, TypeDeliver, 0, Deliver{From: make([]byte, IDSize), Payload: []byte("sealed"), QueueID: 2}),
 	}
 }
 
@@ -146,10 +160,18 @@ func FuzzDecodeBody(f *testing.F) {
 	f.Add(uint8(TypeSendMultiResult), mustHex(f, "a3 01 03 02 80 03 80"))
 	f.Add(uint8(TypeSendMultiResult), mustHex(f, "a3 01 03 02 81 58 20"+strings.Repeat("11", IDSize)+" 03 82 07 0a"))
 	f.Add(uint8(TypeSendMultiResult), mustHex(f, "a1 01 01"))
+	f.Add(uint8(TypeSetAccessKey), mustHex(f, "a2 01 58 20"+strings.Repeat("44", AccessVerifierSize)+" 02 f4"))
+	f.Add(uint8(TypeSetAccessKey), mustHex(f, "a1 01 58 20"+strings.Repeat("00", AccessVerifierSize)))
+	f.Add(uint8(TypeKeyRequest), mustHex(f, "a2 01 58 20"+strings.Repeat("11", IDSize)+" 02 40"))
+	f.Add(uint8(TypePrekeyRequest), mustHex(f, "a2 01 58 20"+strings.Repeat("11", IDSize)+" 02 58 1f"+strings.Repeat("44", AccessVerifierSize-1)))
+	f.Add(uint8(TypeSealedSend), mustHex(f, "a3 01 58 20"+strings.Repeat("11", IDSize)+" 02 41 01 03 41 01"))
+	f.Add(uint8(TypeSealedSendMulti), mustHex(f, "a2 01 82 a2 01 58 20"+strings.Repeat("11", IDSize)+" 02 58 20"+strings.Repeat("44", AccessVerifierSize)+
+		" a2 01 58 20"+strings.Repeat("11", IDSize)+" 02 58 20"+strings.Repeat("44", AccessVerifierSize)+" 02 41 01"))
+	f.Add(uint8(TypeSealedSendMulti), mustHex(f, "a2 01 81 a0 02 41 01"))
 	f.Add(uint8(0), mustFrame(f, TypePing, 0, Ping{Nonce: 7}).Body)
 
 	f.Fuzz(func(t *testing.T, sel uint8, body []byte) {
-		switch FrameType(sel % 24) {
+		switch FrameType(sel % 28) {
 		case TypeHello:
 			checkBodyRoundTrip[Hello](t, TypeHello, body)
 		case TypeWelcome:
@@ -219,6 +241,22 @@ func FuzzDecodeBody(f *testing.F) {
 			checkBodyRoundTrip[*SendMultiResult](t, TypeSendMultiResult, body)
 			if _, err := DecodeBody[SendResult](rawFrame(TypeSendMultiResult, body), TypeSendMultiResult); err == nil {
 				t.Fatal("SendResult body accepted for SendMultiResult frame")
+			}
+		case TypeSetAccessKey:
+			checkBodyRoundTrip[SetAccessKey](t, TypeSetAccessKey, body)
+			checkBodyRoundTrip[*SetAccessKey](t, TypeSetAccessKey, body)
+		case TypeAccessKeySet:
+			checkBodyRoundTrip[AccessKeySet](t, TypeAccessKeySet, body)
+		case TypeSealedSend:
+			checkBodyRoundTrip[SealedSend](t, TypeSealedSend, body)
+			if _, err := DecodeBody[Send](rawFrame(TypeSealedSend, body), TypeSealedSend); err == nil {
+				t.Fatal("Send body accepted for SealedSend frame")
+			}
+		case TypeSealedSendMulti:
+			checkBodyRoundTrip[SealedSendMulti](t, TypeSealedSendMulti, body)
+			checkBodyRoundTrip[*SealedSendMulti](t, TypeSealedSendMulti, body)
+			if _, err := DecodeBody[SendMulti](rawFrame(TypeSealedSendMulti, body), TypeSealedSendMulti); err == nil {
+				t.Fatal("SendMulti body accepted for SealedSendMulti frame")
 			}
 		default:
 			if _, err := DecodeBody[Pong](rawFrame(TypePing, body), TypePing); err == nil {

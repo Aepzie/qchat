@@ -79,7 +79,7 @@ func TestParseEnvelopeRejectsMalformed(t *testing.T) {
 		"empty":            nil,
 		"not a map":        {0x80},
 		"version 1":        encode(wire{1: 1, 3: []byte("h"), 4: []byte("c")}),
-		"version 3":        encode(wire{1: 3, 3: []byte("h"), 4: []byte("c")}),
+		"version 2":        encode(wire{1: 2, 3: []byte("h"), 4: []byte("c")}),
 		"missing header":   encode(wire{1: Version, 4: []byte("c")}),
 		"missing cipher":   encode(wire{1: Version, 3: []byte("h")}),
 		"empty header":     encode(wire{1: Version, 3: []byte{}, 4: []byte("c")}),
@@ -215,6 +215,34 @@ func TestPlaintextKinds(t *testing.T) {
 	}
 	if _, err := NewPlaintext(KindSenderKey, nil, testNow); !errors.Is(err, ErrInvalidMessage) {
 		t.Errorf("empty distribution body: %v", err)
+	}
+}
+
+func TestAccessKeyKind(t *testing.T) {
+	key := bytes.Repeat([]byte{0xa5}, 16)
+	p, err := NewPlaintext(KindAccessKey, key, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padded, err := MarshalPaddedPlaintext(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParsePaddedPlaintext(padded)
+	if err != nil || got.Kind != KindAccessKey || !bytes.Equal(got.Body, key) || got.Kind.IsText() {
+		t.Fatalf("access key round trip: %+v, %v", got, err)
+	}
+	for _, reserved := range []Kind{0, 5, 6, 7, 9, 255} {
+		if _, err := NewPlaintext(reserved, key, testNow); !errors.Is(err, ErrInvalidMessage) {
+			t.Errorf("NewPlaintext(kind %d) = %v, want ErrInvalidMessage", reserved, err)
+		}
+		b, err := encMode.Marshal(plaintextWire{MsgID: p.MsgID[:], Sent: p.Sent.UnixMilli(), Kind: uint8(reserved), Body: key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParsePlaintext(b); !errors.Is(err, ErrMalformed) {
+			t.Errorf("ParsePlaintext(kind %d) = %v, want ErrMalformed", reserved, err)
+		}
 	}
 }
 

@@ -30,11 +30,15 @@ const (
 
 // handleRegister verifies and stores an identity bundle. It is allowed
 // before and after authentication; a client rotates its keys by
-// registering a bundle with a higher serial.
+// registering a bundle with a higher serial. It identifies the session, so
+// it is a protocol violation on an anonymous one.
 func (s *session) handleRegister(frame protocol.Frame) bool {
 	req, err := protocol.DecodeBody[protocol.Register](frame, protocol.TypeRegister)
 	if err != nil {
 		return s.fail(frame.ID, requestErrorCode(err))
+	}
+	if !s.enterMode(modeIdentified) {
+		return s.fail(frame.ID, protocol.ErrCodeBadRequest)
 	}
 	if !s.authLimiter.Allow() {
 		return s.reject(frame.ID, protocol.ErrCodeRateLimited)
@@ -57,7 +61,7 @@ func (s *session) handleAuthBegin(frame protocol.Frame) bool {
 	if err != nil {
 		return s.fail(frame.ID, requestErrorCode(err))
 	}
-	if s.authenticated {
+	if s.authenticated || !s.enterMode(modeIdentified) {
 		return s.fail(frame.ID, protocol.ErrCodeBadRequest)
 	}
 	s.challenge = nil
@@ -84,7 +88,7 @@ func (s *session) handleAuthProof(frame protocol.Frame) bool {
 	if err != nil {
 		return s.fail(frame.ID, requestErrorCode(err))
 	}
-	if s.authenticated {
+	if s.authenticated || !s.enterMode(modeIdentified) {
 		return s.fail(frame.ID, protocol.ErrCodeBadRequest)
 	}
 	pending := s.challenge
@@ -113,11 +117,15 @@ func (s *session) failTooManySessions(id uint64) bool {
 	return false
 }
 
-// handleKeyRequest returns the stored bundle of an identity.
+// handleKeyRequest returns the stored bundle of an identity. A request
+// with an access proof is an anonymous lookup (handleAnonymousKeyRequest).
 func (s *session) handleKeyRequest(frame protocol.Frame) bool {
 	req, err := protocol.DecodeBody[protocol.KeyRequest](frame, protocol.TypeKeyRequest)
 	if err != nil {
 		return s.fail(frame.ID, requestErrorCode(err))
+	}
+	if req.AccessProof != nil {
+		return s.handleAnonymousKeyRequest(frame, req)
 	}
 	if !s.authenticated {
 		return s.reject(frame.ID, protocol.ErrCodeUnauthorized)

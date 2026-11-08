@@ -16,6 +16,8 @@ func TestValidateHostPortAccepts(t *testing.T) {
 		"[::1]:8443":              "[::1]:8443",
 		"[fe80::1%25eth0]:443":    "[fe80::1%25eth0]:443",
 		"xn--bcher-kva.example:1": "xn--bcher-kva.example:1",
+		"pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:7443": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:7443",
+		"PG6MMJIYJMCRSSLVYKFWNNTLARU7P5SVN6Y2YMMJU6NUBXNDF4PSCRYD.ONION:443":  "PG6MMJIYJMCRSSLVYKFWNNTLARU7P5SVN6Y2YMMJU6NUBXNDF4PSCRYD.ONION:443",
 	}
 	for in, want := range cases {
 		got, err := ValidateHostPort(in)

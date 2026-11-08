@@ -9,6 +9,7 @@ import (
 
 	"github.com/craguS/qchat/internal/crypto/hybridsig"
 	"github.com/craguS/qchat/internal/identity"
+	"github.com/craguS/qchat/internal/padding"
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -19,9 +20,10 @@ type GroupID = [32]byte
 // Format versions and protocol parameters.
 const (
 	// EnvelopeVersion is the top-level version of a group envelope. The
-	// pairwise envelope of internal/e2e uses version 2, so the value alone
-	// tells the two apart.
-	EnvelopeVersion = 4
+	// pairwise envelope of internal/e2e uses version 3, so the value alone
+	// tells the two apart. Version 5 differs from version 4 only in that
+	// the message ciphertext seals a padded plaintext (package padding).
+	EnvelopeVersion = 5
 
 	// HeaderVersion is the only group message header version this package
 	// produces and accepts.
@@ -45,9 +47,13 @@ const (
 	// every header.
 	StateBindingSize = 32
 
-	// MaxPlaintextSize is the largest plaintext Encrypt accepts and,
-	// correspondingly, bounds the ciphertext Decrypt looks at.
+	// MaxPlaintextSize is the largest plaintext Encrypt accepts, before
+	// padding.
 	MaxPlaintextSize = 64 * 1024
+
+	// MaxPaddedPlaintextSize is the padding bucket of a MaxPlaintextSize
+	// plaintext, 128 KiB. It bounds the ciphertext Decrypt looks at.
+	MaxPaddedPlaintextSize = 128 * 1024
 
 	// MaxSkip is the largest number of message keys a single decryption may
 	// skip over. It bounds the HMAC work a hostile or broken iteration
@@ -164,7 +170,7 @@ const (
 // Size bounds applied before decoding, so hostile input cannot make the
 // decoder do work proportional to an unbounded length.
 const (
-	maxEnvelopeSize     = MaxPlaintextSize + chacha20poly1305.Overhead + hybridsig.SignatureSize + HeaderNonceSize + encHeaderSize + 32
+	maxEnvelopeSize     = MaxPaddedPlaintextSize + chacha20poly1305.Overhead + hybridsig.SignatureSize + HeaderNonceSize + encHeaderSize + 32
 	maxDistributionSize = hybridsig.PublicKeySize + HeaderKeySize + 128
 )
 
@@ -312,8 +318,7 @@ func parseEnvelope(encoded []byte) (envelope, error) {
 		len(w.HeaderNonce) != HeaderNonceSize,
 		len(w.EncHeader) != encHeaderSize,
 		len(w.Sig) != hybridsig.SignatureSize,
-		len(w.Ciphertext) < chacha20poly1305.Overhead,
-		len(w.Ciphertext) > MaxPlaintextSize+chacha20poly1305.Overhead:
+		!isPaddedCiphertextSize(len(w.Ciphertext)):
 		return envelope{}, ErrMalformed
 	}
 	canonical, err := encMode.Marshal(w)
@@ -323,13 +328,26 @@ func parseEnvelope(encoded []byte) (envelope, error) {
 	return envelope{nonce: w.HeaderNonce, encHeader: w.EncHeader, ciphertext: w.Ciphertext, sig: w.Sig}, nil
 }
 
+// isPaddedCiphertextSize reports whether n is the length of a sealed padded
+// plaintext: a padding bucket of at most MaxPaddedPlaintextSize bytes plus
+// the AEAD tag. Envelopes of any other ciphertext length are rejected
+// before the signature is verified.
+func isPaddedCiphertextSize(n int) bool {
+	size := n - chacha20poly1305.Overhead
+	if size <= 0 || size > MaxPaddedPlaintextSize {
+		return false
+	}
+	bucket, err := padding.BucketFor(size - 1)
+	return err == nil && bucket == size
+}
+
 // envelopePrefix is how every canonical group envelope starts: a map of five
 // pairs (0xa5) whose first key is 1 (0x01) with value EnvelopeVersion,
 // followed by key 2 (0x02) and the head of a 24-byte byte string (0x58 0x18).
 var envelopePrefix = []byte{0xa5, 0x01, EnvelopeVersion, 0x02, 0x58, HeaderNonceSize}
 
 // IsGroupEnvelope reports whether b has the shape of a group envelope, as
-// opposed to a pairwise envelope of internal/e2e (whose version is 2). It
+// opposed to a pairwise envelope of internal/e2e (whose version is 3). It
 // inspects only the first bytes, which are identical for every group
 // envelope, so it reveals nothing beyond "this is a group message". It is
 // meant for routing; a true result does not mean that b is well-formed.

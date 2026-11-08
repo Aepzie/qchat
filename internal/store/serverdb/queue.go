@@ -23,6 +23,16 @@ type QueueLimits struct {
 	// with the full size of its payload, even when the payload is shared
 	// with other recipients.
 	MaxBytes int64
+	// MaxSealedMessages, if positive, is the largest number of unexpired
+	// sealed messages (stored without a sender) for a recipient. It is
+	// checked in addition to MaxMessages, so anyone holding the
+	// recipient's access key can fill at most this share of the queue and
+	// identified senders still find room. 0 means no separate cap.
+	MaxSealedMessages int
+	// MaxSealedBytes, if positive, bounds the total payload size of the
+	// unexpired sealed messages for a recipient in the same way. 0 means
+	// no separate cap.
+	MaxSealedBytes int64
 }
 
 // Queued is a message stored for a recipient.
@@ -30,8 +40,12 @@ type Queued struct {
 	// QID is the queue ID of the message, at least 1. Queue IDs increase in
 	// the order in which messages were stored and are never reused.
 	QID uint64
-	// Sender is the authenticated identity that sent the message.
+	// Sender is the authenticated identity that sent the message, or all
+	// zeros for a sealed message.
 	Sender [32]byte
+	// Sealed is set for a message stored by EnqueueSealed or
+	// EnqueueSealedMulti, whose sender the relay does not know.
+	Sealed bool
 	// Payload is the end-to-end encrypted ciphertext exactly as sent.
 	Payload []byte
 }
@@ -60,7 +74,7 @@ func (db *DB) Enqueue(ctx context.Context, recipient, sender [32]byte, payload [
 	var outcomes []Enqueued
 	err := db.withTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		outcomes, err = enqueueSharedTx(ctx, tx, [][32]byte{recipient}, sender, payload, now, expires, limits)
+		outcomes, err = enqueueSharedTx(ctx, tx, [][32]byte{recipient}, sender[:], payload, now, expires, limits)
 		return err
 	})
 	if err != nil {
@@ -70,6 +84,27 @@ func (db *DB) Enqueue(ctx context.Context, recipient, sender [32]byte, payload [
 		return 0, outcomes[0].Err
 	}
 	return outcomes[0].QID, nil
+}
+
+// EnqueueSealed stores payload for recipient like [DB.Enqueue], but without
+// a sender: the row's sender column is NULL and [DB.QueuedFor] reports the
+// message as Sealed. The caller must have checked the sender's access to
+// recipient.
+func (db *DB) EnqueueSealed(ctx context.Context, recipient [32]byte, payload []byte, now, expires time.Time, limits QueueLimits) (uint64, error) {
+	outcomes, err := db.EnqueueSealedMulti(ctx, [][32]byte{recipient}, payload, now, expires, limits)
+	if err != nil {
+		return 0, err
+	}
+	if outcomes[0].Err != nil {
+		return 0, outcomes[0].Err
+	}
+	return outcomes[0].QID, nil
+}
+
+// EnqueueSealedMulti stores payload for every recipient that can take it
+// like [DB.EnqueueMulti], but without a sender, as EnqueueSealed does.
+func (db *DB) EnqueueSealedMulti(ctx context.Context, recipients [][32]byte, payload []byte, now, expires time.Time, limits QueueLimits) ([]Enqueued, error) {
+	return db.enqueueMulti(ctx, recipients, nil, payload, now, expires, limits)
 }
 
 // MaxMultiRecipients is the largest number of recipients EnqueueMulti
@@ -89,6 +124,12 @@ const MaxMultiRecipients = 256
 // arguments and database failures, in which case nothing is stored.
 // recipients must hold between 1 and MaxMultiRecipients distinct IDs.
 func (db *DB) EnqueueMulti(ctx context.Context, recipients [][32]byte, sender [32]byte, payload []byte, now, expires time.Time, limits QueueLimits) ([]Enqueued, error) {
+	return db.enqueueMulti(ctx, recipients, sender[:], payload, now, expires, limits)
+}
+
+// enqueueMulti implements EnqueueMulti and EnqueueSealedMulti; a nil sender
+// stores the rows without one.
+func (db *DB) enqueueMulti(ctx context.Context, recipients [][32]byte, sender []byte, payload []byte, now, expires time.Time, limits QueueLimits) ([]Enqueued, error) {
 	if len(recipients) == 0 || len(recipients) > MaxMultiRecipients {
 		return nil, fmt.Errorf("%w: %d recipients, want 1 to %d", ErrInvalidArgument, len(recipients), MaxMultiRecipients)
 	}
@@ -120,7 +161,7 @@ func checkEnqueueArgs(payload []byte, now, expires time.Time, limits QueueLimits
 	if len(payload) == 0 || len(payload) > MaxQueuedPayloadSize {
 		return fmt.Errorf("%w: payload size %d not between 1 and %d", ErrInvalidArgument, len(payload), MaxQueuedPayloadSize)
 	}
-	if limits.MaxMessages < 1 || limits.MaxBytes < 1 {
+	if limits.MaxMessages < 1 || limits.MaxBytes < 1 || limits.MaxSealedMessages < 0 || limits.MaxSealedBytes < 0 {
 		return fmt.Errorf("%w: queue limits must be positive", ErrInvalidArgument)
 	}
 	if !expires.After(now) {
@@ -132,12 +173,14 @@ func checkEnqueueArgs(payload []byte, now, expires time.Time, limits QueueLimits
 // enqueueSharedTx stores payload once within tx, plus one queue row
 // referring to it for every recipient that exists and has room, and
 // returns the outcome for each recipient. If no recipient can take the
-// message, nothing is written apart from deleting expired messages.
-func enqueueSharedTx(ctx context.Context, tx *sql.Tx, recipients [][32]byte, sender [32]byte, payload []byte, now, expires time.Time, limits QueueLimits) ([]Enqueued, error) {
+// message, nothing is written apart from deleting expired messages. A nil
+// sender is stored as NULL (a sealed message); otherwise it must be 32
+// bytes.
+func enqueueSharedTx(ctx context.Context, tx *sql.Tx, recipients [][32]byte, sender []byte, payload []byte, now, expires time.Time, limits QueueLimits) ([]Enqueued, error) {
 	outcomes := make([]Enqueued, len(recipients))
 	accepted := make([]int, 0, len(recipients))
 	for i, r := range recipients {
-		err := checkRoomTx(ctx, tx, r, int64(len(payload)), now, limits)
+		err := checkRoomTx(ctx, tx, r, int64(len(payload)), sender == nil, now, limits)
 		switch {
 		case err == nil:
 			accepted = append(accepted, i)
@@ -163,7 +206,7 @@ func enqueueSharedTx(ctx context.Context, tx *sql.Tx, recipients [][32]byte, sen
 	defer insert.Close()
 	for _, i := range accepted {
 		var qid int64
-		if err := insert.QueryRowContext(ctx, recipients[i][:], sender[:], pid, len(payload), expires.Unix()).Scan(&qid); err != nil {
+		if err := insert.QueryRowContext(ctx, recipients[i][:], sender, pid, len(payload), expires.Unix()).Scan(&qid); err != nil {
 			return nil, fmt.Errorf("serverdb: store message: %w", err)
 		}
 		outcomes[i].QID = uint64(qid)
@@ -173,21 +216,33 @@ func enqueueSharedTx(ctx context.Context, tx *sql.Tx, recipients [][32]byte, sen
 
 // checkRoomTx deletes the expired messages of recipient within tx and
 // reports ErrNotFound if recipient is not a stored identity, or
-// ErrQueueFull if one more message of size bytes would exceed limits.
-func checkRoomTx(ctx context.Context, tx *sql.Tx, recipient [32]byte, size int64, now time.Time, limits QueueLimits) error {
+// ErrQueueFull if one more message of size bytes, sealed or not, would
+// exceed limits.
+func checkRoomTx(ctx context.Context, tx *sql.Tx, recipient [32]byte, size int64, sealed bool, now time.Time, limits QueueLimits) error {
 	if err := requireIdentity(ctx, tx, recipient); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM queue WHERE recipient = ? AND expires <= ?", recipient[:], now.Unix()); err != nil {
 		return fmt.Errorf("serverdb: prune queue: %w", err)
 	}
-	var count int
-	var used int64
-	if err := tx.QueryRowContext(ctx, "SELECT count(*), coalesce(sum(size), 0) FROM queue WHERE recipient = ?",
-		recipient[:]).Scan(&count, &used); err != nil {
+	var count, sealedCount int
+	var used, sealedUsed int64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(size), 0),
+		coalesce(sum(sender IS NULL), 0), coalesce(sum(CASE WHEN sender IS NULL THEN size ELSE 0 END), 0)
+		FROM queue WHERE recipient = ?`,
+		recipient[:]).Scan(&count, &used, &sealedCount, &sealedUsed); err != nil {
 		return fmt.Errorf("serverdb: read queue usage: %w", err)
 	}
 	if count >= limits.MaxMessages || used+size > limits.MaxBytes {
+		return ErrQueueFull
+	}
+	if !sealed {
+		return nil
+	}
+	if limits.MaxSealedMessages > 0 && sealedCount >= limits.MaxSealedMessages {
+		return ErrQueueFull
+	}
+	if limits.MaxSealedBytes > 0 && sealedUsed+size > limits.MaxSealedBytes {
 		return ErrQueueFull
 	}
 	return nil
@@ -218,10 +273,14 @@ func (db *DB) QueuedFor(ctx context.Context, recipient [32]byte, afterQID uint64
 		if err := rows.Scan(&qid, &sender, &payload); err != nil {
 			return nil, fmt.Errorf("serverdb: read queue: %w", err)
 		}
-		if len(sender) != 32 || qid < 1 {
+		if (sender != nil && len(sender) != 32) || qid < 1 {
 			return nil, errors.New("serverdb: damaged queue row")
 		}
-		out = append(out, Queued{QID: uint64(qid), Sender: [32]byte(sender), Payload: payload})
+		msg := Queued{QID: uint64(qid), Sealed: sender == nil, Payload: payload}
+		if sender != nil {
+			msg.Sender = [32]byte(sender)
+		}
+		out = append(out, msg)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("serverdb: read queue: %w", err)

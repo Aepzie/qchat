@@ -10,6 +10,7 @@ import (
 
 	"github.com/craguS/qchat/internal/crypto/hybridsig"
 	"github.com/craguS/qchat/internal/identity"
+	"github.com/craguS/qchat/internal/padding"
 )
 
 // SenderStateVersion is the version of the serialised [Sender] format.
@@ -129,6 +130,9 @@ func (s *Sender) Distribution(groupEpoch uint64) ([]byte, error) {
 // is the state's 32-byte binding, opaque to this package); they travel in
 // the encrypted header so that receivers can detect a diverging group state.
 //
+// The plaintext is padded to its size bucket (package padding) before it is
+// sealed, so the envelope length reveals only the bucket.
+//
 // The header carries a fresh random salt and the commitment to the message
 // key; it is encrypted under the generation's header key with a fresh random
 // nonce, and the envelope is signed with the generation's signing key. The
@@ -168,7 +172,12 @@ func (s *Sender) Encrypt(plaintext []byte, groupEpoch uint64, binding [StateBind
 	h.commitment = commitMessageKey(mk)
 	headerBytes := encodeHeader(h)
 	defer clear(headerBytes)
-	ciphertext, err := sealMessage(mk, h.salt[:], plaintext, headerBytes)
+	padded, err := padding.Pad(plaintext)
+	if err != nil {
+		return nil, ErrPlaintextTooLarge
+	}
+	defer clear(padded)
+	ciphertext, err := sealMessage(mk, h.salt[:], padded, headerBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -353,6 +353,7 @@ func messageEntry(mi MessageInfo, from string) entry {
 	if mi.Outgoing {
 		e.from = "you"
 		e.status = mi.Status
+		e.route = mi.Route
 		e.errText = cleanLine(mi.Error, 300)
 	}
 	return e
@@ -415,6 +416,8 @@ func (m *Model) handleChatEvent(ev ChatEvent) tea.Cmd {
 		return m.loadContacts()
 	case GroupChanged:
 		return m.groupChanged(e)
+	case SealedSenderChanged:
+		m.sealed = e.Connected
 	}
 	return nil
 }
@@ -530,7 +533,7 @@ func (m *Model) applySendResult(msg sendResultMsg) {
 			if msg.message.ID != "" {
 				e.msgID = msg.message.ID
 			}
-			e.status, e.errText = msg.message.Status, cleanLine(msg.message.Error, 300)
+			e.status, e.errText, e.route = msg.message.Status, cleanLine(msg.message.Error, 300), msg.message.Route
 		}
 		if msg.contactID == m.open {
 			m.refreshHistory()

@@ -114,6 +114,8 @@ type Model struct {
 	awaitRTT  bool
 	ended     bool
 	chatEnded bool
+	// sealed reports that the anonymous sealed sender connection is up.
+	sealed bool
 
 	self    SelfInfo
 	hasSelf bool

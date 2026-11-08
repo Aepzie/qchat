@@ -86,6 +86,11 @@ type Server struct {
 
 	queueBudget *byteBudget
 
+	// sealedIP holds the per-address buckets of sealed sends and lookupIP
+	// those of anonymous key and prekey lookups.
+	sealedIP *ipBuckets
+	lookupIP *ipBuckets
+
 	started  atomic.Bool
 	total    atomic.Uint64
 	rejected atomic.Uint64
@@ -136,6 +141,8 @@ func New(cfg Config, cert tls.Certificate, logger *slog.Logger) (*Server, error)
 		now:              time.Now,
 		routes:           make(map[identity.ID]map[*session]struct{}),
 		queueBudget:      newByteBudget(cfg.Limits.MaxTotalQueueBytes),
+		sealedIP:         newIPBuckets(float64(cfg.Limits.SealedRecipientsPerMinutePerIP), SealedRecipientsBurstPerIP, maxIPBuckets),
+		lookupIP:         newIPBuckets(float64(cfg.Limits.AnonymousLookupsPerHourPerIP)/60, AnonymousLookupsBurstPerIP, maxIPBuckets),
 		sessions:         make(map[*session]struct{}),
 	}, nil
 }
@@ -319,6 +326,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess := newSession(s, conn, binding)
+	if key, ok := clientKey(r.RemoteAddr); ok {
+		sess.ipKey = key
+	}
 	if !s.register(sess) {
 		_ = conn.Close(websocket.StatusGoingAway, closeTextShutdown)
 		return

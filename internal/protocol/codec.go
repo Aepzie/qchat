@@ -10,9 +10,10 @@ import (
 //
 // The only arrays in any body are [PrekeyUpload.OneTimePrekeys], which holds
 // at most MaxOneTimePrekeysPerUpload byte strings, [SendMulti.To] and
-// [SendMultiResult.Failed], which hold at most MaxMultiRecipients IDs, and
+// [SendMultiResult.Failed], which hold at most MaxMultiRecipients IDs,
 // [SendMultiResult.Reasons], which holds as many error codes as Failed
-// holds IDs. maxArrayElements leaves headroom above all of them, so that
+// holds IDs, and [SealedSendMulti.Entries], which holds at most
+// MaxMultiRecipients two-field maps. maxArrayElements leaves headroom above all of them, so that
 // the body's own validation rather than the decoder reports an oversized
 // list. Every element takes at least one byte of input and the input is
 // bounded by MaxFrameSize, so the larger limit cannot amplify allocation;

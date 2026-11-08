@@ -33,22 +33,26 @@ func TestDefaultConfig(t *testing.T) {
 		Registration:   "invite",
 		UndeliveredTTL: DurationOf(168 * time.Hour),
 		Limits: Limits{
-			MaxConnections:           1000,
-			MaxConnectionsPerIP:      16,
-			MaxPendingHandshakes:     64,
-			MaxFrameSize:             1048576,
-			MaxMessageSize:           262144,
-			MaxQueueBytes:            2 << 20,
-			MaxTotalQueueBytes:       256 << 20,
-			MaxSessionsPerIdentity:   4,
-			FramesPerSecond:          20,
-			Burst:                    40,
-			HandshakeTimeout:         DurationOf(10 * time.Second),
-			PingInterval:             DurationOf(30 * time.Second),
-			MaxQueuedMessages:        1000,
-			MaxQueuedBytes:           64 << 20,
-			PrekeyRequestsPerHour:    120,
-			MultiRecipientsPerMinute: 3000,
+			MaxConnections:                 1000,
+			MaxConnectionsPerIP:            16,
+			MaxPendingHandshakes:           64,
+			MaxFrameSize:                   1048576,
+			MaxMessageSize:                 270336,
+			MaxQueueBytes:                  2 << 20,
+			MaxTotalQueueBytes:             256 << 20,
+			MaxSessionsPerIdentity:         4,
+			FramesPerSecond:                20,
+			Burst:                          40,
+			HandshakeTimeout:               DurationOf(10 * time.Second),
+			PingInterval:                   DurationOf(30 * time.Second),
+			MaxQueuedMessages:              1000,
+			MaxQueuedBytes:                 64 << 20,
+			PrekeyRequestsPerHour:          120,
+			MultiRecipientsPerMinute:       3000,
+			SealedRecipientsPerMinute:      3000,
+			SealedRecipientsPerMinutePerIP: 6000,
+			MaxQueuedSealedMessages:        500,
+			AnonymousLookupsPerHourPerIP:   1200,
 		},
 		Log: LogConfig{Level: "info"},
 	}
@@ -74,6 +78,10 @@ max_queued_messages = 50
 max_queued_bytes = 2097152
 prekey_requests_per_hour = 5
 multi_recipients_per_minute = 600
+sealed_recipients_per_minute = 100
+sealed_recipients_per_minute_per_ip = 200
+max_queued_sealed_messages = 7
+anonymous_lookups_per_hour_per_ip = 9
 max_connections = 50
 max_connections_per_ip = 4
 max_pending_handshakes = 8
@@ -101,22 +109,26 @@ level = "debug"
 		Registration:   "open",
 		UndeliveredTTL: DurationOf(48 * time.Hour),
 		Limits: Limits{
-			MaxQueuedMessages:        50,
-			MaxQueuedBytes:           2 << 20,
-			PrekeyRequestsPerHour:    5,
-			MultiRecipientsPerMinute: 600,
-			MaxConnections:           50,
-			MaxConnectionsPerIP:      4,
-			MaxPendingHandshakes:     8,
-			MaxFrameSize:             65536,
-			MaxMessageSize:           4096,
-			MaxQueueBytes:            1 << 20,
-			MaxTotalQueueBytes:       8 << 20,
-			MaxSessionsPerIdentity:   2,
-			FramesPerSecond:          2.5,
-			Burst:                    7,
-			HandshakeTimeout:         DurationOf(1500 * time.Millisecond),
-			PingInterval:             DurationOf(time.Minute),
+			MaxQueuedMessages:              50,
+			MaxQueuedBytes:                 2 << 20,
+			PrekeyRequestsPerHour:          5,
+			MultiRecipientsPerMinute:       600,
+			SealedRecipientsPerMinute:      100,
+			SealedRecipientsPerMinutePerIP: 200,
+			MaxQueuedSealedMessages:        7,
+			AnonymousLookupsPerHourPerIP:   9,
+			MaxConnections:                 50,
+			MaxConnectionsPerIP:            4,
+			MaxPendingHandshakes:           8,
+			MaxFrameSize:                   65536,
+			MaxMessageSize:                 4096,
+			MaxQueueBytes:                  1 << 20,
+			MaxTotalQueueBytes:             8 << 20,
+			MaxSessionsPerIdentity:         2,
+			FramesPerSecond:                2.5,
+			Burst:                          7,
+			HandshakeTimeout:               DurationOf(1500 * time.Millisecond),
+			PingInterval:                   DurationOf(time.Minute),
 		},
 		Log: LogConfig{Level: "debug"},
 	}
@@ -300,6 +312,14 @@ func TestValidateRejects(t *testing.T) {
 		"many prekey requests":    func(c *Config) { c.Limits.PrekeyRequestsPerHour = MaxPrekeyRequestsPerHour + 1 },
 		"zero multi recipients":   func(c *Config) { c.Limits.MultiRecipientsPerMinute = 0 },
 		"many multi recipients":   func(c *Config) { c.Limits.MultiRecipientsPerMinute = MaxMultiRecipientsPerMinute + 1 },
+		"zero sealed recipients":  func(c *Config) { c.Limits.SealedRecipientsPerMinute = 0 },
+		"many sealed recipients":  func(c *Config) { c.Limits.SealedRecipientsPerMinute = MaxSealedRecipientsPerMinute + 1 },
+		"zero sealed per ip":      func(c *Config) { c.Limits.SealedRecipientsPerMinutePerIP = 0 },
+		"many sealed per ip":      func(c *Config) { c.Limits.SealedRecipientsPerMinutePerIP = MaxSealedRecipientsPerMinute + 1 },
+		"zero sealed queue":       func(c *Config) { c.Limits.MaxQueuedSealedMessages = 0 },
+		"many sealed queued":      func(c *Config) { c.Limits.MaxQueuedSealedMessages = MaxQueuedMessages + 1 },
+		"zero anonymous lookups":  func(c *Config) { c.Limits.AnonymousLookupsPerHourPerIP = 0 },
+		"many anonymous lookups":  func(c *Config) { c.Limits.AnonymousLookupsPerHourPerIP = MaxAnonymousLookupsPerHourIP + 1 },
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -338,6 +358,10 @@ func TestValidateAccepts(t *testing.T) {
 		"most prekey requests":  func(c *Config) { c.Limits.PrekeyRequestsPerHour = MaxPrekeyRequestsPerHour },
 		"one multi recipient":   func(c *Config) { c.Limits.MultiRecipientsPerMinute = 1 },
 		"most multi recipients": func(c *Config) { c.Limits.MultiRecipientsPerMinute = MaxMultiRecipientsPerMinute },
+		"one sealed recipient":  func(c *Config) { c.Limits.SealedRecipientsPerMinute, c.Limits.SealedRecipientsPerMinutePerIP = 1, 1 },
+		"most sealed recipients": func(c *Config) {
+			c.Limits.SealedRecipientsPerMinute, c.Limits.SealedRecipientsPerMinutePerIP = MaxSealedRecipientsPerMinute, MaxSealedRecipientsPerMinute
+		},
 	}
 	for name, mutate := range cases {
 		cfg := DefaultConfig()
@@ -373,9 +397,10 @@ func TestWriteTOMLRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := buf.String()
-	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS", "database = 'db/qchat.db'", "registration = 'invite'", "max_message_size = 262144", "max_queue_bytes = 2097152", "max_total_queue_bytes = 268435456", "max_sessions_per_identity = 4", "invite create",
+	for _, want := range []string{`listen = '[::]:8443'`, "[limits]", "[log]", `handshake_timeout = '10s'`, "never logged or stored", "max_pending_handshakes = 64", "before TLS", "database = 'db/qchat.db'", "registration = 'invite'", "max_message_size = 270336", "max_queued_sealed_messages = 500", "anonymous_lookups_per_hour_per_ip = 1200", "max_queue_bytes = 2097152", "max_total_queue_bytes = 268435456", "max_sessions_per_identity = 4", "invite create",
 		"undelivered_ttl = '168h0m0s'", "max_queued_messages = 1000", "max_queued_bytes = 67108864",
-		"prekey_requests_per_hour = 120", "multi_recipients_per_minute = 3000", "burst of 512", "waiting for delivery"} {
+		"prekey_requests_per_hour = 120", "multi_recipients_per_minute = 3000", "burst of 512", "waiting for delivery",
+		"sealed_recipients_per_minute = 3000", "sealed_recipients_per_minute_per_ip = 6000", "burst of 1024", "Tor onion service"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("WriteTOML output lacks %q:\n%s", want, text)
 		}

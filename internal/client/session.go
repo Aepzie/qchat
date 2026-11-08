@@ -40,11 +40,39 @@
 // authenticates before it counts as Connected: Hello/Welcome, then
 // Register/Registered, AuthBegin/AuthChallenge and AuthProof/AuthOK, all
 // within one handshake timeout. While connected, Request sends KeyRequest,
-// Send, SendMulti, Register, PrekeyUpload or PrekeyRequest frames and returns the
-// matching response, payloads routed to the local identity arrive as
-// Delivery events, and Ack tells the relay that a delivered payload has
-// been processed and may be deleted. The session carries ciphertext only;
-// end-to-end encryption is the caller's concern.
+// Send, SendMulti, Register, PrekeyUpload, PrekeyRequest or SetAccessKey
+// frames and returns the matching response, payloads routed to the local
+// identity arrive as Delivery events, and Ack tells the relay that a
+// delivered payload has been processed and may be deleted. The session
+// carries ciphertext only; end-to-end encryption is the caller's concern.
+//
+// # Anonymous sessions (sealed sender)
+//
+// With Options.Anonymous set, connections neither register nor
+// authenticate, and Request allows only SealedSend, SealedSendMulti and
+// KeyRequest or PrekeyRequest carrying an access proof (see SealedSend,
+// SealedSendMulti, AnonKeyRequest and AnonPrekeyRequest). The relay
+// accepts these only on such connections and refuses them on
+// authenticated ones, so a client keeps one authenticated Session to
+// receive and one anonymous Session to send and to fetch its contacts'
+// keys. An authenticated Session refuses sealed requests and lookups with
+// a proof locally with ErrWrongSession, before anything reaches the relay;
+// an anonymous one does the same for everything else.
+//
+// Over Tor the two Sessions must use different circuits, or the shared
+// circuit links them: build each Session's Dialer with its own isolation
+// token (NewIsolationToken). Without Tor the relay can link them by the
+// client's address, so sealed sending then hides the sender only from the
+// stored queue, not from the live relay.
+//
+// An anonymous Session does not reconnect: when its connection fails or
+// ends, Run emits StateChanged{State: Failed} with an error wrapping
+// ErrAnonymousSessionEnded and returns it. A reconnect would reuse the
+// Dialer and thus its isolation token, putting the new connection on the
+// circuit of the old one, which lets the relay or the exit link the
+// recipient sets of both. The caller starts a new Session with a fresh
+// token (NewIsolationToken) instead. Options.AnonymousReconnect restores
+// automatic reconnection for callers that accept that linkage.
 package client
 
 import (
@@ -117,6 +145,16 @@ var (
 	// ErrNotConnected is returned by Request while the session has no
 	// authenticated connection.
 	ErrNotConnected = errors.New("client: not connected")
+	// ErrWrongSession is returned by Request for a request the kind of
+	// session does not allow: sealed sends and lookups with an access
+	// proof on an authenticated session, anything else on an anonymous
+	// one.
+	ErrWrongSession = errors.New("client: request not allowed on this kind of session")
+	// ErrAnonymousSessionEnded is wrapped by the error that ends an
+	// anonymous Session once its connection is gone, unless
+	// Options.AnonymousReconnect is set. Start a new Session with a fresh
+	// isolation token to continue.
+	ErrAnonymousSessionEnded = errors.New("client: anonymous session ended")
 )
 
 // RemoteError is the error recorded when the server sends an Error frame.
@@ -151,6 +189,16 @@ type Options struct {
 	// signed bundle would be rejected as a conflict. Authentication then
 	// fails with NotFound if the relay does not know the identity.
 	SkipRegister bool
+	// Anonymous opens connections that neither register nor authenticate
+	// and carry only sealed sends and lookups with an access proof. It
+	// excludes Auth and SkipRegister. Such a Session ends instead of
+	// reconnecting, unless AnonymousReconnect is set.
+	Anonymous bool
+	// AnonymousReconnect lets an anonymous Session reconnect like an
+	// authenticated one. Every reconnect reuses Dialer, and with it the
+	// Tor isolation token, so the connections share a circuit and can be
+	// linked to each other. It requires Anonymous.
+	AnonymousReconnect bool
 }
 
 // Session is one logical connection to a qchat server, kept alive across
@@ -182,6 +230,12 @@ func New(opts Options) (*Session, error) {
 	opts.Addr = addr
 	if opts.Pin.IsZero() {
 		return nil, errors.New("client: a server fingerprint (pin) is required")
+	}
+	if opts.Anonymous && (opts.Auth != nil || opts.SkipRegister) {
+		return nil, errors.New("client: an anonymous session cannot authenticate")
+	}
+	if opts.AnonymousReconnect && !opts.Anonymous {
+		return nil, errors.New("client: AnonymousReconnect requires an anonymous session")
 	}
 	return &Session{
 		opts:       opts,
@@ -243,6 +297,11 @@ func (s *Session) Run(ctx context.Context) error {
 			s.emit(StateChanged{State: Failed, Err: err})
 			return err
 		}
+		if s.opts.Anonymous && !s.opts.AnonymousReconnect {
+			err := anonymousEnded(res.err)
+			s.emit(StateChanged{State: Failed, Err: err})
+			return err
+		}
 		if res.established {
 			attempt = 0
 			if res.uptime >= stableConnection {
@@ -263,6 +322,15 @@ func (s *Session) Run(ctx context.Context) error {
 		case <-timer.C:
 		}
 	}
+}
+
+// anonymousEnded returns the error that ends an anonymous Session whose
+// connection ended with cause.
+func anonymousEnded(cause error) error {
+	if cause == nil {
+		return ErrAnonymousSessionEnded
+	}
+	return fmt.Errorf("%w: %w", ErrAnonymousSessionEnded, cause)
 }
 
 // classify decides whether err ends the session. A pin mismatch also
@@ -305,22 +373,31 @@ func (s *Session) setDisconnected() {
 }
 
 // Request sends one request frame of type t with the given body and waits
-// for the response with the same frame ID. t must be TypeKeyRequest,
-// TypeSend, TypeSendMulti, TypeRegister, TypePrekeyUpload or
-// TypePrekeyRequest. Request is only allowed while the session is
-// authenticated; otherwise it returns ErrNotConnected. An Error frame in
-// reply is returned as a *RemoteError. If ctx ends or the connection is lost
-// first, Request returns an error and does not resend the request; whether
-// the server received it is unknown. Request may be called concurrently.
+// for the response with the same frame ID. On an authenticated session t
+// must be TypeKeyRequest, TypeSend, TypeSendMulti, TypeRegister,
+// TypePrekeyUpload, TypePrekeyRequest or TypeSetAccessKey, and a
+// KeyRequest or PrekeyRequest must not carry an access proof; on an
+// anonymous session (Options.Anonymous) it must be TypeSealedSend,
+// TypeSealedSendMulti, or a protocol.KeyRequest or protocol.PrekeyRequest
+// carrying an access proof. Any other combination fails with
+// ErrWrongSession before anything is sent. Request is only allowed while the session is
+// connected (and, unless anonymous, authenticated); otherwise it returns
+// ErrNotConnected. An Error frame in reply is returned as a *RemoteError.
+// If ctx ends or the connection is lost first, Request returns an error and
+// does not resend the request; whether the server received it is unknown.
+// Request may be called concurrently.
 func (s *Session) Request(ctx context.Context, t protocol.FrameType, body any) (protocol.Frame, error) {
 	want, ok := responseType(t)
 	if !ok {
 		return protocol.Frame{}, fmt.Errorf("client: %v is not a request frame", t)
 	}
+	if anonymousOnly(t, body) != s.opts.Anonymous {
+		return protocol.Frame{}, fmt.Errorf("%w: %v", ErrWrongSession, t)
+	}
 	s.mu.Lock()
 	c := s.live
 	s.mu.Unlock()
-	if c == nil || s.opts.Auth == nil {
+	if c == nil || (s.opts.Auth == nil && !s.opts.Anonymous) {
 		return protocol.Frame{}, ErrNotConnected
 	}
 	f, err := protocol.NewFrame(t, 0, body)
@@ -360,8 +437,44 @@ func responseType(t protocol.FrameType) (protocol.FrameType, bool) {
 		return protocol.TypePrekeyStatus, true
 	case protocol.TypePrekeyRequest:
 		return protocol.TypePrekeyResponse, true
+	case protocol.TypeSetAccessKey:
+		return protocol.TypeAccessKeySet, true
+	case protocol.TypeSealedSend:
+		return protocol.TypeSendResult, true
+	case protocol.TypeSealedSendMulti:
+		return protocol.TypeSendMultiResult, true
 	}
 	return 0, false
+}
+
+// anonymousOnly reports whether a request of type t with body is one only
+// anonymous sessions may send: a sealed send, or a key or prekey lookup
+// carrying an access proof. Every other request is for authenticated
+// sessions only.
+func anonymousOnly(t protocol.FrameType, body any) bool {
+	switch t {
+	case protocol.TypeSealedSend, protocol.TypeSealedSendMulti:
+		return true
+	case protocol.TypeKeyRequest, protocol.TypePrekeyRequest:
+		return carriesProof(body)
+	}
+	return false
+}
+
+// carriesProof reports whether body is a KeyRequest or PrekeyRequest with
+// an access proof.
+func carriesProof(body any) bool {
+	switch req := body.(type) {
+	case protocol.KeyRequest:
+		return req.AccessProof != nil
+	case *protocol.KeyRequest:
+		return req != nil && req.AccessProof != nil
+	case protocol.PrekeyRequest:
+		return req.AccessProof != nil
+	case *protocol.PrekeyRequest:
+		return req != nil && req.AccessProof != nil
+	}
+	return false
 }
 
 // Ack tells the relay that the delivery with the given queue ID (see

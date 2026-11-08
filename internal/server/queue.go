@@ -170,6 +170,38 @@ func (s *Server) deliver(to identity.ID, qid uint64, encoded []byte) bool {
 	return delivered
 }
 
+// queueLimits returns the limits of the messages stored for one
+// recipient. The sealed caps apply only to messages without a sender:
+// sealed messages may take at most max_queued_sealed_messages rows and
+// half of max_queued_bytes.
+func (s *Server) queueLimits() serverdb.QueueLimits {
+	limits := s.cfg.Limits
+	return serverdb.QueueLimits{
+		MaxMessages:       limits.MaxQueuedMessages,
+		MaxBytes:          limits.MaxQueuedBytes,
+		MaxSealedMessages: limits.MaxQueuedSealedMessages,
+		MaxSealedBytes:    limits.MaxQueuedBytes / 2,
+	}
+}
+
+// queueExpiry returns when a message stored at now expires:
+// undelivered_ttl later, rounded up to the next full hour. Rounding makes
+// the stored expiry, which a copy of the database reveals, say only in
+// which hour a message was stored, for sealed and identified messages
+// alike.
+func (s *Server) queueExpiry(now time.Time) time.Time {
+	return roundUpToHour(now.Add(s.cfg.UndeliveredTTL.Std()))
+}
+
+// roundUpToHour returns the first full hour (UTC) at or after t.
+func roundUpToHour(t time.Time) time.Time {
+	rounded := t.Truncate(time.Hour)
+	if rounded.Before(t) {
+		rounded = rounded.Add(time.Hour)
+	}
+	return rounded
+}
+
 // storeMessage stores a payload for to until undelivered_ttl expires and
 // returns its queue ID. On failure it returns the error code to answer
 // with.
@@ -177,8 +209,7 @@ func (s *Server) storeMessage(to, from identity.ID, payload []byte) (uint64, pro
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
 	now := s.now()
-	limits := serverdb.QueueLimits{MaxMessages: s.cfg.Limits.MaxQueuedMessages, MaxBytes: s.cfg.Limits.MaxQueuedBytes}
-	qid, err := s.db.Enqueue(ctx, to, from, payload, now, now.Add(s.cfg.UndeliveredTTL.Std()), limits)
+	qid, err := s.db.Enqueue(ctx, to, from, payload, now, s.queueExpiry(now), s.queueLimits())
 	switch {
 	case err == nil:
 		return qid, 0, true

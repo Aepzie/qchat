@@ -52,6 +52,7 @@ type entry struct {
 	status   MessageStatus
 	errText  string
 	skew     bool
+	route    SendRoute
 	// sender is the identity ID behind an entry under Message requests.
 	sender string
 }
@@ -196,7 +197,14 @@ func messageMeta(e entry, st styles) []string {
 	case StatusSending:
 		long, short = append(long, st.faint.Render("… sending")), append(short, st.faint.Render("…"))
 	case StatusSent:
-		long, short = append(long, st.muted.Render("✓ sent · stored by relay until delivered")), append(short, st.muted.Render("✓ sent"))
+		switch e.route {
+		case RouteSealed:
+			long, short = append(long, st.muted.Render("✓ sent sealed · relay does not know the sender")), append(short, st.muted.Render("✓ sealed"))
+		case RouteIdentified:
+			long, short = append(long, st.warn.Render("✓ sent identified · relay knows the sender")), append(short, st.warn.Render("✓ identified"))
+		default:
+			long, short = append(long, st.muted.Render("✓ sent · stored by relay until delivered")), append(short, st.muted.Render("✓ sent"))
+		}
 	case StatusRecipientOffline:
 		long, short = append(long, st.warn.Render("⧗ recipient offline · not delivered")), append(short, st.warn.Render("⧗ offline"))
 	case StatusFailed:

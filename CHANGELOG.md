@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-08
+
+Metadata protection: padding, sealed sender and optional Tor. The sealed-sender
+construction is composed from standard primitives and has not been
+independently analysed. Envelopes of earlier versions are not accepted.
+
+### Added
+
+- Padding (`internal/padding`): plaintexts are padded inside the encryption to
+  buckets of 512 B, 1, 2, 4, 8, 16, 32, 64, 128 or 256 KiB with a strict,
+  constant-time-scanning unpad. Applied to pairwise messages (envelope
+  version 3) and group messages (group envelope version 5).
+- Sealed sender (`internal/sealed`): per-user access keys, access verifiers
+  uploaded with `SetAccessKey`, and the frames `SealedSend` and
+  `SealedSendMulti`. Sealed messages arrive as `Deliver` with an all-zero
+  sender and carry the sender ID inside an HPKE box. Group messages are sent
+  with one ciphertext and no outer layer.
+- Anonymous connections: a connection that sends a sealed frame can never
+  register or authenticate; the client opens separate anonymous sessions for
+  sealed sending.
+- Relay storage for access verifiers (table `access_keys`) and queue rows
+  without a sender (schema version 4), and new limits
+  `limits.sealed_recipients_per_minute` and
+  `limits.sealed_recipients_per_minute_per_ip`.
+- Tor support: `--tor` (`127.0.0.1:9050`) and `--socks5 HOST:PORT`, a minimal
+  SOCKS5 client with no local name resolution, a fresh stream-isolation token
+  per run and per anonymous session, strict reply parsing and bounded
+  handshake time. The status bar shows `Tor: on`.
+- Onion service deployment guide `deploy/tor/README.md`; v3 onion names are
+  accepted by `qchat-server init --host`.
+- Design document `docs/design/phase-5-metadata.md`.
+
+### Changed
+
+- Pairwise envelope version 2 became 3 and group envelope version 4 became 5;
+  older versions are rejected (pre-1.0, no compatibility).
+- With a proxy configured, every client connection (chat session and profile
+  recovery lookup) is dialed through it, with no fallback to a direct
+  connection.
+- Behind an onion service all connections arrive from loopback, so operators
+  raise `limits.max_connections_per_ip` and the per-IP sealed limit.
+
+### Security
+
+- Padding hides message length from the relay except for the bucket; it does
+  not hide timing, counts, recipients or the unencrypted ratchet header.
+- Sealed sends answer NotFound for an unknown recipient, a missing verifier
+  and a wrong proof alike, using a constant-time comparison, so they are not
+  an oracle for registered users.
+- The sender claimed in a sealed envelope is never shown or acted on before
+  the inner layer (ratchet, Init signature or group signature) verifies it.
+- Changes from an internal review before release: the sealed content is
+  padded to 32, 64, 128 or 256 KiB (sealed envelope version 2), bundles and
+  prekeys of contacts are fetched anonymously with an access proof, the relay
+  stores only hashes of access verifiers and caps sealed queue rows
+  separately (`limits.max_queued_sealed_messages`), sealed group fan-outs
+  include the sender itself, there is never an automatic fallback from sealed
+  to identified sending, and anonymous sessions are replaced (with a fresh Tor
+  isolation token) instead of reconnecting. The default
+  `limits.max_message_size` is now 264 KiB.
+- Known limits (see SECURITY.md): the first message to a new contact is
+  identified; the set of recipients an anonymous connection writes to can
+  fingerprint a contact list; without Tor the relay can link anonymous and
+  authenticated connections by address and timing; Tor does not defend
+  against a global passive adversary.
+
 ## [0.4.0] - 2026-11-08
 
 Adds end-to-end encrypted groups. The group protocol is composed from
@@ -137,7 +203,8 @@ release; only the connection between client and relay is protected.
 - The server never logs client IP addresses or client-supplied data.
 - A pinned-key mismatch blocks the connection and is never retried.
 
-[Unreleased]: https://github.com/craguS/qchat/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/craguS/qchat/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/craguS/qchat/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/craguS/qchat/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/craguS/qchat/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/craguS/qchat/compare/v0.1.0...v0.2.0

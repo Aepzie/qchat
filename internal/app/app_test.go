@@ -117,6 +117,13 @@ func (u *user) restart(t *testing.T) *user {
 // maintained its prekeys once.
 func startUser(t *testing.T, r relay, dir, name string, p *profile.Profile) *user {
 	t.Helper()
+	return startUserWith(t, r, dir, name, p, false)
+}
+
+// startUserWith is startUser; with anonymous it also runs an anonymous
+// session for sealed sends and waits until that is connected too.
+func startUserWith(t *testing.T, r relay, dir, name string, p *profile.Profile, anonymous bool) *user {
+	t.Helper()
 	t.Cleanup(func() { p.Close() })
 	a, err := New(p, "")
 	if err != nil {
@@ -129,6 +136,28 @@ func startUser(t *testing.T, r relay, dir, name string, p *profile.Profile) *use
 	a.UseSession(sess)
 	ctx, cancel := context.WithCancel(context.Background())
 	u := &user{dir: dir, name: name, relay: r, prof: p, app: a, sess: sess, inject: make(chan client.Event), cancel: cancel, done: make(chan struct{})}
+	anonDone := make(chan struct{})
+	if !anonymous {
+		close(anonDone)
+	} else {
+		anon, err := client.New(client.Options{Addr: r.addr, Pin: r.pin, Anonymous: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.UseAnonymousSession(anon)
+		go func() {
+			defer close(anonDone)
+			anon.Run(ctx)
+		}()
+		go func() {
+			for ev := range anon.Events() {
+				if sc, ok := ev.(client.StateChanged); ok {
+					a.SealedSenderConnected(sc.State == client.Connected)
+				}
+			}
+		}()
+		defer waitFor(t, name+"'s anonymous session", func() bool { _, ok := anon.Info(); return ok })
+	}
 
 	tapped := make(chan client.Event)
 	sessDone := make(chan struct{})
@@ -184,6 +213,7 @@ func startUser(t *testing.T, r relay, dir, name string, p *profile.Profile) *use
 	go func() {
 		<-sessDone
 		<-runDone
+		<-anonDone
 		close(u.done)
 	}()
 	t.Cleanup(u.stop)

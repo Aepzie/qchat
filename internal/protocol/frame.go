@@ -98,6 +98,22 @@ const (
 	// TypeSendMultiResult reports the outcome of a SendMulti, server to
 	// client; body [SendMultiResult].
 	TypeSendMultiResult FrameType = 23
+	// TypeSetAccessKey uploads the verifier of the identity's access key,
+	// client to server, on an authenticated connection; body
+	// [SetAccessKey]. The relay answers with an [AccessKeySet].
+	TypeSetAccessKey FrameType = 24
+	// TypeAccessKeySet confirms a SetAccessKey, server to client; body
+	// [AccessKeySet].
+	TypeAccessKeySet FrameType = 25
+	// TypeSealedSend asks the relay to route a ciphertext to an ID without
+	// naming the sender, client to server, on an anonymous connection; body
+	// [SealedSend]. The relay answers with a [SendResult].
+	TypeSealedSend FrameType = 26
+	// TypeSealedSendMulti asks the relay to route one ciphertext to several
+	// IDs without naming the sender, client to server, on an anonymous
+	// connection; body [SealedSendMulti]. The relay answers with a
+	// [SendMultiResult].
+	TypeSealedSendMulti FrameType = 27
 )
 
 // String returns the name of the frame type, or "FrameType(n)" for values
@@ -150,6 +166,14 @@ func (t FrameType) String() string {
 		return "SendMulti"
 	case TypeSendMultiResult:
 		return "SendMultiResult"
+	case TypeSetAccessKey:
+		return "SetAccessKey"
+	case TypeAccessKeySet:
+		return "AccessKeySet"
+	case TypeSealedSend:
+		return "SealedSend"
+	case TypeSealedSendMulti:
+		return "SealedSendMulti"
 	default:
 		return fmt.Sprintf("FrameType(%d)", uint8(t))
 	}
@@ -158,7 +182,7 @@ func (t FrameType) String() string {
 // Valid reports whether t is a frame type defined by this version of the
 // protocol.
 func (t FrameType) Valid() bool {
-	return t >= TypeHello && t <= TypeSendMultiResult
+	return t >= TypeHello && t <= TypeSealedSendMulti
 }
 
 // Frame is the unit of transmission: each WebSocket binary message carries

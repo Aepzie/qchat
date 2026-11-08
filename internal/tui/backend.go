@@ -198,6 +198,22 @@ func (s MessageStatus) String() string {
 	}
 }
 
+// SendRoute says how an outgoing message was handed to the relay.
+type SendRoute uint8
+
+const (
+	// RouteUnknown is used for incoming messages and for outgoing messages
+	// whose route was not recorded.
+	RouteUnknown SendRoute = iota
+	// RouteSealed means the message went over the anonymous connection
+	// (sealed sender): the relay does not learn who sent it.
+	RouteSealed
+	// RouteIdentified means the message went over the authenticated
+	// connection, so the relay knows the sender, because the recipient's
+	// sealed sender access key was not known yet.
+	RouteIdentified
+)
+
 // MessageInfo is one message of a conversation.
 type MessageInfo struct {
 	// ID identifies the message within its conversation.
@@ -221,6 +237,8 @@ type MessageInfo struct {
 	// From is the sender's identity ID for an incoming group message, and
 	// empty otherwise.
 	From string
+	// Route says how an outgoing message was sent.
+	Route SendRoute
 }
 
 // VerificationInfo is what the user compares to verify a contact.
@@ -237,7 +255,8 @@ type VerificationInfo struct {
 
 // ChatEvent is pushed by the application layer on Config.ChatEvents. The
 // concrete types are IncomingMessage, MessageStatusChanged,
-// ContactKeyChanged, ContactsChanged and GroupChanged.
+// ContactKeyChanged, ContactsChanged, GroupChanged and
+// SealedSenderChanged.
 type ChatEvent interface {
 	chatEvent()
 }
@@ -286,8 +305,15 @@ type GroupChanged struct {
 	Notice  string
 }
 
+// SealedSenderChanged reports whether the anonymous connection used for
+// sealed sender is up. The status bar shows "sealed" while it is.
+type SealedSenderChanged struct {
+	Connected bool
+}
+
 func (IncomingMessage) chatEvent()      {}
 func (MessageStatusChanged) chatEvent() {}
 func (ContactKeyChanged) chatEvent()    {}
 func (ContactsChanged) chatEvent()      {}
 func (GroupChanged) chatEvent()         {}
+func (SealedSenderChanged) chatEvent()  {}

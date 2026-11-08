@@ -62,11 +62,15 @@ func (s *session) handlePrekeyUpload(frame protocol.Frame) bool {
 }
 
 // handlePrekeyRequest hands out the prekey bundle of an identity, including
-// at most once each of its one-time prekeys.
+// at most once each of its one-time prekeys. A request with an access
+// proof is an anonymous lookup (handleAnonymousPrekeyRequest).
 func (s *session) handlePrekeyRequest(frame protocol.Frame) bool {
 	req, err := protocol.DecodeBody[protocol.PrekeyRequest](frame, protocol.TypePrekeyRequest)
 	if err != nil {
 		return s.fail(frame.ID, requestErrorCode(err))
+	}
+	if req.AccessProof != nil {
+		return s.handleAnonymousPrekeyRequest(frame, req)
 	}
 	if !s.authenticated {
 		return s.reject(frame.ID, protocol.ErrCodeUnauthorized)

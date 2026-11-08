@@ -2,6 +2,7 @@ package serverdb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 )
@@ -73,6 +74,76 @@ var migrations = []string{
 		DELETE FROM queue_payloads WHERE pid = OLD.pid AND refs = 1;
 		UPDATE queue_payloads SET refs = refs - 1 WHERE pid = OLD.pid;
 	END;`,
+	`DROP TRIGGER queue_release_payload;
+	CREATE TABLE queue_v4 (
+		qid       INTEGER PRIMARY KEY AUTOINCREMENT,
+		recipient BLOB    NOT NULL REFERENCES identities (id) ON DELETE CASCADE,
+		sender    BLOB    CHECK (sender IS NULL OR length(sender) = 32),
+		pid       INTEGER NOT NULL REFERENCES queue_payloads (pid),
+		size      INTEGER NOT NULL CHECK (size > 0),
+		expires   INTEGER NOT NULL
+	) STRICT;
+	INSERT INTO queue_v4 (qid, recipient, sender, pid, size, expires)
+		SELECT qid, recipient, sender, pid, size, expires FROM queue;
+	DELETE FROM sqlite_sequence WHERE name = 'queue_v4';
+	INSERT INTO sqlite_sequence (name, seq)
+		SELECT 'queue_v4', seq FROM sqlite_sequence WHERE name = 'queue';
+	DROP TABLE queue;
+	ALTER TABLE queue_v4 RENAME TO queue;
+	CREATE INDEX queue_recipient_qid ON queue (recipient, qid);
+	CREATE INDEX queue_expires ON queue (expires);
+	CREATE INDEX queue_pid ON queue (pid);
+	CREATE TRIGGER queue_release_payload AFTER DELETE ON queue BEGIN
+		DELETE FROM queue_payloads WHERE pid = OLD.pid AND refs = 1;
+		UPDATE queue_payloads SET refs = refs - 1 WHERE pid = OLD.pid;
+	END;
+	CREATE TABLE access_keys (
+		id                 BLOB    NOT NULL PRIMARY KEY REFERENCES identities (id) ON DELETE CASCADE,
+		verifier           BLOB    NOT NULL CHECK (length(verifier) = 32),
+		allow_unidentified INTEGER NOT NULL CHECK (allow_unidentified IN (0, 1))
+	) STRICT, WITHOUT ROWID;`,
+	`DELETE FROM access_keys WHERE verifier = zeroblob(32);
+	ALTER TABLE access_keys RENAME COLUMN verifier TO verifier_hash;`,
+}
+
+// migrationSteps holds the parts of migrations that SQL alone cannot
+// express, keyed by schema version. A step runs in the migration
+// transaction right after the SQL of its version.
+var migrationSteps = map[int]func(context.Context, *sql.Tx) error{
+	5: hashAccessVerifiers,
+}
+
+// hashAccessVerifiers replaces every stored access verifier by its SHA-256
+// hash, so that the database no longer holds the bearer proofs.
+func hashAccessVerifiers(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "SELECT id, verifier_hash FROM access_keys")
+	if err != nil {
+		return fmt.Errorf("read access keys: %w", err)
+	}
+	type storedRow struct{ id, verifier []byte }
+	var stored []storedRow
+	for rows.Next() {
+		var r storedRow
+		if err := rows.Scan(&r.id, &r.verifier); err != nil {
+			rows.Close()
+			return fmt.Errorf("read access keys: %w", err)
+		}
+		stored = append(stored, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read access keys: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("read access keys: %w", err)
+	}
+	for _, r := range stored {
+		hash := sha256.Sum256(r.verifier)
+		if _, err := tx.ExecContext(ctx, "UPDATE access_keys SET verifier_hash = ? WHERE id = ?", hash[:], r.id); err != nil {
+			return fmt.Errorf("hash access key: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrate applies the missing migrations in one write transaction, so
@@ -99,6 +170,11 @@ func migrate(ctx context.Context, conn *sql.DB) error {
 	for version := current + 1; version <= len(migrations); version++ {
 		if _, err := tx.ExecContext(ctx, migrations[version-1]); err != nil {
 			return fmt.Errorf("serverdb: migration %d: %w", version, err)
+		}
+		if step, ok := migrationSteps[version]; ok {
+			if err := step(ctx, tx); err != nil {
+				return fmt.Errorf("serverdb: migration %d: %w", version, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version) VALUES (?)", version); err != nil {
 			return fmt.Errorf("serverdb: record migration %d: %w", version, err)

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -54,17 +55,27 @@ type fakeRelay struct {
 	multi int
 	// failUploads makes every non-empty PrekeyUpload fail.
 	failUploads bool
+	// verifiers holds the uploaded access verifiers; sealedSends and
+	// sealedMulti count SealedSend and SealedSendMulti requests.
+	verifiers   map[identity.ID][]byte
+	sealedSends int
+	sealedMulti int
+	// identifiedLookups and anonLookups count KeyRequest and
+	// PrekeyRequest on authenticated and anonymous connections.
+	identifiedLookups int
+	anonLookups       int
 }
 
 func newFakeRelay() *fakeRelay {
 	return &fakeRelay{
-		clock:   &fakeClock{now: time.Unix(1_800_000_000, 0)},
-		bundles: map[identity.ID][]byte{},
-		signed:  map[identity.ID][]byte{},
-		oneTime: map[identity.ID][][]byte{},
-		queues:  map[identity.ID][]client.Delivery{},
-		acked:   map[identity.ID][]uint64{},
-		uploads: map[identity.ID][]protocol.PrekeyUpload{},
+		clock:     &fakeClock{now: time.Unix(1_800_000_000, 0)},
+		bundles:   map[identity.ID][]byte{},
+		signed:    map[identity.ID][]byte{},
+		oneTime:   map[identity.ID][][]byte{},
+		queues:    map[identity.ID][]client.Delivery{},
+		acked:     map[identity.ID][]uint64{},
+		uploads:   map[identity.ID][]protocol.PrekeyUpload{},
+		verifiers: map[identity.ID][]byte{},
 	}
 }
 
@@ -90,11 +101,11 @@ func (c *fakeConn) Request(ctx context.Context, t protocol.FrameType, body any) 
 	defer r.mu.Unlock()
 	switch req := body.(type) {
 	case protocol.KeyRequest:
-		b, ok := r.bundles[identity.ID(req.ID)]
-		if !ok {
-			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		if req.AccessProof != nil {
+			return protocol.Frame{}, client.ErrWrongSession
 		}
-		return protocol.NewFrame(protocol.TypeKeyResponse, 1, protocol.KeyResponse{Bundle: b})
+		r.identifiedLookups++
+		return r.keyResponseLocked(identity.ID(req.ID))
 	case protocol.PrekeyUpload:
 		r.uploads[c.id] = append(r.uploads[c.id], req)
 		if r.failUploads && (req.SignedPrekey != nil || len(req.OneTimePrekeys) > 0) {
@@ -106,16 +117,11 @@ func (c *fakeConn) Request(ctx context.Context, t protocol.FrameType, body any) 
 		r.oneTime[c.id] = append(r.oneTime[c.id], req.OneTimePrekeys...)
 		return protocol.NewFrame(protocol.TypePrekeyStatus, 1, r.statusLocked(c.id))
 	case protocol.PrekeyRequest:
-		id := identity.ID(req.ID)
-		spk, ok := r.signed[id]
-		if !ok {
-			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		if req.AccessProof != nil {
+			return protocol.Frame{}, client.ErrWrongSession
 		}
-		resp := protocol.PrekeyResponse{Bundle: r.bundles[id], SignedPrekey: spk}
-		if pool := r.oneTime[id]; len(pool) > 0 {
-			resp.OneTimePrekey, r.oneTime[id] = pool[0], pool[1:]
-		}
-		return protocol.NewFrame(protocol.TypePrekeyResponse, 1, resp)
+		r.identifiedLookups++
+		return r.prekeyResponseLocked(identity.ID(req.ID))
 	case protocol.Send:
 		to := identity.ID(req.To)
 		if _, ok := r.bundles[to]; !ok {
@@ -138,6 +144,11 @@ func (c *fakeConn) Request(ctx context.Context, t protocol.FrameType, body any) 
 		}
 		r.multi++
 		return protocol.NewFrame(protocol.TypeSendMultiResult, 1, result)
+	case protocol.SetAccessKey:
+		r.verifiers[c.id] = slices.Clone(req.Verifier)
+		return protocol.NewFrame(protocol.TypeAccessKeySet, 1, protocol.AccessKeySet{})
+	case protocol.SealedSend, protocol.SealedSendMulti:
+		return protocol.Frame{}, client.ErrWrongSession
 	}
 	return protocol.Frame{}, errors.New("fake relay: unexpected request")
 }
@@ -178,6 +189,9 @@ type fakeUser struct {
 	prof  *profile.Profile
 	app   *App
 	id    identity.ID
+	// sealed attaches an anonymous connection and uploads the access
+	// verifier whenever the App is (re)built.
+	sealed bool
 }
 
 const testPassphrase = "correct horse battery"
@@ -205,12 +219,27 @@ func (u *fakeUser) attach(p *profile.Profile) {
 		u.t.Fatal(err)
 	}
 	a.now = u.relay.clock.Now
+	a.shareDelay = func() time.Duration { return 0 }
 	u.prof, u.app, u.id = p, a, p.Identity.ID()
 	a.UseSession(&fakeConn{relay: u.relay, id: u.id})
 	u.relay.mu.Lock()
 	u.relay.bundles[u.id] = a.selfRaw
 	u.relay.mu.Unlock()
 	u.t.Cleanup(func() { p.Close() })
+	if u.sealed {
+		u.enableSealed()
+	}
+}
+
+// enableSealed attaches an anonymous connection to the App and uploads its
+// access verifier, as the client does after connecting.
+func (u *fakeUser) enableSealed() {
+	u.t.Helper()
+	u.sealed = true
+	u.app.UseAnonymousSession(&fakeAnon{relay: u.relay})
+	if err := u.app.publishAccessKey(context.Background()); err != nil {
+		u.t.Fatalf("publish access key: %v", err)
+	}
 }
 
 // restart closes the profile and opens it again with a fresh App, as a
@@ -300,4 +329,91 @@ func wantTexts(t *testing.T, who string, got []string, want ...string) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("%s received %q, want %q", who, got, want)
 	}
+}
+
+// fakeAnon is an anonymous connection to the fake relay: it accepts only
+// sealed sends, checks access proofs against the uploaded verifiers and
+// queues sealed messages without a sender.
+type fakeAnon struct {
+	relay *fakeRelay
+}
+
+func (c *fakeAnon) Ack(uint64) error { return client.ErrWrongSession }
+
+func (c *fakeAnon) Request(ctx context.Context, t protocol.FrameType, body any) (protocol.Frame, error) {
+	r := c.relay
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	allowed := func(to identity.ID, proof []byte) bool {
+		v, ok := r.verifiers[to]
+		_, registered := r.bundles[to]
+		return ok && registered && bytes.Equal(v, proof)
+	}
+	switch req := body.(type) {
+	case protocol.SealedSend:
+		to := identity.ID(req.To)
+		if !allowed(to, req.AccessProof) {
+			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		}
+		r.nextQID++
+		r.queues[to] = append(r.queues[to], client.Delivery{From: protocol.SealedFrom, Payload: slices.Clone(req.Payload), QueueID: r.nextQID})
+		r.sealedSends++
+		return protocol.NewFrame(protocol.TypeSendResult, 1, protocol.SendResult{Status: protocol.SendAccepted})
+	case protocol.SealedSendMulti:
+		result := protocol.SendMultiResult{Status: protocol.SendAccepted}
+		for _, entry := range req.Entries {
+			to := identity.ID(entry.To)
+			if !allowed(to, entry.AccessProof) {
+				result.Failed = append(result.Failed, entry.To)
+				result.Reasons = append(result.Reasons, protocol.ErrCodeNotFound)
+				continue
+			}
+			r.nextQID++
+			r.queues[to] = append(r.queues[to], client.Delivery{From: protocol.SealedFrom, Payload: slices.Clone(req.Payload), QueueID: r.nextQID})
+		}
+		r.sealedMulti++
+		return protocol.NewFrame(protocol.TypeSendMultiResult, 1, result)
+	case protocol.KeyRequest:
+		id := identity.ID(req.ID)
+		if !allowed(id, req.AccessProof) {
+			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		}
+		r.anonLookups++
+		return r.keyResponseLocked(id)
+	case protocol.PrekeyRequest:
+		id := identity.ID(req.ID)
+		if !allowed(id, req.AccessProof) {
+			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		}
+		r.anonLookups++
+		return r.prekeyResponseLocked(id)
+	}
+	return protocol.Frame{}, client.ErrWrongSession
+}
+
+// queued returns the deliveries queued for id without removing them.
+func (r *fakeRelay) queued(id identity.ID) []client.Delivery {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.queues[id])
+}
+
+func (r *fakeRelay) keyResponseLocked(id identity.ID) (protocol.Frame, error) {
+	b, ok := r.bundles[id]
+	if !ok {
+		return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+	}
+	return protocol.NewFrame(protocol.TypeKeyResponse, 1, protocol.KeyResponse{Bundle: b})
+}
+
+func (r *fakeRelay) prekeyResponseLocked(id identity.ID) (protocol.Frame, error) {
+	spk, ok := r.signed[id]
+	if !ok {
+		return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+	}
+	resp := protocol.PrekeyResponse{Bundle: r.bundles[id], SignedPrekey: spk}
+	if pool := r.oneTime[id]; len(pool) > 0 {
+		resp.OneTimePrekey, r.oneTime[id] = pool[0], pool[1:]
+	}
+	return protocol.NewFrame(protocol.TypePrekeyResponse, 1, resp)
 }
