@@ -120,9 +120,12 @@ type session struct {
 	// prekeyLimiter bounds PrekeyRequest and uploadLimiter PrekeyUpload.
 	prekeyLimiter *rate.Limiter
 	uploadLimiter *rate.Limiter
-	// sealedLimiter counts the recipients named in sealed sends.
-	sealedLimiter *rate.Limiter
-	timer         *time.Timer
+	// sealedLimiter counts the recipients named in sealed sends, and
+	// refusalLimiter the sealed entries and anonymous lookups whose access
+	// proof was refused.
+	sealedLimiter  *rate.Limiter
+	refusalLimiter *rate.Limiter
+	timer          *time.Timer
 
 	out        chan []byte
 	queue      *byteBudget
@@ -138,7 +141,8 @@ type session struct {
 	binding []byte
 
 	// ipKey is the connection-limit key of the client's address, used only
-	// for the per-IP sealed sender bucket. It is never logged.
+	// for the per-IP sealed sender and anonymous lookup buckets. It is
+	// never logged.
 	ipKey netip.Addr
 
 	pendingClose  *closeRequest
@@ -156,21 +160,22 @@ type session struct {
 func newSession(srv *Server, conn *websocket.Conn, binding []byte) *session {
 	limits := srv.cfg.Limits
 	return &session{
-		srv:           srv,
-		conn:          conn,
-		binding:       binding,
-		number:        rand.Uint64(),
-		limiter:       rate.NewLimiter(rate.Limit(limits.FramesPerSecond), limits.Burst),
-		authLimiter:   rate.NewLimiter(srv.authRate, srv.authBurst),
-		prekeyLimiter: rate.NewLimiter(srv.prekeyRate, srv.prekeyBurst),
-		multiLimiter:  rate.NewLimiter(rate.Limit(float64(limits.MultiRecipientsPerMinute)/60), MultiRecipientsBurst),
-		uploadLimiter: rate.NewLimiter(srv.uploadRate, srv.uploadBurst),
-		sealedLimiter: rate.NewLimiter(rate.Limit(float64(limits.SealedRecipientsPerMinute)/60), SealedRecipientsBurst),
-		out:           make(chan []byte, outboundQueueSize),
-		queue:         newByteBudget(limits.MaxQueueBytes),
-		stopping:      make(chan struct{}),
-		writerDone:    make(chan struct{}),
-		closed:        make(chan struct{}),
+		srv:            srv,
+		conn:           conn,
+		binding:        binding,
+		number:         rand.Uint64(),
+		limiter:        rate.NewLimiter(rate.Limit(limits.FramesPerSecond), limits.Burst),
+		authLimiter:    rate.NewLimiter(srv.authRate, srv.authBurst),
+		prekeyLimiter:  rate.NewLimiter(srv.prekeyRate, srv.prekeyBurst),
+		multiLimiter:   rate.NewLimiter(rate.Limit(float64(limits.MultiRecipientsPerMinute)/60), MultiRecipientsBurst),
+		uploadLimiter:  rate.NewLimiter(srv.uploadRate, srv.uploadBurst),
+		sealedLimiter:  rate.NewLimiter(rate.Limit(float64(limits.SealedRecipientsPerMinute)/60), SealedRecipientsBurst),
+		refusalLimiter: rate.NewLimiter(rate.Limit(float64(SealedRefusalsPerMinute)/60), SealedRefusalsBurst),
+		out:            make(chan []byte, outboundQueueSize),
+		queue:          newByteBudget(limits.MaxQueueBytes),
+		stopping:       make(chan struct{}),
+		writerDone:     make(chan struct{}),
+		closed:         make(chan struct{}),
 	}
 }
 

@@ -117,11 +117,15 @@ func (s *session) failTooManySessions(id uint64) bool {
 	return false
 }
 
-// handleKeyRequest returns the stored bundle of an identity.
+// handleKeyRequest returns the stored bundle of an identity. A request
+// with an access proof is an anonymous lookup (handleAnonymousKeyRequest).
 func (s *session) handleKeyRequest(frame protocol.Frame) bool {
 	req, err := protocol.DecodeBody[protocol.KeyRequest](frame, protocol.TypeKeyRequest)
 	if err != nil {
 		return s.fail(frame.ID, requestErrorCode(err))
+	}
+	if req.AccessProof != nil {
+		return s.handleAnonymousKeyRequest(frame, req)
 	}
 	if !s.authenticated {
 		return s.reject(frame.ID, protocol.ErrCodeUnauthorized)

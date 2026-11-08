@@ -116,8 +116,7 @@ func (s *Server) storeMulti(recipients [][32]byte, sender identity.ID, payload [
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
 	now := s.now()
-	limits := serverdb.QueueLimits{MaxMessages: s.cfg.Limits.MaxQueuedMessages, MaxBytes: s.cfg.Limits.MaxQueuedBytes}
-	outcomes, err := s.db.EnqueueMulti(ctx, recipients, sender, payload, now, now.Add(s.cfg.UndeliveredTTL.Std()), limits)
+	outcomes, err := s.db.EnqueueMulti(ctx, recipients, sender, payload, now, s.queueExpiry(now), s.queueLimits())
 	if err != nil {
 		s.logger.Error("cannot store message", "err", err)
 		return nil, protocol.ErrCodeInternal, false

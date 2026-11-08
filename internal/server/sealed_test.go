@@ -343,33 +343,44 @@ func TestSealedRateLimits(t *testing.T) {
 	bobConn, bobKey := sealedUser(t, ts, bob)
 	full := protocol.MaxMultiRecipients
 
-	first := openSession(t, ts)
-	for id := uint64(1); id <= SealedRecipientsBurst/uint64(full); id++ {
-		sealedSendMulti(t, first, id, strangerEntries(full), []byte("burst"))
-		if result := expectMultiResult(t, first, id); len(result.Failed) != full {
-			t.Fatalf("request %d: %d failed recipients, want %d", id, len(result.Failed), full)
-		}
+	junk := openSession(t, ts)
+	sealedSendMulti(t, junk, 1, strangerEntries(SealedRefusalsBurst), []byte("junk"))
+	if result := expectMultiResult(t, junk, 1); len(result.Failed) != SealedRefusalsBurst {
+		t.Fatalf("%d failed recipients, want %d", len(result.Failed), SealedRefusalsBurst)
 	}
-	sealedSend(t, first, 9, bob.id(), proofOf(bobKey), []byte("over session budget"))
-	expectReject(t, first, 9, protocol.ErrCodeRateLimited)
+	sealedSend(t, junk, 2, bob.id(), randomProof(), []byte("over refusal budget"))
+	expectReject(t, junk, 2, protocol.ErrCodeRateLimited)
+	sealedSend(t, junk, 3, bob.id(), proofOf(bobKey), []byte("granted"))
+	expectSendResult(t, junk, 3, protocol.SendAccepted)
+	expectSealedDeliver(t, bobConn, []byte("granted"))
+	sealedSendMulti(t, junk, 4, strangerEntries(SealedRecipientsBurst-full-2), []byte("session budget"))
+	expectReject(t, junk, 4, protocol.ErrCodeRateLimited)
+	sealedSend(t, junk, 5, bob.id(), proofOf(bobKey), []byte("over session budget"))
+	expectReject(t, junk, 5, protocol.ErrCodeRateLimited)
 
-	second := openSession(t, ts)
-	for id := uint64(1); id <= (SealedRecipientsBurstPerIP-SealedRecipientsBurst)/uint64(full); id++ {
-		sealedSendMulti(t, second, id, strangerEntries(full), []byte("burst"))
-		expectMultiResult(t, second, id)
+	if r := ts.srv.sealedIP.reserve(loopback, 0, clock.now()); r == nil {
+		t.Fatal("no bucket for the address")
 	}
-	third := openSession(t, ts)
-	sealedSend(t, third, 1, bob.id(), proofOf(bobKey), []byte("over address budget"))
-	expectReject(t, third, 1, protocol.ErrCodeRateLimited)
-	if n := queuedCount(t, ts, bob); n != 0 {
-		t.Fatalf("%d rate-limited messages stored", n)
+	if tokens := ts.srv.sealedIP.buckets[loopback].TokensAt(clock.now()); tokens != SealedRecipientsBurstPerIP-1 {
+		t.Fatalf("address bucket holds %v tokens, want %d: refused entries were charged to it", tokens, SealedRecipientsBurstPerIP-1)
+	}
+	if r := ts.srv.sealedIP.reserve(loopback, SealedRecipientsBurstPerIP-1, clock.now()); r == nil || !r.OK() {
+		t.Fatal("cannot drain the address bucket")
+	}
+	other := openSession(t, ts)
+	sealedSend(t, other, 1, bob.id(), proofOf(bobKey), []byte("over address budget"))
+	expectReject(t, other, 1, protocol.ErrCodeRateLimited)
+	sealedSend(t, other, 2, bob.id(), randomProof(), []byte("refused, not charged"))
+	expectReject(t, other, 2, protocol.ErrCodeNotFound)
+	if n := queuedCount(t, ts, bob); n != 1 {
+		t.Fatalf("%d messages stored, want only the granted one", n)
 	}
 
 	clock.advance(time.Minute)
-	sealedSend(t, third, 2, bob.id(), proofOf(bobKey), []byte("refilled"))
-	expectSendResult(t, third, 2, protocol.SendAccepted)
+	sealedSend(t, other, 3, bob.id(), proofOf(bobKey), []byte("refilled"))
+	expectSendResult(t, other, 3, protocol.SendAccepted)
 	expectSealedDeliver(t, bobConn, []byte("refilled"))
-	expectAlive(t, first)
+	expectAlive(t, junk)
 }
 
 func TestIPBuckets(t *testing.T) {

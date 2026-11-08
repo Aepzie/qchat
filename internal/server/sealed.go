@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"net/netip"
 	"sync"
@@ -39,10 +38,10 @@ const (
 	maxIPBuckets = 1 << 16
 )
 
-// dummyVerifier stands in for the verifier of a recipient that has none,
-// so that every sealed send runs the same comparison. A match against it
-// never grants access.
-var dummyVerifier [protocol.AccessVerifierSize]byte
+// dummyAccessKey stands in for the access key of a recipient that has
+// none, so that every access check runs the same hash and comparison. A
+// match against it never grants access.
+var dummyAccessKey serverdb.StoredAccessKey
 
 // enterMode commits the session to mode and reports whether that is
 // consistent with what it did before.
@@ -98,6 +97,9 @@ func (s *session) handleSealedSend(frame protocol.Frame) bool {
 	if !ok {
 		return s.reject(frame.ID, protocol.ErrCodeInternal)
 	}
+	if !s.chargeAccess(allowed, s.srv.sealedIP) {
+		return s.reject(frame.ID, protocol.ErrCodeRateLimited)
+	}
 	if !allowed[0] {
 		return s.reject(frame.ID, protocol.ErrCodeNotFound)
 	}
@@ -133,6 +135,9 @@ func (s *session) handleSealedSendMulti(frame protocol.Frame) bool {
 	allowed, ok := s.srv.sealedAccess(req.Entries)
 	if !ok {
 		return s.reject(frame.ID, protocol.ErrCodeInternal)
+	}
+	if !s.chargeAccess(allowed, s.srv.sealedIP) {
+		return s.reject(frame.ID, protocol.ErrCodeRateLimited)
 	}
 	accepted := make([]int, 0, len(req.Entries))
 	recipients := make([][32]byte, 0, len(req.Entries))
@@ -171,21 +176,111 @@ func (s *session) handleSealedSendMulti(frame protocol.Frame) bool {
 	return respond(s, protocol.TypeSendMultiResult, frame.ID, result)
 }
 
-// spendSealed takes n tokens from the session's sealed recipient budget
-// and from the budget of the client's address, waiting briefly like
-// spendRecipients, and reports whether it got them from both.
+// spendSealed takes n tokens from the session's sealed recipient budget,
+// which every entry of a sealed send spends whatever its proof, waiting
+// briefly like spendRecipients, and reports whether it got them.
 func (s *session) spendSealed(n int) bool {
 	now := s.srv.now()
-	return s.await(now, s.sealedLimiter.ReserveN(now, n), s.srv.sealedIP.reserve(s.ipKey, n, now))
+	return s.await(now, s.sealedLimiter.ReserveN(now, n))
+}
+
+// chargeAccess spends the budgets that depend on the outcome of an access
+// check: one token of the client address's bucket in perIP for every
+// granted entry, and one token of the session's refusal budget for every
+// refused one. It waits briefly like spendRecipients and reports whether
+// it got all of them.
+//
+// Charging the address only for granted entries keeps clients that share
+// one address, such as every client of an onion service, from exhausting
+// each other's budget with junk proofs: whoever sends those exhausts only
+// its own connection's refusal budget. Granted entries need a valid access
+// key, which only the recipient's contacts hold.
+func (s *session) chargeAccess(allowed []bool, perIP *ipBuckets) bool {
+	granted := 0
+	for _, ok := range allowed {
+		if ok {
+			granted++
+		}
+	}
+	refused := len(allowed) - granted
+	now := s.srv.now()
+	reservations := make([]*rate.Reservation, 0, 2)
+	if refused > 0 {
+		reservations = append(reservations, s.refusalLimiter.ReserveN(now, refused))
+	}
+	if granted > 0 {
+		reservations = append(reservations, perIP.reserve(s.ipKey, granted, now))
+	}
+	return s.await(now, reservations...)
+}
+
+// admitAnonymousLookup decides an anonymous KeyRequest or PrekeyRequest
+// for id. It spends the session's prekey request budget, checks proof
+// like a sealed send and charges the outcome with chargeAccess against
+// the per-address lookup buckets. ok is true when the lookup may proceed;
+// otherwise code is RateLimited, Internal, or NotFound for an unknown ID
+// and a refused proof alike.
+func (s *session) admitAnonymousLookup(id, proof []byte) (protocol.ErrorCode, bool) {
+	if !s.prekeyLimiter.Allow() {
+		return protocol.ErrCodeRateLimited, false
+	}
+	allowed, ok := s.srv.sealedAccess([]protocol.SealedRecipient{{To: id, AccessProof: proof}})
+	if !ok {
+		return protocol.ErrCodeInternal, false
+	}
+	if !s.chargeAccess(allowed, s.srv.lookupIP) {
+		return protocol.ErrCodeRateLimited, false
+	}
+	if !allowed[0] {
+		return protocol.ErrCodeNotFound, false
+	}
+	return 0, true
+}
+
+// handleAnonymousKeyRequest answers a KeyRequest carrying an access proof:
+// the bundle of an identity the proof grants access to, or NotFound.
+func (s *session) handleAnonymousKeyRequest(frame protocol.Frame, req protocol.KeyRequest) bool {
+	if !s.enterMode(modeAnonymous) {
+		return s.fail(frame.ID, protocol.ErrCodeBadRequest)
+	}
+	if code, ok := s.admitAnonymousLookup(req.ID, req.AccessProof); !ok {
+		return s.reject(frame.ID, code)
+	}
+	raw, code, ok := s.srv.loadBundle(identity.ID(req.ID))
+	if !ok {
+		return s.reject(frame.ID, code)
+	}
+	return respond(s, protocol.TypeKeyResponse, frame.ID, protocol.KeyResponse{Bundle: raw})
+}
+
+// handleAnonymousPrekeyRequest answers a PrekeyRequest carrying an access
+// proof: the prekey bundle of an identity the proof grants access to,
+// consuming one of its one-time prekeys, or NotFound.
+//
+// The relay still learns which one-time prekey it handed to which
+// anonymous connection, but not who holds that connection; the key ID
+// later travels only inside sealed, padded envelopes.
+func (s *session) handleAnonymousPrekeyRequest(frame protocol.Frame, req protocol.PrekeyRequest) bool {
+	if !s.enterMode(modeAnonymous) {
+		return s.fail(frame.ID, protocol.ErrCodeBadRequest)
+	}
+	if code, ok := s.admitAnonymousLookup(req.ID, req.AccessProof); !ok {
+		return s.reject(frame.ID, code)
+	}
+	response, code, ok := s.srv.takePrekeys(identity.ID(req.ID))
+	if !ok {
+		return s.reject(frame.ID, code)
+	}
+	return respond(s, protocol.TypePrekeyResponse, frame.ID, response)
 }
 
 // sealedAccess reports, for every entry, whether its proof grants access to
 // its recipient: the recipient is a stored identity with an access key,
-// and either it allows unidentified senders or the proof equals its
-// verifier. Every entry costs one lookup and one constant-time comparison
-// whatever the outcome, so the answer is the only thing that differs
-// between an unknown recipient and a wrong proof. ok is false after a
-// database failure.
+// and either it allows unidentified senders or the hash of the proof
+// equals the stored verifier hash. Every entry costs one lookup, one hash
+// and one constant-time comparison whatever the outcome, so the answer is
+// the only thing that differs between an unknown recipient and a wrong
+// proof. ok is false after a database failure.
 func (s *Server) sealedAccess(entries []protocol.SealedRecipient) (allowed []bool, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
@@ -198,9 +293,9 @@ func (s *Server) sealedAccess(entries []protocol.SealedRecipient) (allowed []boo
 			return nil, false
 		}
 		if !found {
-			key = serverdb.AccessKey{Verifier: dummyVerifier}
+			key = dummyAccessKey
 		}
-		match := subtle.ConstantTimeCompare(key.Verifier[:], entry.AccessProof) == 1
+		match := key.Matches(entry.AccessProof)
 		allowed[i] = found && (match || key.AllowUnidentified)
 	}
 	return allowed, true
@@ -231,8 +326,7 @@ func (s *Server) storeSealed(recipients [][32]byte, payload []byte) ([]serverdb.
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
 	now := s.now()
-	limits := serverdb.QueueLimits{MaxMessages: s.cfg.Limits.MaxQueuedMessages, MaxBytes: s.cfg.Limits.MaxQueuedBytes}
-	outcomes, err := s.db.EnqueueSealedMulti(ctx, recipients, payload, now, now.Add(s.cfg.UndeliveredTTL.Std()), limits)
+	outcomes, err := s.db.EnqueueSealedMulti(ctx, recipients, payload, now, s.queueExpiry(now), s.queueLimits())
 	if err != nil {
 		s.logger.Error("cannot store message", "err", err)
 		return nil, protocol.ErrCodeInternal, false
@@ -254,9 +348,9 @@ type ipBuckets struct {
 	lastSweep time.Time
 }
 
-func newIPBuckets(perMinute, burst, maxKeys int) *ipBuckets {
+func newIPBuckets(perMinute float64, burst, maxKeys int) *ipBuckets {
 	return &ipBuckets{
-		limit:   rate.Limit(float64(perMinute) / 60),
+		limit:   rate.Limit(perMinute / 60),
 		burst:   burst,
 		maxKeys: maxKeys,
 		buckets: make(map[netip.Addr]*rate.Limiter),
