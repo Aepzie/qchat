@@ -119,7 +119,7 @@ func TestAnonymousLinkConnectsLazily(t *testing.T) {
 		pauses.Add(1)
 		return 10 * time.Millisecond
 	}
-	link.wait = 200 * time.Millisecond
+	link.wait = 10 * time.Second
 	time.Sleep(50 * time.Millisecond)
 	if created.Load() != 0 {
 		t.Fatal("the anonymous session was created before any sealed request")
@@ -130,8 +130,8 @@ func TestAnonymousLinkConnectsLazily(t *testing.T) {
 			t.Fatalf("Request without a relay = %v, want ErrNotConnected", err)
 		}
 	}
-	if created.Load() != 1 || pauses.Load() != 1 {
-		t.Fatalf("%d sessions after %d pauses, want one of each", created.Load(), pauses.Load())
+	if created.Load() != 2 || pauses.Load() != 2 {
+		t.Fatalf("%d sessions after %d pauses, want a fresh session after each ended one", created.Load(), pauses.Load())
 	}
 	if err := link.Ack(1); !errors.Is(err, client.ErrWrongSession) {
 		t.Fatalf("Ack = %v", err)

@@ -123,7 +123,7 @@ type envelopeWire struct {
 
 func (e Envelope) check() error {
 	if e.Init != nil && (len(e.Init) == 0 || len(e.Init) > MaxInitSize) {
-		return fmt.Errorf("Init must be absent or 1 to %d bytes", MaxInitSize)
+		return fmt.Errorf("init must be absent or 1 to %d bytes", MaxInitSize)
 	}
 	if len(e.Header) == 0 || len(e.Header) > MaxHeaderSize {
 		return fmt.Errorf("header must be 1 to %d bytes", MaxHeaderSize)

@@ -210,7 +210,7 @@ func (t target) dialer() func(ctx context.Context, network, addr string) (net.Co
 // applications (IsolateSOCKSAuth).
 func newIsolationToken() string {
 	var token [16]byte
-	rand.Read(token[:])
+	_, _ = rand.Read(token[:])
 	return hex.EncodeToString(token[:])
 }
 
@@ -339,7 +339,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if p == nil {
 		return 0
 	}
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 	return runInterface(t, p, o.invite, stderr)
 }
 
@@ -391,7 +391,7 @@ func openProfile(dir string, keepPassphrase bool) (openedProfile, error) {
 	})
 	if _, err := tea.NewProgram(model).Run(); err != nil {
 		if opened.profile != nil {
-			opened.profile.Close()
+			_ = opened.profile.Close()
 		}
 		clear(opened.passphrase)
 		return openedProfile{}, err

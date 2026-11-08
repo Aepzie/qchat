@@ -152,18 +152,12 @@ type App struct {
 	backlogUntil   time.Time
 	dropped        int
 	denied         *client.RegistrationDenied
-	// anonUp is the last reported state of the anonymous session;
-	// prefetched holds prekeys fetched ahead of sealed session starts and
-	// prefetching the peers a fetch is scheduled for (see sealed.go).
-	anonUp      bool
-	prefetched  map[identity.ID]prefetched
-	prefetching map[identity.ID]bool
+	// anonUp is the last reported state of the anonymous session.
+	anonUp bool
 
-	// shareDelay and prefetchDelay return the random pauses before the own
-	// access key is shared with the next peer after a rotation and before
-	// prekeys are fetched for a sealed session start.
-	shareDelay    func() time.Duration
-	prefetchDelay func() time.Duration
+	// shareDelay returns the random pause before the own access key is
+	// shared with the next peer after a rotation.
+	shareDelay func() time.Duration
 }
 
 // New returns an App for an unlocked profile. invite is the invite code
@@ -205,10 +199,7 @@ func New(p *profile.Profile, invite string) (*App, error) {
 		groupStatus:    map[messageKey]uint8{},
 		shadows:        map[identity.ID]shadowSession{},
 		handshakes:     map[identity.ID][]time.Time{},
-		prefetched:     map[identity.ID]prefetched{},
-		prefetching:    map[identity.ID]bool{},
 		shareDelay:     func() time.Duration { return randomDelay(maxShareDelay) },
-		prefetchDelay:  func() time.Duration { return randomDelay(maxPrefetchDelay) },
 	}, nil
 }
 

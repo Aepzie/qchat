@@ -448,43 +448,49 @@ func TestRemovingContactRevokesAccessKey(t *testing.T) {
 	}
 }
 
-func TestSealedSessionStartUsesPrefetchedPrekeys(t *testing.T) {
+func TestSealedSessionStartUsesAnonymousLookups(t *testing.T) {
 	r := newFakeRelay()
 	ctx := context.Background()
-	alice, carol := newSealedUser(t, r, "Alice"), newSealedUser(t, r, "Carol")
+	alice, carol, dave := newSealedUser(t, r, "Alice"), newSealedUser(t, r, "Carol"), newSealedUser(t, r, "Dave")
 	alice.add(carol)
+	alice.add(dave)
 	carol.add(alice)
 	key := carol.app.ownAccessKey()
 	if err := alice.prof.DB.PutSetting(ctx, idSetting(peerKeyPrefix, carol.id), key[:]); err != nil {
 		t.Fatal(err)
 	}
-	pool := func() int {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		return len(r.oneTime[carol.id])
-	}
-	before := pool()
+	identified, anonymous := r.identifiedLookups, r.anonLookups
 	m := alice.send(carol, "first, sealed")
-	if m.Status != tui.StatusFailed || m.Route != tui.RouteSealed || !strings.Contains(m.Error, "preparing") {
-		t.Fatalf("sealed send without a session: status %v, route %v, error %q", m.Status, m.Route, m.Error)
-	}
-	alice.app.bg.Wait()
-	if pool() != before-1 {
-		t.Fatal("prekeys were not fetched in the background")
-	}
-	m = alice.send(carol, "second, sealed")
 	if m.Status != tui.StatusSent || m.Route != tui.RouteSealed {
-		t.Fatalf("send with prefetched prekeys: status %v (%s)", m.Status, m.Error)
+		t.Fatalf("sealed send without a session: status %v, route %v (%s)", m.Status, m.Route, m.Error)
 	}
-	if pool() != before-1 {
-		t.Fatal("prekeys were fetched right before the sealed send")
+	if r.identifiedLookups != identified || r.anonLookups != anonymous+1 {
+		t.Fatalf("lookups: %d identified, %d anonymous; want one anonymous prekey lookup only", r.identifiedLookups-identified, r.anonLookups-anonymous)
 	}
 	if rows := r.queued(carol.id); len(rows) != 1 || rows[0].From != protocol.SealedFrom {
 		t.Fatalf("rows %+v", rows)
 	}
 	got := carol.incoming()
-	if len(got) != 1 || got[0].ContactID != alice.cid() || got[0].Message.Text != "second, sealed" {
+	if len(got) != 1 || got[0].ContactID != alice.cid() || got[0].Message.Text != "first, sealed" {
 		t.Fatalf("carol was shown %+v", got)
+	}
+	if _, err := alice.app.fetchBundle(ctx, carol.id); err != nil || r.anonLookups != anonymous+2 || r.identifiedLookups != identified {
+		t.Fatalf("bundle lookup for a peer with a known key: %v, %d anonymous lookups", err, r.anonLookups-anonymous)
+	}
+
+	wrong, err := sealed.NewAccessKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := alice.prof.DB.PutSetting(ctx, idSetting(peerKeyPrefix, dave.id), wrong[:]); err != nil {
+		t.Fatal(err)
+	}
+	m = alice.send(dave, "wrong key")
+	if m.Status != tui.StatusFailed || m.Route != tui.RouteSealed || !strings.Contains(m.Error, "waiting for updated key") {
+		t.Fatalf("lookup with a wrong key: status %v, route %v, error %q", m.Status, m.Route, m.Error)
+	}
+	if !alice.app.keyStale(ctx, dave.id) || r.identifiedLookups != identified {
+		t.Fatal("a refused anonymous lookup was not marked stale or fell back to an identified one")
 	}
 }
 
@@ -573,6 +579,9 @@ func TestSealedSenderThroughRelay(t *testing.T) {
 	}
 	if !alice.lastDelivery(t).IsSealed() {
 		t.Fatal("the reply was not sealed")
+	}
+	if _, err := alice.app.fetchBundle(context.Background(), bobID); err != nil {
+		t.Fatalf("anonymous bundle lookup through the relay: %v", err)
 	}
 	if alice.droppedCount()+bob.droppedCount() != 0 {
 		t.Fatalf("dropped %d and %d deliveries", alice.droppedCount(), bob.droppedCount())

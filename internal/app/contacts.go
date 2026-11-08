@@ -43,15 +43,22 @@ func (a *App) getContact(ctx context.Context, id identity.ID) (clientdb.Contact,
 }
 
 // fetchBundle asks the relay for the bundle of id and verifies that it
-// belongs to id.
+// belongs to id. If id's access key is known and an anonymous session is
+// attached, the lookup goes over the anonymous session with the access
+// proof, so the relay does not learn who looks the bundle up; otherwise it
+// goes over the authenticated session.
 func (a *App) fetchBundle(ctx context.Context, id identity.ID) (*identity.Bundle, error) {
-	sess := a.session()
+	sess, req := a.session(), protocol.KeyRequest{ID: id[:]}
+	timeout := requestTimeout
+	if route, err := a.routeTo(ctx, id); err == nil && route.sealed {
+		sess, req.AccessProof, timeout = a.anonSession(), route.proof[:], anonymousRequestTimeout
+	}
 	if sess == nil {
 		return nil, ErrOffline
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	frame, err := sess.Request(ctx, protocol.TypeKeyRequest, protocol.KeyRequest{ID: id[:]})
+	frame, err := sess.Request(ctx, protocol.TypeKeyRequest, req)
 	var remote *client.RemoteError
 	switch {
 	case errors.As(err, &remote) && remote.Code == protocol.ErrCodeNotFound:

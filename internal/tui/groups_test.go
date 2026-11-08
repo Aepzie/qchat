@@ -67,6 +67,7 @@ func TestGroupSidebarAndHistory(t *testing.T) {
 	if got := fb.sent[len(fb.sent)-1]; got != id+"|see you thursday" {
 		t.Errorf("sent %q", got)
 	}
+	checkFits(t, m)
 }
 
 func TestGroupIncomingMessageAndNotice(t *testing.T) {

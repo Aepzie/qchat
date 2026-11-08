@@ -75,7 +75,7 @@ func fetchRelayBundle(t target, dir string, passphrase []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer probe.Close()
+	defer func() { _ = probe.Close() }()
 
 	opts, _ := lookupOptions(t, app.AuthOnly(probe.Identity))
 	sess, err := client.New(opts)

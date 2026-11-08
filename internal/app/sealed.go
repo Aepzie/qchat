@@ -61,10 +61,11 @@ import (
 // reported as a failure and never retried identified, and the same bytes
 // are never sent on another path. A refusal by the relay (NotFound,
 // RateLimited, Internal) marks the key stale ("sealed.st.<id>") until a new
-// key arrives or a sealed send succeeds again. A new session for a sealed
-// route never fetches prekeys right before the send: it uses prekeys
-// fetched earlier (prefetchPrekeys, after connecting and in the
-// background), and fails until they are there.
+// key arrives or a sealed send succeeds again. Bundles and prekeys of a
+// peer whose key is known are looked up on the anonymous session with the
+// access proof (KeyRequest and PrekeyRequest with AccessProof), never on
+// the authenticated one; peers without a known key are looked up on the
+// authenticated session, which only ever precedes an identified send.
 //
 // Group messages go with SealedSendMulti, one store-once payload for all,
 // only when the key of every other member is known; otherwise the whole
@@ -107,11 +108,9 @@ const (
 	// maxShareDelay bounds the random pause between two peers when the
 	// own key is redistributed after a rotation.
 	maxShareDelay = 5 * time.Minute
-	// maxPrefetchDelay bounds the random pause before prekeys are fetched
-	// for a sealed session start, so that the fetch is not tied to a send.
-	maxPrefetchDelay = 2 * time.Minute
-	// prefetchMaxAge is how long prefetched prekeys are used.
-	prefetchMaxAge = 24 * time.Hour
+	// anonymousRequestTimeout bounds an anonymous lookup, which may first
+	// have to wait for the anonymous session to connect.
+	anonymousRequestTimeout = 2 * time.Minute
 )
 
 // Flags of outgoing messages recording how they were sent. They use the
@@ -123,8 +122,7 @@ const (
 
 // Reasons shown for sealed sends that did not go out.
 const (
-	reasonSealedRefused   = "could not deliver sealed — waiting for updated key"
-	reasonSealedPreparing = "preparing a sealed session with this contact; try again shortly"
+	reasonSealedRefused = "could not deliver sealed — waiting for updated key"
 )
 
 // idName encodes an ID for a setting name: 52 lowercase base32 characters.
@@ -132,12 +130,6 @@ var idName = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 func idSetting(prefix string, id identity.ID) string {
 	return prefix + strings.ToLower(idName.EncodeToString(id[:]))
-}
-
-// prefetched are prekeys fetched ahead of a sealed session start.
-type prefetched struct {
-	resp protocol.PrekeyResponse
-	at   time.Time
 }
 
 // randomDelay returns a uniformly random duration below limit.
@@ -692,93 +684,33 @@ func (a *App) receiveSealedPairwise(ctx context.Context, d client.Delivery, rela
 }
 
 // sealedSessionStart returns a new initiator session with c for a sealed
-// route from prefetched prekeys. Without fresh ones it schedules a
-// background fetch and returns a reason: prekeys are never fetched right
-// before a sealed send.
+// route. The prekeys are looked up on the anonymous session with c's
+// access proof, so that the relay does not learn who starts the session;
+// they are never fetched on the authenticated session right before a sealed
+// send. A refused lookup marks the key stale.
 func (a *App) sealedSessionStart(ctx context.Context, c clientdb.Contact) (clientdb.Session, string, error) {
 	id := identity.ID(c.ID)
-	a.mu.Lock()
-	p, ok := a.prefetched[id]
-	delete(a.prefetched, id)
-	a.mu.Unlock()
-	if !ok || a.now().Sub(p.at) > prefetchMaxAge {
-		a.schedulePrefetch(id)
-		return clientdb.Session{}, reasonSealedPreparing, nil
-	}
-	started, reason, err := a.sessionFromPrekeys(ctx, c, p.resp)
-	if reason != "" {
-		a.schedulePrefetch(id)
-	}
-	return started, reason, err
-}
-
-// schedulePrefetch fetches prekeys of id after a random pause of up to
-// prefetchDelay(), in the background, unless a fetch is pending already.
-func (a *App) schedulePrefetch(id identity.ID) {
-	a.mu.Lock()
-	if a.prefetching[id] {
-		a.mu.Unlock()
-		return
-	}
-	a.prefetching[id] = true
-	a.mu.Unlock()
-	a.bg.Add(1)
-	go func() {
-		defer a.bg.Done()
-		defer func() {
-			a.mu.Lock()
-			delete(a.prefetching, id)
-			a.mu.Unlock()
-		}()
-		ctx, cancel := a.lifetime()
-		defer cancel()
-		t := time.NewTimer(a.prefetchDelay())
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return
-		case <-t.C:
-		}
-		a.prefetchOne(ctx, id)
-	}()
-}
-
-// prefetchOne fetches and keeps prekeys of id.
-func (a *App) prefetchOne(ctx context.Context, id identity.ID) {
-	resp, reason := a.requestPrekeys(ctx, id)
-	if reason != "" {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.prefetched[id] = prefetched{resp: resp, at: a.now()}
-}
-
-// prefetchPrekeys fetches prekeys for every peer whose access key is known
-// but with whom there is no session, so that a sealed session start later
-// does not need a fetch right before the send. It runs after connecting,
-// as part of maintenance.
-func (a *App) prefetchPrekeys(ctx context.Context) {
-	if a.anonSession() == nil {
-		return
-	}
-	peers, err := a.sharingPeers(ctx)
+	anon := a.anonSession()
+	route, err := a.routeTo(ctx, id)
 	if err != nil {
-		return
+		return clientdb.Session{}, "", err
 	}
-	for _, id := range peers {
-		a.mu.Lock()
-		_, have := a.prefetched[id]
-		a.mu.Unlock()
-		if have {
-			continue
-		}
-		if _, found, err := a.peerAccessKey(ctx, id); err != nil || !found {
-			continue
-		}
-		if _, found, err := a.loadSession(ctx, id); err != nil || found {
-			continue
-		}
-		a.prefetchOne(ctx, id)
+	if anon == nil || !route.sealed {
+		return clientdb.Session{}, "not connected (sealed sender)", nil
 	}
+	rctx, cancel := context.WithTimeout(ctx, anonymousRequestTimeout)
+	defer cancel()
+	frame, err := anon.Request(rctx, protocol.TypePrekeyRequest, protocol.PrekeyRequest{ID: id[:], AccessProof: route.proof[:]})
+	if refusedSealed(err) {
+		a.setStale(ctx, id, true)
+		return clientdb.Session{}, reasonSealedRefused, nil
+	}
+	if reason := relayFailure(err); reason != "" {
+		return clientdb.Session{}, reason + " (sealed sender)", nil
+	}
+	resp, err := protocol.DecodeBody[protocol.PrekeyResponse](frame, protocol.TypePrekeyResponse)
+	if err != nil {
+		return clientdb.Session{}, "unexpected answer from the server", nil
+	}
+	return a.sessionFromPrekeys(ctx, c, resp)
 }

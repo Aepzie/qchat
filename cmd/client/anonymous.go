@@ -63,12 +63,13 @@ func randomPause(limit time.Duration) time.Duration {
 	return time.Duration(binary.BigEndian.Uint64(b[:]) % uint64(limit))
 }
 
-// anonymousLink is the anonymous relay session used for sealed sends, as
-// app.Requester. It is created and connected lazily: the first sealed
-// request starts it after a random pause (delay), and every request waits
-// until it is connected. Each link builds its session once; a deliberate
-// new anonymous connection needs a new link, and thus a new session and
-// isolation token.
+// anonymousLink is the anonymous relay session used for sealed sends and
+// anonymous lookups, as app.Requester. Sessions are created lazily: a
+// request that finds no live session starts one after a random pause
+// (delay) and waits until it is connected. An anonymous client.Session
+// ends when its connection fails or closes instead of reconnecting, so the
+// next request then starts a new Session, whose dialer carries a fresh
+// isolation token and thus a new Tor circuit.
 type anonymousLink struct {
 	ctx        context.Context
 	newSession func() (*client.Session, error)
@@ -76,17 +77,31 @@ type anonymousLink struct {
 	wait       time.Duration
 	onState    func(connected bool)
 
-	once sync.Once
-	sess *client.Session
-	err  error
-	done chan struct{}
-
-	mu sync.Mutex
-	up chan struct{}
+	mu       sync.Mutex
+	cur      *anonymousRun
+	starting chan struct{}
+	closed   bool
+	runs     sync.WaitGroup
 }
 
-// newAnonymousLink returns a link that runs its session until ctx ends and
-// reports connection changes to onState.
+// anonymousRun is one anonymous Session of a link.
+type anonymousRun struct {
+	sess  *client.Session
+	up    chan struct{}
+	ended chan struct{}
+}
+
+func closedChan(c <-chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
+}
+
+// newAnonymousLink returns a link whose sessions run until ctx ends and
+// report connection changes to onState.
 func newAnonymousLink(ctx context.Context, newSession func() (*client.Session, error), onState func(bool)) *anonymousLink {
 	return &anonymousLink{
 		ctx:        ctx,
@@ -94,102 +109,148 @@ func newAnonymousLink(ctx context.Context, newSession func() (*client.Session, e
 		delay:      func() time.Duration { return randomPause(maxAnonymousDelay) },
 		wait:       anonymousConnectWait,
 		onState:    onState,
-		done:       make(chan struct{}),
-		up:         make(chan struct{}),
 	}
 }
 
-// start creates and runs the session once, after the random pause.
-func (l *anonymousLink) start() {
-	l.once.Do(func() {
-		pause := time.NewTimer(l.delay())
-		defer pause.Stop()
-		select {
-		case <-l.ctx.Done():
-			l.err = client.ErrNotConnected
-			close(l.done)
-			return
-		case <-pause.C:
-		}
-		if l.sess, l.err = l.newSession(); l.err != nil {
-			close(l.done)
-			return
-		}
-		go func() {
-			defer close(l.done)
-			_ = l.sess.Run(l.ctx)
-		}()
-		go l.watch(l.sess.Events())
-	})
-}
-
-// watch tracks the connection state of the session.
-func (l *anonymousLink) watch(events <-chan client.Event) {
-	for ev := range events {
-		sc, ok := ev.(client.StateChanged)
-		if !ok {
-			continue
-		}
-		connected := sc.State == client.Connected
+// current returns the live session, starting a new one after the random
+// pause if there is none. Concurrent callers share one start.
+func (l *anonymousLink) current(ctx context.Context) (*anonymousRun, error) {
+	for {
 		l.mu.Lock()
-		changed := l.isUpLocked() != connected
 		switch {
-		case !changed:
-		case connected:
-			close(l.up)
-		default:
-			l.up = make(chan struct{})
+		case l.closed:
+			l.mu.Unlock()
+			return nil, client.ErrNotConnected
+		case l.cur != nil && !closedChan(l.cur.ended):
+			run := l.cur
+			l.mu.Unlock()
+			return run, nil
+		case l.starting != nil:
+			starting := l.starting
+			l.mu.Unlock()
+			select {
+			case <-starting:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		starting := make(chan struct{})
+		l.starting = starting
+		l.mu.Unlock()
+		run, err := l.start()
+		l.mu.Lock()
+		l.starting = nil
+		if run != nil {
+			l.cur = run
 		}
 		l.mu.Unlock()
-		if changed && l.onState != nil {
-			l.onState(connected)
+		close(starting)
+		return run, err
+	}
+}
+
+// start waits the random pause and then creates and runs a new session.
+func (l *anonymousLink) start() (*anonymousRun, error) {
+	pause := time.NewTimer(l.delay())
+	defer pause.Stop()
+	select {
+	case <-l.ctx.Done():
+		return nil, client.ErrNotConnected
+	case <-pause.C:
+	}
+	sess, err := l.newSession()
+	if err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return nil, client.ErrNotConnected
+	}
+	l.runs.Add(1)
+	l.mu.Unlock()
+	run := &anonymousRun{sess: sess, up: make(chan struct{}), ended: make(chan struct{})}
+	go func() {
+		defer l.runs.Done()
+		defer close(run.ended)
+		_ = sess.Run(l.ctx)
+	}()
+	go l.watch(run)
+	return run, nil
+}
+
+// watch tracks the connection state of one session and reports changes.
+func (l *anonymousLink) watch(run *anonymousRun) {
+	connected := false
+	report := func(now bool) {
+		if now == connected {
+			return
+		}
+		connected = now
+		if now {
+			close(run.up)
+		}
+		if l.onState != nil {
+			l.onState(now)
 		}
 	}
-}
-
-func (l *anonymousLink) isUpLocked() bool {
-	select {
-	case <-l.up:
-		return true
-	default:
-		return false
+	for ev := range run.sess.Events() {
+		if sc, ok := ev.(client.StateChanged); ok {
+			report(sc.State == client.Connected)
+		}
 	}
+	report(false)
 }
 
-func (l *anonymousLink) connected() <-chan struct{} {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.up
-}
-
-// Request starts the session if needed, waits until it is connected, at
-// most l.wait, and sends the request on it.
+// Request sends the request on the live session, starting a new one if
+// needed and waiting until it is connected, at most l.wait.
 func (l *anonymousLink) Request(ctx context.Context, t protocol.FrameType, body any) (protocol.Frame, error) {
-	l.start()
-	if l.err != nil {
-		return protocol.Frame{}, l.err
-	}
 	wait := time.NewTimer(l.wait)
 	defer wait.Stop()
-	select {
-	case <-l.connected():
-	case <-wait.C:
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-wait.C:
+			cancel()
+		case <-wctx.Done():
+		}
+	}()
+	run, err := l.current(wctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return protocol.Frame{}, ctx.Err()
+		}
 		return protocol.Frame{}, client.ErrNotConnected
-	case <-ctx.Done():
-		return protocol.Frame{}, ctx.Err()
 	}
-	return l.sess.Request(ctx, t, body)
+	select {
+	case <-run.up:
+	case <-run.ended:
+		return protocol.Frame{}, client.ErrNotConnected
+	case <-wctx.Done():
+		if ctx.Err() != nil {
+			return protocol.Frame{}, ctx.Err()
+		}
+		return protocol.Frame{}, client.ErrNotConnected
+	}
+	return run.sess.Request(ctx, t, body)
 }
 
 // Ack fails: nothing is ever delivered on an anonymous session.
 func (l *anonymousLink) Ack(uint64) error { return client.ErrWrongSession }
 
-// stopped returns a channel closed once the session has stopped, or at once
-// if it never started.
+// stopped stops the link from starting sessions and returns a channel
+// closed once every session it started has stopped. The caller cancels the
+// link's context first.
 func (l *anonymousLink) stopped() <-chan struct{} {
-	l.once.Do(func() {
-		l.err = client.ErrNotConnected
-		close(l.done)
-	})
-	return l.done
+	l.mu.Lock()
+	l.closed = true
+	l.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		l.runs.Wait()
+		close(done)
+	}()
+	return done
 }

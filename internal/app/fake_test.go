@@ -60,6 +60,10 @@ type fakeRelay struct {
 	verifiers   map[identity.ID][]byte
 	sealedSends int
 	sealedMulti int
+	// identifiedLookups and anonLookups count KeyRequest and
+	// PrekeyRequest on authenticated and anonymous connections.
+	identifiedLookups int
+	anonLookups       int
 }
 
 func newFakeRelay() *fakeRelay {
@@ -97,11 +101,11 @@ func (c *fakeConn) Request(ctx context.Context, t protocol.FrameType, body any) 
 	defer r.mu.Unlock()
 	switch req := body.(type) {
 	case protocol.KeyRequest:
-		b, ok := r.bundles[identity.ID(req.ID)]
-		if !ok {
-			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		if req.AccessProof != nil {
+			return protocol.Frame{}, client.ErrWrongSession
 		}
-		return protocol.NewFrame(protocol.TypeKeyResponse, 1, protocol.KeyResponse{Bundle: b})
+		r.identifiedLookups++
+		return r.keyResponseLocked(identity.ID(req.ID))
 	case protocol.PrekeyUpload:
 		r.uploads[c.id] = append(r.uploads[c.id], req)
 		if r.failUploads && (req.SignedPrekey != nil || len(req.OneTimePrekeys) > 0) {
@@ -113,16 +117,11 @@ func (c *fakeConn) Request(ctx context.Context, t protocol.FrameType, body any) 
 		r.oneTime[c.id] = append(r.oneTime[c.id], req.OneTimePrekeys...)
 		return protocol.NewFrame(protocol.TypePrekeyStatus, 1, r.statusLocked(c.id))
 	case protocol.PrekeyRequest:
-		id := identity.ID(req.ID)
-		spk, ok := r.signed[id]
-		if !ok {
-			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		if req.AccessProof != nil {
+			return protocol.Frame{}, client.ErrWrongSession
 		}
-		resp := protocol.PrekeyResponse{Bundle: r.bundles[id], SignedPrekey: spk}
-		if pool := r.oneTime[id]; len(pool) > 0 {
-			resp.OneTimePrekey, r.oneTime[id] = pool[0], pool[1:]
-		}
-		return protocol.NewFrame(protocol.TypePrekeyResponse, 1, resp)
+		r.identifiedLookups++
+		return r.prekeyResponseLocked(identity.ID(req.ID))
 	case protocol.Send:
 		to := identity.ID(req.To)
 		if _, ok := r.bundles[to]; !ok {
@@ -221,7 +220,6 @@ func (u *fakeUser) attach(p *profile.Profile) {
 	}
 	a.now = u.relay.clock.Now
 	a.shareDelay = func() time.Duration { return 0 }
-	a.prefetchDelay = func() time.Duration { return 0 }
 	u.prof, u.app, u.id = p, a, p.Identity.ID()
 	a.UseSession(&fakeConn{relay: u.relay, id: u.id})
 	u.relay.mu.Lock()
@@ -375,6 +373,20 @@ func (c *fakeAnon) Request(ctx context.Context, t protocol.FrameType, body any) 
 		}
 		r.sealedMulti++
 		return protocol.NewFrame(protocol.TypeSendMultiResult, 1, result)
+	case protocol.KeyRequest:
+		id := identity.ID(req.ID)
+		if !allowed(id, req.AccessProof) {
+			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		}
+		r.anonLookups++
+		return r.keyResponseLocked(id)
+	case protocol.PrekeyRequest:
+		id := identity.ID(req.ID)
+		if !allowed(id, req.AccessProof) {
+			return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+		}
+		r.anonLookups++
+		return r.prekeyResponseLocked(id)
 	}
 	return protocol.Frame{}, client.ErrWrongSession
 }
@@ -384,4 +396,24 @@ func (r *fakeRelay) queued(id identity.ID) []client.Delivery {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.queues[id])
+}
+
+func (r *fakeRelay) keyResponseLocked(id identity.ID) (protocol.Frame, error) {
+	b, ok := r.bundles[id]
+	if !ok {
+		return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+	}
+	return protocol.NewFrame(protocol.TypeKeyResponse, 1, protocol.KeyResponse{Bundle: b})
+}
+
+func (r *fakeRelay) prekeyResponseLocked(id identity.ID) (protocol.Frame, error) {
+	spk, ok := r.signed[id]
+	if !ok {
+		return protocol.Frame{}, remote(protocol.ErrCodeNotFound)
+	}
+	resp := protocol.PrekeyResponse{Bundle: r.bundles[id], SignedPrekey: spk}
+	if pool := r.oneTime[id]; len(pool) > 0 {
+		resp.OneTimePrekey, r.oneTime[id] = pool[0], pool[1:]
+	}
+	return protocol.NewFrame(protocol.TypePrekeyResponse, 1, resp)
 }
