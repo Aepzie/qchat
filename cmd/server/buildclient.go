@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -140,6 +141,11 @@ func cmdBuildClient(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	settings, err := goEnvSettings(goTool, source, os.Environ())
+	if err != nil {
+		return err
+	}
+
 	build := clientBuild{addr: addr, pin: transport.FingerprintOf(cert), version: *clientVersion}
 	fmt.Fprintf(stdout, "Building qchat %s locked to %s\n", build.version, build.addr)
 	printFingerprint(stdout, build.pin)
@@ -150,7 +156,7 @@ func cmdBuildClient(args []string, stdout, stderr io.Writer) error {
 		path := filepath.Join(out, name)
 		cmd := exec.Command(goTool, goBuildArgs(build, path)...)
 		cmd.Dir = source
-		cmd.Env = goBuildEnv(os.Environ(), target)
+		cmd.Env = goBuildEnv(os.Environ(), settings, target)
 		cmd.Stdout = stderr
 		cmd.Stderr = stderr
 		if err := cmd.Run(); err != nil {
@@ -270,20 +276,78 @@ func goBuildArgs(build clientBuild, output string) []string {
 	}
 }
 
-// overriddenGoEnv lists environment variables that would change what go
-// build produces. goBuildEnv removes them from the inherited environment so
-// that the result depends only on the source tree and the toolchain.
-var overriddenGoEnv = []string{
-	"GOOS", "GOARCH", "CGO_ENABLED", "GOFLAGS", "GOWORK", "GOEXPERIMENT",
-	"GO386", "GOAMD64", "GOARM", "GOARM64",
+// pinnedGoEnv are the build settings goBuildEnv fixes, in this order,
+// after the target platform. GOENV=off makes go ignore the configuration
+// file written by "go env -w", which could otherwise set GOFLAGS,
+// GOEXPERIMENT, GOAMD64 and the like behind the back of the environment;
+// the remaining entries set the defaults explicitly.
+var pinnedGoEnv = []string{
+	"CGO_ENABLED=0",
+	"GOWORK=off",
+	"GOENV=off",
+	"GOFLAGS=",
+	"GOEXPERIMENT=",
+	"GOAMD64=v1",
+	"GOARM64=v8.0",
+	"GOFIPS140=off",
 }
 
-// goBuildEnv returns base without the variables in overriddenGoEnv, plus the
-// target platform, CGO_ENABLED=0 and GOWORK=off. Everything else, such as
-// PATH, GOCACHE, GOPROXY and GOTOOLCHAIN, is kept so that go keeps working
-// as configured.
-func goBuildEnv(base []string, target clientTarget) []string {
-	env := make([]string, 0, len(base)+5)
+// passThroughGoEnv are go settings that control where go finds the
+// toolchain, modules and caches, but not what it compiles. Because GOENV=off
+// hides values set with "go env -w", build-client reads their effective
+// values with goEnvSettings and passes them explicitly. Proxy variables of
+// the operating system (HTTPS_PROXY, NO_PROXY, ...) are not go settings and
+// are inherited unchanged.
+var passThroughGoEnv = []string{
+	"GOAUTH", "GOCACHE", "GOINSECURE", "GOMODCACHE", "GONOPROXY", "GONOSUMDB",
+	"GOPATH", "GOPRIVATE", "GOPROXY", "GOSUMDB", "GOTMPDIR", "GOTOOLCHAIN", "GOVCS",
+}
+
+// overriddenGoEnv lists the variables goBuildEnv removes from the inherited
+// environment: those it pins or passes through, and the level variables of
+// other architectures, which must not change the result either.
+var overriddenGoEnv = slices.Concat(
+	[]string{"GOOS", "GOARCH", "GO386", "GOARM", "GOPPC64", "GORISCV64"},
+	envNames(pinnedGoEnv),
+	passThroughGoEnv,
+)
+
+func envNames(entries []string) []string {
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i], _, _ = strings.Cut(entry, "=")
+	}
+	return names
+}
+
+// goEnvSettings returns the effective values of passThroughGoEnv, including
+// those set with "go env -w", as reported by "go env -json" running in dir
+// with env.
+func goEnvSettings(goTool, dir string, env []string) (map[string]string, error) {
+	cmd := exec.Command(goTool, append([]string{"env", "-json"}, passThroughGoEnv...)...)
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.Output()
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && len(exitErr.Stderr) > 0 {
+		return nil, fmt.Errorf("go env: %w: %s", err, bytes.TrimSpace(exitErr.Stderr))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("go env: %w", err)
+	}
+	settings := make(map[string]string, len(passThroughGoEnv))
+	if err := json.Unmarshal(output, &settings); err != nil {
+		return nil, fmt.Errorf("go env: %w", err)
+	}
+	return settings, nil
+}
+
+// goBuildEnv returns base without the variables in overriddenGoEnv, followed
+// by the non-empty settings (see goEnvSettings) in the order of
+// passThroughGoEnv, the target platform and pinnedGoEnv. Everything else,
+// such as PATH and HTTPS_PROXY, is kept so that go keeps working as
+// configured.
+func goBuildEnv(base []string, settings map[string]string, target clientTarget) []string {
+	env := make([]string, 0, len(base)+len(passThroughGoEnv)+len(pinnedGoEnv)+2)
 	for _, entry := range base {
 		name, _, _ := strings.Cut(entry, "=")
 		if slices.ContainsFunc(overriddenGoEnv, func(v string) bool { return strings.EqualFold(v, name) }) {
@@ -291,12 +355,13 @@ func goBuildEnv(base []string, target clientTarget) []string {
 		}
 		env = append(env, entry)
 	}
-	return append(env,
-		"GOOS="+target.goos,
-		"GOARCH="+target.goarch,
-		"CGO_ENABLED=0",
-		"GOWORK=off",
-	)
+	for _, name := range passThroughGoEnv {
+		if value := settings[name]; value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	env = append(env, "GOOS="+target.goos, "GOARCH="+target.goarch)
+	return append(env, pinnedGoEnv...)
 }
 
 // clientFileName returns qchat_<version>_<os>_<arch>, with .exe on Windows.

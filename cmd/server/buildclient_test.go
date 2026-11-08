@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"os"
@@ -200,23 +201,89 @@ func TestGoBuildEnv(t *testing.T) {
 		"GOARCH=386",
 		"CGO_ENABLED=1",
 		"GOAMD64=v3",
+		"GOARM64=v9.0",
+		"GOEXPERIMENT=boringcrypto",
+		"GOFIPS140=latest",
+		"GOENV=/elsewhere/go.env",
 		"GOWORK=/elsewhere/go.work",
 		"GOPROXY=off",
+		"HTTPS_PROXY=http://proxy.example:3128",
 		"GOOSE=kept",
 	}
-	got := goBuildEnv(base, clientTarget{"darwin", "arm64"})
+	settings := map[string]string{
+		"GOPROXY":    "https://proxy.example",
+		"GOMODCACHE": "/cache/mod",
+		"GOSUMDB":    "",
+		"GOFLAGS":    "-race",
+	}
+	got := goBuildEnv(base, settings, clientTarget{"darwin", "arm64"})
 	want := []string{
 		"PATH=/usr/bin",
 		"=C:=C:\\work",
-		"GOPROXY=off",
+		"HTTPS_PROXY=http://proxy.example:3128",
 		"GOOSE=kept",
+		"GOMODCACHE=/cache/mod",
+		"GOPROXY=https://proxy.example",
 		"GOOS=darwin",
 		"GOARCH=arm64",
 		"CGO_ENABLED=0",
 		"GOWORK=off",
+		"GOENV=off",
+		"GOFLAGS=",
+		"GOEXPERIMENT=",
+		"GOAMD64=v1",
+		"GOARM64=v8.0",
+		"GOFIPS140=off",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("goBuildEnv =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestGoBuildEnvIgnoresGoEnvFile checks against the real go command that
+// settings stored with "go env -w" cannot change the build, while the
+// module proxy configured there still reaches it.
+func TestGoBuildEnvIgnoresGoEnvFile(t *testing.T) {
+	goTool, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go toolchain not in PATH")
+	}
+	envFile := filepath.Join(t.TempDir(), "go.env")
+	content := "GOFLAGS=-tags=evil\nGOAMD64=v4\nGOPROXY=https://proxy.example.invalid\n"
+	if err := os.WriteFile(envFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := append(slices.DeleteFunc(os.Environ(), func(entry string) bool {
+		name, _, _ := strings.Cut(entry, "=")
+		return slices.ContainsFunc(overriddenGoEnv, func(v string) bool { return strings.EqualFold(v, name) })
+	}), "GOENV="+envFile)
+
+	settings, err := goEnvSettings(goTool, ".", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings["GOPROXY"] != "https://proxy.example.invalid" {
+		t.Errorf("GOPROXY from the go env file = %q, want it passed through", settings["GOPROXY"])
+	}
+	cmd := exec.Command(goTool, "env", "-json", "GOFLAGS", "GOAMD64", "GOPROXY")
+	cmd.Env = goBuildEnv(base, settings, clientTarget{"linux", "amd64"})
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go env: %v", err)
+	}
+	var effective map[string]string
+	if err := json.Unmarshal(output, &effective); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"GOFLAGS": "",
+		"GOAMD64": "v1",
+		"GOPROXY": "https://proxy.example.invalid",
+	}
+	for name, value := range want {
+		if effective[name] != value {
+			t.Errorf("effective %s = %q, want %q", name, effective[name], value)
+		}
 	}
 }
 

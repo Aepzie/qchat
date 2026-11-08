@@ -55,13 +55,24 @@ binary with `qchat --version`, which prints `(locked to chat.example.org:7443)`.
 ### Reproducible builds
 
 `build-client` builds with `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false`
-and `-ldflags "-s -w -buildid= ..."`, sets `GOWORK=off` and ignores
-`GOFLAGS`, `GOEXPERIMENT` and the `GOAMD64`/`GOARM`/`GOARM64`/`GO386` level
-variables of the calling environment. The binaries therefore depend only on:
+and `-ldflags "-s -w -buildid= ..."`. It sets `GOENV=off`, so settings
+stored with `go env -w` are ignored, and pins `GOWORK=off`, `GOFLAGS=`,
+`GOEXPERIMENT=`, `GOAMD64=v1`, `GOARM64=v8.0` and `GOFIPS140=off`, whatever
+the calling environment says. Settings that only locate the toolchain,
+modules and caches (`GOPROXY`, `GOSUMDB`, `GONOSUMDB`, `GOPRIVATE`,
+`GOMODCACHE`, `GOCACHE`, `GOTOOLCHAIN` and similar) keep their effective
+values, including those from `go env -w`, and `HTTPS_PROXY`/`NO_PROXY` are
+inherited. With an unmodified Go installation the binaries therefore depend
+only on:
 
-1. the source tree,
+1. the source tree and its module dependencies (fixed by `go.sum`),
 2. the exact Go toolchain version,
 3. the server address, fingerprint and version passed to `build-client`.
+
+A modified `GOROOT` (including its `go.env`) or a build cache shared with
+untrusted users is part of the toolchain and can change the result; build
+on a machine you control, and run `go clean -cache` first if you have any
+doubt about the build cache.
 
 Anyone with the same three inputs gets byte-identical binaries, which lets a
 second person confirm that the installer you distribute was built from the
