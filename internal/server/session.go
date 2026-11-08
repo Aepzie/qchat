@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -119,6 +120,8 @@ type session struct {
 	// prekeyLimiter bounds PrekeyRequest and uploadLimiter PrekeyUpload.
 	prekeyLimiter *rate.Limiter
 	uploadLimiter *rate.Limiter
+	// sealedLimiter counts the recipients named in sealed sends.
+	sealedLimiter *rate.Limiter
 	timer         *time.Timer
 
 	out        chan []byte
@@ -134,8 +137,13 @@ type session struct {
 	// authentication proof on it must sign. It is secret and never logged.
 	binding []byte
 
+	// ipKey is the connection-limit key of the client's address, used only
+	// for the per-IP sealed sender bucket. It is never logged.
+	ipKey netip.Addr
+
 	pendingClose  *closeRequest
 	challenge     *challenge
+	mode          sessionMode
 	authenticated bool
 	id            identity.ID
 	backlog       backlog
@@ -157,6 +165,7 @@ func newSession(srv *Server, conn *websocket.Conn, binding []byte) *session {
 		prekeyLimiter: rate.NewLimiter(srv.prekeyRate, srv.prekeyBurst),
 		multiLimiter:  rate.NewLimiter(rate.Limit(float64(limits.MultiRecipientsPerMinute)/60), MultiRecipientsBurst),
 		uploadLimiter: rate.NewLimiter(srv.uploadRate, srv.uploadBurst),
+		sealedLimiter: rate.NewLimiter(rate.Limit(float64(limits.SealedRecipientsPerMinute)/60), SealedRecipientsBurst),
 		out:           make(chan []byte, outboundQueueSize),
 		queue:         newByteBudget(limits.MaxQueueBytes),
 		stopping:      make(chan struct{}),
@@ -234,6 +243,12 @@ func (s *session) dispatch(frame protocol.Frame) bool {
 		return s.handleSend(frame)
 	case protocol.TypeSendMulti:
 		return s.handleSendMulti(frame)
+	case protocol.TypeSetAccessKey:
+		return s.handleSetAccessKey(frame)
+	case protocol.TypeSealedSend:
+		return s.handleSealedSend(frame)
+	case protocol.TypeSealedSendMulti:
+		return s.handleSealedSendMulti(frame)
 	default:
 		return s.fail(frame.ID, protocol.ErrCodeBadRequest)
 	}

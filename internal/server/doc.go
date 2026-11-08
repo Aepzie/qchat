@@ -23,8 +23,9 @@
 // # Identities, authentication and routing
 //
 // A session starts unauthenticated. It may send Ping, Register and
-// AuthBegin; KeyRequest, PrekeyUpload, PrekeyRequest, Send, SendMulti and
-// Ack require authentication.
+// AuthBegin, or instead sealed sends (see Sealed sender); KeyRequest,
+// PrekeyUpload, PrekeyRequest, Send, SendMulti, SetAccessKey and Ack
+// require authentication.
 //
 //   - Register{Bundle, Invite} verifies the bundle's self-signature and
 //     stores it. With registration = "open" any valid bundle is accepted;
@@ -108,9 +109,44 @@
 //   - Every 10 minutes, and when the server starts, expired messages are
 //     deleted. Expired messages are never delivered, even before that.
 //
-// Stored messages are ciphertext the relay cannot read. The sender ID is
-// stored alongside, because the recipient needs it; hiding it from the
-// relay (sealed sender) is left to a later phase.
+// Stored messages are ciphertext the relay cannot read. The sender ID of a
+// message sent on an authenticated session is stored alongside, because the
+// recipient needs it; sealed messages (below) are stored without one.
+//
+// # Sealed sender
+//
+// A session that completed the handshake and never sent Register,
+// AuthBegin or AuthProof may send SealedSend{To, AccessProof, Payload} and
+// SealedSendMulti{Entries, Payload}. The first sealed frame makes the
+// session anonymous for good: Register and AuthBegin then close it with a
+// fatal BadRequest, and a sealed frame on a session that registered or
+// began authentication is closed the same way, so a sealed message and an
+// identity are never seen on one connection.
+//
+//   - SetAccessKey{Verifier, AllowUnidentified} (authenticated sessions
+//     only, sharing the Register/AuthBegin bucket) stores the verifier of
+//     the identity's access key, replacing the previous one, and answers
+//     AccessKeySet.
+//   - A sealed send is accepted for a recipient that has a stored verifier
+//     equal to the AccessProof (compared in constant time) or that allows
+//     unidentified senders. Every other case, an unknown recipient
+//     included, is NotFound: Error NotFound for SealedSend, a NotFound
+//     entry in the SendMultiResult of SealedSendMulti. Each recipient costs
+//     one lookup and one comparison whatever the outcome. QueueFull is
+//     reported only after access was granted.
+//   - The payload is stored with a NULL sender and pushed as
+//     Deliver{From: 32 zero bytes, Payload, QueueID}, live and from the
+//     backlog alike.
+//   - Each recipient spends one token from a per-session bucket of
+//     limits.sealed_recipients_per_minute (burst 512) and one from a
+//     bucket shared by all anonymous sessions of the client's IPv4 address
+//     or IPv6 /64, of limits.sealed_recipients_per_minute_per_ip (burst
+//     1024). Missing tokens are waited for like those of SendMulti, else
+//     the request is answered RateLimited and nothing is stored. The
+//     per-address buckets are held in memory only while not full, at most
+//     65536 at once.
+//   - limits.max_message_size, the 64 MiB fan-out cap and the recipients'
+//     queue limits apply as for Send and SendMulti.
 //
 // An identity may hold at most limits.max_sessions_per_identity
 // authenticated sessions at once. An AuthProof beyond that is answered with
@@ -135,30 +171,34 @@
 // Errors caused by the request's content or by relay state are answered
 // with an Error frame and the session continues:
 //
-//   - Unauthorized: KeyRequest, PrekeyUpload, PrekeyRequest, Send, SendMulti
-//     or Ack before authentication;
-//   - NotFound: AuthBegin, KeyRequest or Send naming an unknown ID, or
-//     PrekeyRequest for an ID without an unexpired signed prekey;
+//   - Unauthorized: KeyRequest, PrekeyUpload, PrekeyRequest, Send, SendMulti,
+//     SetAccessKey or Ack before authentication (on anonymous sessions too);
+//   - NotFound: AuthBegin, KeyRequest or Send naming an unknown ID,
+//     PrekeyRequest for an ID without an unexpired signed prekey, or a
+//     SealedSend without access to its recipient;
 //   - RegistrationDenied: a new ID without a valid invite code;
 //   - Conflict: a different bundle for a known ID without a higher serial;
 //   - BadRequest: a Register bundle or uploaded prekey that does not verify,
 //     or Send or SendMulti to the sender's own ID;
-//   - TooLarge: a Send or SendMulti payload above limits.max_message_size,
-//     or a SendMulti whose payload size times recipient count exceeds
-//     64 MiB;
-//   - QueueFull: a Send to a recipient whose stored messages reached
-//     limits.max_queued_messages or limits.max_queued_bytes;
-//   - RateLimited: Register, AuthBegin, PrekeyUpload or PrekeyRequest over
-//     its per-session bucket, or SendMulti whose recipient tokens do not
-//     arrive in time;
+//   - TooLarge: a Send, SendMulti, SealedSend or SealedSendMulti payload
+//     above limits.max_message_size, or a SendMulti or SealedSendMulti
+//     whose payload size times recipient count exceeds 64 MiB;
+//   - QueueFull: a Send or SealedSend to a recipient whose stored messages
+//     reached limits.max_queued_messages or limits.max_queued_bytes;
+//   - RateLimited: Register, AuthBegin, SetAccessKey, PrekeyUpload or
+//     PrekeyRequest over its per-session bucket, or SendMulti,
+//     SealedSend or SealedSendMulti whose recipient tokens do not arrive
+//     in time;
 //   - Internal: a database failure.
 //
 // Protocol violations are answered with an Error frame followed by a close
 // with status 1008:
 //
 //   - BadRequest: malformed frames or bodies, unknown frame types, frame
-//     types only the server sends, a second Hello, and AuthBegin or
-//     AuthProof on an already authenticated session;
+//     types only the server sends, a second Hello, AuthBegin or AuthProof
+//     on an already authenticated session, Register, AuthBegin or
+//     AuthProof on an anonymous session, and SealedSend or SealedSendMulti
+//     on a session that registered or began authentication;
 //   - UnsupportedVersion: no common wire version, or a frame of another
 //     version;
 //   - RateLimited: the per-session frame bucket is exhausted;
@@ -186,11 +226,12 @@
 // The server never writes client IP addresses, identity IDs, payloads,
 // frame bodies or any other client-controlled string to its log. Addresses
 // are kept in memory only while a connection is open, to enforce the per-IP
-// connection limit; IDs of authenticated sessions only while they are
-// connected, to route messages. The database holds identity bundles,
-// prekeys, invite code hashes and, until they are acknowledged or expire,
-// end-to-end encrypted messages with their sender and recipient IDs; it
-// holds no addresses and no delivery or read times.
+// connection limit, and while a sealed sender bucket is not full; IDs of
+// authenticated sessions only while they are connected, to route messages.
+// The database holds identity bundles, access key verifiers, prekeys,
+// invite code hashes and, until they are acknowledged or expire, end-to-end
+// encrypted messages with their recipient IDs and, unless they were sealed,
+// their sender IDs; it holds no addresses and no delivery or read times.
 // Session events are logged at debug level with a random session number
 // that is meaningless outside the running process.
 package server

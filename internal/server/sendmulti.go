@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/craguS/qchat/internal/identity"
 	"github.com/craguS/qchat/internal/protocol"
 	"github.com/craguS/qchat/internal/store/serverdb"
@@ -64,16 +66,35 @@ func (s *session) handleSendMulti(frame protocol.Frame) bool {
 // closes while waiting, it gives up without spending anything.
 func (s *session) spendRecipients(n int) bool {
 	now := s.srv.now()
-	reservation := s.multiLimiter.ReserveN(now, n)
-	if !reservation.OK() {
-		return false
+	return s.await(now, s.multiLimiter.ReserveN(now, n))
+}
+
+// await waits until every reservation, made at now, may act and reports
+// whether all of them were granted. If one of them is nil or cannot be
+// granted, or the longest wait exceeds s.srv.multiSendWait, or the session
+// closes while waiting, every reservation is cancelled and await reports
+// false.
+func (s *session) await(now time.Time, reservations ...*rate.Reservation) bool {
+	cancel := func(at time.Time) {
+		for _, r := range reservations {
+			if r != nil {
+				r.CancelAt(at)
+			}
+		}
 	}
-	delay := reservation.DelayFrom(now)
+	var delay time.Duration
+	for _, r := range reservations {
+		if r == nil || !r.OK() {
+			cancel(now)
+			return false
+		}
+		delay = max(delay, r.DelayFrom(now))
+	}
 	if delay <= 0 {
 		return true
 	}
 	if delay > s.srv.multiSendWait {
-		reservation.CancelAt(now)
+		cancel(now)
 		return false
 	}
 	timer := time.NewTimer(delay)
@@ -82,7 +103,7 @@ func (s *session) spendRecipients(n int) bool {
 	case <-timer.C:
 		return true
 	case <-s.closed:
-		reservation.CancelAt(s.srv.now())
+		cancel(s.srv.now())
 		return false
 	}
 }

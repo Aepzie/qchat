@@ -44,6 +44,9 @@ const (
 	DefaultPrekeyRequestsPerHour    = 120
 	DefaultMultiRecipientsPerMinute = 3000
 	DefaultLogLevel                 = "info"
+
+	DefaultSealedRecipientsPerMinute      = 3000
+	DefaultSealedRecipientsPerMinutePerIP = 6000
 )
 
 // Values of Config.Registration.
@@ -87,6 +90,17 @@ const (
 // SendMulti requests at once above Limits.MultiRecipientsPerMinute: two
 // requests with the most recipients the protocol allows.
 const MultiRecipientsBurst = 2 * protocol.MaxMultiRecipients
+
+// Bursts and bounds of the sealed sender rate limits. A connection may name
+// SealedRecipientsBurst recipients at once above
+// Limits.SealedRecipientsPerMinute (two maximal SealedSendMulti requests),
+// and all anonymous connections from one address together
+// SealedRecipientsBurstPerIP above Limits.SealedRecipientsPerMinutePerIP.
+const (
+	SealedRecipientsBurst        = 2 * protocol.MaxMultiRecipients
+	SealedRecipientsBurstPerIP   = 4 * protocol.MaxMultiRecipients
+	MaxSealedRecipientsPerMinute = 1_000_000
+)
 
 // Bounds enforced by Config.Validate.
 const (
@@ -226,6 +240,18 @@ type Limits struct {
 	// MultiRecipientsBurst. Each SendMulti also counts as one frame
 	// toward FramesPerSecond.
 	MultiRecipientsPerMinute int `toml:"multi_recipients_per_minute" comment:"Recipients a session may address per minute with SendMulti (1 to 1000000),\nwith a burst of 512. Each SendMulti also counts as one frame."`
+	// SealedRecipientsPerMinute is the sustained number of recipients one
+	// anonymous connection may name per minute across its SealedSend and
+	// SealedSendMulti requests, between 1 and
+	// MaxSealedRecipientsPerMinute, with a burst of SealedRecipientsBurst.
+	SealedRecipientsPerMinute int `toml:"sealed_recipients_per_minute" comment:"Recipients an anonymous connection may address per minute with sealed sends\n(1 to 1000000), with a burst of 512."`
+	// SealedRecipientsPerMinutePerIP is the sustained number of recipients
+	// all anonymous connections from one IPv4 address or IPv6 /64 together
+	// may name per minute, between 1 and MaxSealedRecipientsPerMinute, with
+	// a burst of SealedRecipientsBurstPerIP. Addresses are held in memory
+	// only, never logged or stored. Behind a Tor onion service every
+	// client shares one address, so raise it there.
+	SealedRecipientsPerMinutePerIP int `toml:"sealed_recipients_per_minute_per_ip" comment:"Recipients all anonymous connections from one IPv4 address or IPv6 /64 may\naddress per minute with sealed sends (1 to 1000000), with a burst of 1024.\nBehind a Tor onion service all clients share 127.0.0.1: raise it there."`
 }
 
 // LogConfig configures logging.
@@ -261,6 +287,9 @@ func DefaultConfig() Config {
 			MaxQueuedBytes:           DefaultMaxQueuedBytes,
 			PrekeyRequestsPerHour:    DefaultPrekeyRequestsPerHour,
 			MultiRecipientsPerMinute: DefaultMultiRecipientsPerMinute,
+
+			SealedRecipientsPerMinute:      DefaultSealedRecipientsPerMinute,
+			SealedRecipientsPerMinutePerIP: DefaultSealedRecipientsPerMinutePerIP,
 		},
 		Log: LogConfig{Level: DefaultLogLevel},
 	}
@@ -422,6 +451,10 @@ func (l Limits) validate() error {
 		return fmt.Errorf("config: limits.prekey_requests_per_hour must be between 1 and %d", MaxPrekeyRequestsPerHour)
 	case l.MultiRecipientsPerMinute < 1 || l.MultiRecipientsPerMinute > MaxMultiRecipientsPerMinute:
 		return fmt.Errorf("config: limits.multi_recipients_per_minute must be between 1 and %d", MaxMultiRecipientsPerMinute)
+	case l.SealedRecipientsPerMinute < 1 || l.SealedRecipientsPerMinute > MaxSealedRecipientsPerMinute:
+		return fmt.Errorf("config: limits.sealed_recipients_per_minute must be between 1 and %d", MaxSealedRecipientsPerMinute)
+	case l.SealedRecipientsPerMinutePerIP < 1 || l.SealedRecipientsPerMinutePerIP > MaxSealedRecipientsPerMinute:
+		return fmt.Errorf("config: limits.sealed_recipients_per_minute_per_ip must be between 1 and %d", MaxSealedRecipientsPerMinute)
 	}
 	return validatePingInterval(l.PingInterval.Std())
 }
