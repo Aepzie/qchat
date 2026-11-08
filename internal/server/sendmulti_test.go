@@ -331,8 +331,11 @@ func TestSpendRecipients(t *testing.T) {
 
 	t.Run("WithinBurst", func(t *testing.T) {
 		s := newTestSession(rate.NewLimiter(rate.Every(time.Hour), MultiRecipientsBurst), time.Second)
-		if !s.spendRecipients(protocol.MaxMultiRecipients) || !s.spendRecipients(protocol.MaxMultiRecipients) {
-			t.Fatal("two maximal requests refused within the burst")
+		if !s.spendRecipients(protocol.MaxMultiRecipients) {
+			t.Fatal("first maximal request refused within the burst")
+		}
+		if !s.spendRecipients(protocol.MaxMultiRecipients) {
+			t.Fatal("second maximal request refused within the burst")
 		}
 	})
 	t.Run("ShortWait", func(t *testing.T) {

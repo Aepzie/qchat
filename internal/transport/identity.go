@@ -230,7 +230,7 @@ func validateDNSName(name string) error {
 // readBoundedFile reads at most maxPEMFileSize bytes and fails if the file is
 // larger.
 func readBoundedFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path comes from the local operator's configuration; reads are size-bounded
 	if err != nil {
 		return nil, err
 	}

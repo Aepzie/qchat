@@ -9,8 +9,11 @@ func TestConnLimiterPerIP(t *testing.T) {
 	l := newConnLimiter(10, 2)
 	a := netip.MustParseAddr("192.0.2.1")
 	b := netip.MustParseAddr("192.0.2.2")
-	if !l.acquire(a) || !l.acquire(a) {
-		t.Fatal("first two slots for a refused")
+	if !l.acquire(a) {
+		t.Fatal("first slot for a refused")
+	}
+	if !l.acquire(a) {
+		t.Fatal("second slot for a refused")
 	}
 	if l.acquire(a) {
 		t.Fatal("third slot for a granted")

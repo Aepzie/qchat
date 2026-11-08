@@ -128,7 +128,7 @@ func ServerTLSConfig(cert tls.Certificate) *tls.Config {
 // performs a full, freshly keyed handshake.
 func ClientTLSConfig(pin Fingerprint) *tls.Config {
 	cfg := baseTLSConfig()
-	cfg.InsecureSkipVerify = true
+	cfg.InsecureSkipVerify = true // #nosec G402 -- WebPKI checks are replaced by the SPKI pin in VerifyConnection, which fails closed
 	cfg.ClientSessionCache = nil
 	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
 		return verifyPinnedConnection(cs, pin)

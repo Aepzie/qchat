@@ -176,7 +176,7 @@ func open(path string, key [32]byte, mustExist bool) (*DB, error) {
 	conn.SetMaxOpenConns(1)
 	d := &DB{conn: conn, keys: k}
 	if err := d.init(context.Background(), mustExist); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		k.wipe()
 		return nil, err
 	}

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-08
+
+Hardening release. No new protocol features; the focus is static analysis,
+fuzzing, CI, the release pipeline and documentation. The software remains
+unaudited; an independent audit is the next step.
+
+### Added
+
+- Fuzz targets for every parser of untrusted input: 34 targets, among them
+  the handshake bundle parser, SOCKS5 replies, safety QR payloads, group
+  state and control messages, server configuration, Markdown rendering and
+  text sanitising. CI runs each of them in a matrix job.
+- Rewritten README and SECURITY.md covering all phases, with a consolidated
+  list of what is not protected.
+
+### Changed
+
+- CI pins the analysis toolchain to the Go version in go.mod and pins all
+  actions to commit SHAs.
+- Direct dependencies are marked as such in go.mod.
+
+### Security
+
+- staticcheck and govulncheck report no findings in reachable code
+  (govulncheck lists GO-2026-5932 for the unused `x/crypto/openpgp` package
+  only). gosec findings were fixed or annotated with a justification.
+- Data directory checks on Windows fail closed on allow-type ACEs they
+  cannot parse (callback, object and conditional entries).
+- Ignored cleanup errors are explicit, queue IDs are range-checked before
+  conversion, and QR payload splitting is bounded.
+
 ## [0.7.0] - 2026-11-08
 
 Interface polish, encrypted file transfer and disappearing messages.
@@ -281,7 +312,8 @@ release; only the connection between client and relay is protected.
 - The server never logs client IP addresses or client-supplied data.
 - A pinned-key mismatch blocks the connection and is never retried.
 
-[Unreleased]: https://github.com/craguS/qchat/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/craguS/qchat/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/craguS/qchat/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/craguS/qchat/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/craguS/qchat/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/craguS/qchat/compare/v0.4.0...v0.5.0

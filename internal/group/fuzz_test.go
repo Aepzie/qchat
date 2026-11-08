@@ -195,3 +195,36 @@ func FuzzUnmarshalHistory(f *testing.F) {
 		}
 	})
 }
+
+func FuzzUnmarshalState(f *testing.F) {
+	base, ms := baseGroup(f)
+	encoded, err := base.Marshal()
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(encoded)
+	created, _, err := NewGroup(ms[1].id, "seed group", ids(ms[0], ms[3]))
+	if err != nil {
+		f.Fatal(err)
+	}
+	if encoded, err = created.Marshal(); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(encoded)
+	f.Add(encoded[:len(encoded)-1])
+	f.Add([]byte{0xa0})
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		s, err := UnmarshalState(input)
+		if err != nil {
+			return
+		}
+		reencoded, err := s.Marshal()
+		if err != nil {
+			t.Fatalf("accepted state does not marshal: %v", err)
+		}
+		if !bytes.Equal(reencoded, input) {
+			t.Fatalf("state is not the canonical encoding of its fields: %x, re-encoded %x", input, reencoded)
+		}
+	})
+}

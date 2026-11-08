@@ -321,6 +321,11 @@ func isTrustedOwner(owner *windows.SID) (bool, error) {
 // access-allowed entry in the DACL of sd grants any of rights. Entries that
 // apply only to objects created later (inherit-only) count as well. A
 // missing or null DACL grants everyone full access.
+//
+// The check fails closed: a callback (conditional) entry is judged by its
+// SID and mask as if its condition always held, and any other allow-type or
+// unknown entry whose SID cannot be read in the plain layout is reported as
+// broad, since it might grant access to anyone.
 func broadAccessGrants(sd *windows.SECURITY_DESCRIPTOR, rights windows.ACCESS_MASK) ([]string, error) {
 	dacl, _, err := sd.DACL()
 	if errors.Is(err, windows.ERROR_OBJECT_NOT_FOUND) {
@@ -338,14 +343,94 @@ func broadAccessGrants(sd *windows.SECURITY_DESCRIPTOR, rights windows.ACCESS_MA
 		if err := windows.GetAce(dacl, i, &ace); err != nil {
 			return nil, err
 		}
-		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Mask&rights == 0 {
-			continue
-		}
-		if label := broadSIDLabel(aceSID(ace)); label != "" && !slices.Contains(labels, label) {
+		label := aceBroadLabel(ace, rights)
+		if label != "" && !slices.Contains(labels, label) {
 			labels = append(labels, label)
 		}
 	}
 	return labels, nil
+}
+
+// ACE types beyond the two that golang.org/x/sys/windows defines, from
+// winnt.h.
+const (
+	systemAuditACEType                 = 0x02
+	systemAlarmACEType                 = 0x03
+	accessAllowedCompoundACEType       = 0x04
+	accessAllowedObjectACEType         = 0x05
+	accessDeniedObjectACEType          = 0x06
+	systemAuditObjectACEType           = 0x07
+	systemAlarmObjectACEType           = 0x08
+	accessAllowedCallbackACEType       = 0x09
+	accessDeniedCallbackACEType        = 0x0a
+	accessAllowedCallbackObjectACEType = 0x0b
+	accessDeniedCallbackObjectACEType  = 0x0c
+	systemAuditCallbackACEType         = 0x0d
+	systemAlarmCallbackACEType         = 0x0e
+	systemAuditCallbackObjectACEType   = 0x0f
+	systemAlarmCallbackObjectACEType   = 0x10
+	systemMandatoryLabelACEType        = 0x11
+	systemResourceAttributeACEType     = 0x12
+	systemScopedPolicyIDACEType        = 0x13
+	systemProcessTrustLabelACEType     = 0x14
+	systemAccessFilterACEType          = 0x15
+)
+
+// aceClass says how broadAccessGrants treats an ACE type.
+type aceClass int
+
+const (
+	// aceIgnored entries deny access or do not grant any.
+	aceIgnored aceClass = iota
+	// aceParsed entries grant access and have the plain layout (header,
+	// mask, SID), possibly followed by callback data.
+	aceParsed
+	// aceOpaqueAllow entries grant access, start with header and mask, but
+	// store the SID at a position this check does not decode.
+	aceOpaqueAllow
+	// aceUnknown entries are of a type this check does not know.
+	aceUnknown
+)
+
+// classifyACE returns the aceClass of aceType.
+func classifyACE(aceType byte) aceClass {
+	switch aceType {
+	case windows.ACCESS_ALLOWED_ACE_TYPE, accessAllowedCallbackACEType:
+		return aceParsed
+	case accessAllowedCompoundACEType, accessAllowedObjectACEType, accessAllowedCallbackObjectACEType:
+		return aceOpaqueAllow
+	case windows.ACCESS_DENIED_ACE_TYPE, systemAuditACEType, systemAlarmACEType,
+		accessDeniedObjectACEType, systemAuditObjectACEType, systemAlarmObjectACEType,
+		accessDeniedCallbackACEType, accessDeniedCallbackObjectACEType,
+		systemAuditCallbackACEType, systemAlarmCallbackACEType,
+		systemAuditCallbackObjectACEType, systemAlarmCallbackObjectACEType,
+		systemMandatoryLabelACEType, systemResourceAttributeACEType, systemScopedPolicyIDACEType,
+		systemProcessTrustLabelACEType, systemAccessFilterACEType:
+		return aceIgnored
+	default:
+		return aceUnknown
+	}
+}
+
+// aceBroadLabel returns the label under which ace counts as granting any of
+// rights to a broad group, or "" if it does not.
+func aceBroadLabel(ace *windows.ACCESS_ALLOWED_ACE, rights windows.ACCESS_MASK) string {
+	switch classifyACE(ace.Header.AceType) {
+	case aceParsed:
+		if ace.Mask&rights == 0 {
+			return ""
+		}
+		return broadSIDLabel(aceSID(ace))
+	case aceOpaqueAllow:
+		if ace.Mask&rights == 0 {
+			return ""
+		}
+		return fmt.Sprintf("an unverifiable object or compound entry (ACE type 0x%02x)", ace.Header.AceType)
+	case aceUnknown:
+		return fmt.Sprintf("an unrecognized entry (ACE type 0x%02x)", ace.Header.AceType)
+	default:
+		return ""
+	}
 }
 
 // broadSIDLabel returns the label of sid if it is one of broadSIDs, and ""
@@ -378,7 +463,7 @@ func describeSID(sid *windows.SID) string {
 // aceSID returns the SID stored in ace, which starts at its SidStart
 // field and extends past the end of the Go struct.
 func aceSID(ace *windows.ACCESS_ALLOWED_ACE) *windows.SID {
-	return (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+	return (*windows.SID)(unsafe.Pointer(&ace.SidStart)) // #nosec G103 -- the SID is stored inline in the ACE, starting at SidStart
 }
 
 // createTemp creates a new file in dir whose name starts with prefix,
