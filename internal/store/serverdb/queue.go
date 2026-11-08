@@ -199,6 +199,9 @@ func enqueueSharedTx(ctx context.Context, tx *sql.Tx, recipients [][32]byte, sen
 		if err := insert.QueryRowContext(ctx, recipients[i][:], sender, pid, len(payload), expires.Unix()).Scan(&qid); err != nil {
 			return nil, fmt.Errorf("serverdb: store message: %w", err)
 		}
+		if qid < 1 {
+			return nil, errors.New("serverdb: store message: invalid queue ID")
+		}
 		outcomes[i].QID = uint64(qid)
 	}
 	return outcomes, nil
