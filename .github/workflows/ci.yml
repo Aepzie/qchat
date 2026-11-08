@@ -43,8 +43,46 @@ jobs:
         run: go test ./...
 
   fuzz:
-    name: fuzz smoke
+    name: fuzz ${{ matrix.target }} (${{ matrix.pkg }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: ./internal/app/, target: FuzzParseControlMessage }
+          - { pkg: ./internal/client/, target: FuzzSanitizeASCII }
+          - { pkg: ./internal/crypto/hybridsig/, target: FuzzParsePublicKey }
+          - { pkg: ./internal/crypto/hybridsig/, target: FuzzVerify }
+          - { pkg: ./internal/crypto/safety/, target: FuzzParseQRPayload }
+          - { pkg: ./internal/crypto/sealbox/, target: FuzzOpen }
+          - { pkg: ./internal/crypto/vault/, target: FuzzOpen }
+          - { pkg: ./internal/e2e/, target: FuzzParseEnvelope }
+          - { pkg: ./internal/e2e/, target: FuzzParsePlaintext }
+          - { pkg: ./internal/filexfer/, target: FuzzParseChunk }
+          - { pkg: ./internal/filexfer/, target: FuzzParseOffer }
+          - { pkg: ./internal/filexfer/, target: FuzzSanitizeName }
+          - { pkg: ./internal/group/, target: FuzzApply }
+          - { pkg: ./internal/group/, target: FuzzParseControl }
+          - { pkg: ./internal/group/, target: FuzzUnmarshalHistory }
+          - { pkg: ./internal/group/, target: FuzzUnmarshalState }
+          - { pkg: ./internal/handshake/, target: FuzzAccept }
+          - { pkg: ./internal/handshake/, target: FuzzParseBundle }
+          - { pkg: ./internal/identity/, target: FuzzParseBundle }
+          - { pkg: ./internal/identity/, target: FuzzParseID }
+          - { pkg: ./internal/padding/, target: FuzzUnpad }
+          - { pkg: ./internal/prekey/, target: FuzzParseSignedPrekey }
+          - { pkg: ./internal/protocol/, target: FuzzDecode }
+          - { pkg: ./internal/protocol/, target: FuzzDecodeBody }
+          - { pkg: ./internal/ratchet/, target: FuzzDecrypt }
+          - { pkg: ./internal/sealed/, target: FuzzOpen }
+          - { pkg: ./internal/senderkey/, target: FuzzDecrypt }
+          - { pkg: ./internal/senderkey/, target: FuzzParseDistribution }
+          - { pkg: ./internal/server/, target: FuzzParseConfig }
+          - { pkg: ./internal/transport/, target: FuzzParseFingerprint }
+          - { pkg: ./internal/transport/, target: FuzzReadSOCKS5Reply }
+          - { pkg: ./internal/transport/, target: FuzzSOCKS5ConnectRequest }
+          - { pkg: ./internal/tui/, target: FuzzRenderMarkdown }
+          - { pkg: ./internal/tui/, target: FuzzSanitizeText }
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -52,22 +90,8 @@ jobs:
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
-      - name: Fuzz protocol decoder
-        run: go test -run='^$' -fuzz='FuzzDecode$' -fuzztime=30s ./internal/protocol/
-      - name: Fuzz handshake bundle parser
-        run: go test -run='^$' -fuzz='^FuzzParseBundle$' -fuzztime=20s ./internal/handshake/
-      - name: Fuzz SOCKS5 reply reader
-        run: go test -run='^$' -fuzz='^FuzzReadSOCKS5Reply$' -fuzztime=20s ./internal/transport/
-      - name: Fuzz SOCKS5 CONNECT request builder
-        run: go test -run='^$' -fuzz='^FuzzSOCKS5ConnectRequest$' -fuzztime=20s ./internal/transport/
-      - name: Fuzz safety QR payload parser
-        run: go test -run='^$' -fuzz='^FuzzParseQRPayload$' -fuzztime=20s ./internal/crypto/safety/
-      - name: Fuzz group state decoder
-        run: go test -run='^$' -fuzz='^FuzzUnmarshalState$' -fuzztime=20s ./internal/group/
-      - name: Fuzz ASCII sanitizer
-        run: go test -run='^$' -fuzz='^FuzzSanitizeASCII$' -fuzztime=20s ./internal/client/
-      - name: Fuzz server config parser
-        run: go test -run='^$' -fuzz='^FuzzParseConfig$' -fuzztime=20s ./internal/server/
+      - name: Fuzz smoke run
+        run: go test -run='^$' -fuzz="^${{ matrix.target }}$" -fuzztime=20s "${{ matrix.pkg }}"
 
   security:
     name: security
