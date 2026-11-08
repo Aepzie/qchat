@@ -107,7 +107,8 @@ type SearchHit struct {
 	// From is the sender's identity ID for an incoming group message, and
 	// empty otherwise.
 	From string
-	// Text is the message body.
+	// Text is the message body, or for a long body an excerpt of it around
+	// the match.
 	Text string
 	// At is when the message was received, or sent for an outgoing one.
 	At time.Time
