@@ -450,5 +450,5 @@ func backoffDelay(minDelay, maxDelay time.Duration, failures int) time.Duration 
 	if half <= 0 {
 		return d
 	}
-	return half + rand.N(d-half+1)
+	return half + rand.N(d-half+1) // #nosec G404 -- backoff jitter, not a secret
 }

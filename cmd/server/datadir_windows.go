@@ -378,7 +378,7 @@ func describeSID(sid *windows.SID) string {
 // aceSID returns the SID stored in ace, which starts at its SidStart
 // field and extends past the end of the Go struct.
 func aceSID(ace *windows.ACCESS_ALLOWED_ACE) *windows.SID {
-	return (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+	return (*windows.SID)(unsafe.Pointer(&ace.SidStart)) // #nosec G103 -- the SID is stored inline in the ACE, starting at SidStart
 }
 
 // createTemp creates a new file in dir whose name starts with prefix,

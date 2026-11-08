@@ -160,6 +160,6 @@ func putIdentity(ctx context.Context, tx *sql.Tx, id [32]byte, bundle []byte, se
 // serialToColumn stores a uint64 serial in SQLite's signed 64-bit INTEGER
 // by reinterpreting its bits; serials are only compared in Go, after
 // serialFromColumn has reversed the conversion.
-func serialToColumn(serial uint64) int64 { return int64(serial) }
+func serialToColumn(serial uint64) int64 { return int64(serial) } // #nosec G115 -- deliberate bit reinterpretation, reversed by serialFromColumn
 
-func serialFromColumn(column int64) uint64 { return uint64(column) }
+func serialFromColumn(column int64) uint64 { return uint64(column) } // #nosec G115 -- deliberate bit reinterpretation, reverses serialToColumn

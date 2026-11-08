@@ -100,7 +100,7 @@ func (s *Server) storePrekeys(id identity.ID, signed *prekey.SignedPrekey, oneTi
 	if err != nil {
 		return protocol.PrekeyStatus{}, s.prekeyErrorCode(err), false
 	}
-	status := protocol.PrekeyStatus{OneTimeRemaining: uint32(stored.OneTimeRemaining)}
+	status := protocol.PrekeyStatus{OneTimeRemaining: uint32(stored.OneTimeRemaining)} // #nosec G115 -- count is at most serverdb.MaxOneTimePrekeys (200)
 	if !stored.SignedPrekeyExpires.IsZero() {
 		status.SignedPrekeyExpires = max(stored.SignedPrekeyExpires.Unix(), 0)
 	}

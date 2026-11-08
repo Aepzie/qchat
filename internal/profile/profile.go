@@ -571,7 +571,7 @@ func decodeKeyRecord(plain []byte) (keyRecord, error) {
 
 // readKeyFile reads the key file of dir, bounded in size.
 func readKeyFile(dir string) ([]byte, error) {
-	f, err := os.Open(filepath.Join(dir, KeyFileName))
+	f, err := os.Open(filepath.Join(dir, KeyFileName)) // #nosec G304 -- profile directory comes from the local user's configuration; reads are size-bounded
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNoProfile
 	}

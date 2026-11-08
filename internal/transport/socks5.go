@@ -225,9 +225,9 @@ func (d *socks5Dialer) handshake(conn net.Conn, request []byte) error {
 func (d *socks5Dialer) authenticate(conn net.Conn) error {
 	token := d.isolation
 	msg := make([]byte, 0, 3+2*len(token))
-	msg = append(msg, socks5PasswordVersion, byte(len(token)))
+	msg = append(msg, socks5PasswordVersion, byte(len(token))) // #nosec G115 -- token length checked to be at most 255 in dial
 	msg = append(msg, token...)
-	msg = append(msg, byte(len(token)))
+	msg = append(msg, byte(len(token))) // #nosec G115 -- token length checked to be at most 255 in dial
 	msg = append(msg, token...)
 	if _, err := conn.Write(msg); err != nil {
 		return fmt.Errorf("%w: send credentials: %w", ErrSOCKS5, err)
@@ -273,10 +273,10 @@ func socks5ConnectRequest(addr string) ([]byte, error) {
 		if host == "" || len(host) > socks5MaxField {
 			return nil, fmt.Errorf("%w: destination host name must be 1 to %d bytes", ErrSOCKS5, socks5MaxField)
 		}
-		request = append(request, socks5AddrDomain, byte(len(host)))
+		request = append(request, socks5AddrDomain, byte(len(host))) // #nosec G115 -- host length checked to be at most 255 above
 		request = append(request, host...)
 	}
-	return append(request, byte(port>>8), byte(port)), nil
+	return append(request, byte(port>>8), byte(port)), nil // #nosec G115 -- port parsed with bitSize 16, split into its two bytes
 }
 
 // readSOCKS5Reply reads and checks the reply to a CONNECT request,

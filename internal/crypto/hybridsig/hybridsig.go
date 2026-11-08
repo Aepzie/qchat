@@ -276,7 +276,7 @@ func (p *PublicKey) Verify(ctx string, msg, sig []byte) error {
 func signedMessage(ctx string, msg []byte) []byte {
 	out := make([]byte, 0, len(domainPrefix)+1+len(ctx)+len(msg))
 	out = append(out, domainPrefix...)
-	out = append(out, byte(len(ctx)))
+	out = append(out, byte(len(ctx))) // #nosec G115 -- checkContext limits ctx to 255 bytes
 	out = append(out, ctx...)
 	out = append(out, msg...)
 	return out
