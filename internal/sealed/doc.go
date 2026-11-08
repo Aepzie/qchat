@@ -13,14 +13,22 @@
 //
 // # Envelope
 //
-//	SealedEnvelope = {1: Version = 1, 2: Box}
+//	SealedEnvelope = {1: Version = 2, 2: Box}
 //	Box            = sealbox.Seal(recipient KEM key,
 //	                              "qchat/v1/sealed" || RecipientID,
-//	                              {1: SenderID, 2: Inner})
+//	                              Pad({1: SenderID, 2: Inner}))
 //
 // The HPKE box (MLKEM768-X25519, HKDF-SHA256, ChaCha20-Poly1305) hides the
 // sender ID and the inner payload from the relay and binds the envelope to
 // the recipient ID. Every structure is strict, canonical CBOR.
+//
+// Pad is the scheme of package padding with a floor: the content is padded
+// to 32, 64, 128 or 256 KiB ([MinPaddedSize] to [MaxPaddedSize]), and Open
+// accepts nothing else. The floor hides whether the inner pairwise
+// envelope carries a session Init (a first message) and the varying CBOR
+// widths of its header counters and one-time prekey ID, so a typical
+// message is one fixed size. Version 1 envelopes, whose content was not
+// padded, are rejected with [ErrUnsupportedVersion].
 //
 // # Trust
 //

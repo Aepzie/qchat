@@ -10,6 +10,7 @@ import (
 
 	"github.com/craguS/qchat/internal/crypto/sealbox"
 	"github.com/craguS/qchat/internal/identity"
+	"github.com/craguS/qchat/internal/padding"
 )
 
 // party is an identity with its verified bundle.
@@ -118,8 +119,8 @@ func TestSealOpenRoundTrip(t *testing.T) {
 		if !IsEnvelope(sealed) {
 			t.Fatalf("IsEnvelope(%x...) = false", sealed[:8])
 		}
-		if len(sealed) > len(inner)+MaxOverhead {
-			t.Fatalf("envelope of %d bytes for %d-byte inner, overhead above %d", len(sealed), len(inner), MaxOverhead)
+		if !isSealedSize(len(sealed)) {
+			t.Fatalf("envelope of %d bytes for %d-byte inner is not a sealed size", len(sealed), len(inner))
 		}
 		if bytes.Contains(sealed, alice.bundle.ID[:]) || bytes.Contains(sealed, inner[:min(len(inner), 16)]) && len(inner) > 1 {
 			t.Fatal("envelope reveals the sender ID or the inner payload")
@@ -144,8 +145,8 @@ func TestSealMaxInner(t *testing.T) {
 	if len(sealed) > MaxEnvelopeSize {
 		t.Fatalf("maximal envelope is %d bytes, limit %d", len(sealed), MaxEnvelopeSize)
 	}
-	if len(sealed) != len(inner)+MaxOverhead {
-		t.Fatalf("maximal envelope overhead %d, want exactly %d", len(sealed)-len(inner), MaxOverhead)
+	if len(sealed) != MaxEnvelopeSize {
+		t.Fatalf("maximal envelope is %d bytes, want exactly %d", len(sealed), MaxEnvelopeSize)
 	}
 	if opened, err := Open(bob.ident, sealed); err != nil || len(opened.Inner) != MaxInnerSize {
 		t.Fatalf("Open maximal: %d bytes, %v", len(opened.Inner), err)
@@ -207,19 +208,106 @@ func TestOpenTampered(t *testing.T) {
 	}
 }
 
-// sealContent seals an arbitrary content encoding to bob, bypassing Seal's
-// checks.
-func sealContent(t *testing.T, bob party, plaintext []byte) []byte {
+// sealContent pads an arbitrary content encoding and seals it to bob,
+// bypassing Seal's checks.
+func sealContent(t *testing.T, bob party, encoded []byte) []byte {
+	t.Helper()
+	padded, err := padContent(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sealRaw(t, bob, Version, padded)
+}
+
+// sealRaw seals plaintext to bob as is, under the given envelope version.
+func sealRaw(t *testing.T, bob party, version uint8, plaintext []byte) []byte {
 	t.Helper()
 	box, err := sealbox.Seal(bob.bundle.KEMKey, info(bob.bundle.ID), plaintext)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := encMode.Marshal(envelope{Version: Version, Box: box})
+	out, err := encMode.Marshal(envelope{Version: version, Box: box})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// isSealedSize reports whether n is the size of an envelope of one of the
+// four padding buckets.
+func isSealedSize(n int) bool {
+	for _, size := range []int{32<<10 + MaxOverhead - 2, 64<<10 + MaxOverhead, 128<<10 + MaxOverhead, 256<<10 + MaxOverhead} {
+		if n == size {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSealHidesInitAndLength(t *testing.T) {
+	alice, bob := testParties(t)
+	sizes := map[int]int{}
+	for _, n := range []int{1, 100, 2_500, 16_000, 24_000, MinPaddedSize - contentOverhead - 1} {
+		sealed := mustSeal(t, alice.ident.ID(), bob.bundle, bytes.Repeat([]byte{0x42}, n))
+		sizes[len(sealed)]++
+	}
+	if len(sizes) != 1 {
+		t.Fatalf("small inner payloads give envelopes of %d sizes: %v", len(sizes), sizes)
+	}
+	for size := range sizes {
+		if size != 32<<10+MaxOverhead-2 {
+			t.Fatalf("smallest envelope is %d bytes, want %d", size, 32<<10+MaxOverhead-2)
+		}
+	}
+	for _, tc := range []struct{ inner, want int }{
+		{MinPaddedSize, 64<<10 + MaxOverhead},
+		{100_000, 128<<10 + MaxOverhead},
+		{160_000, 256<<10 + MaxOverhead},
+	} {
+		if got := len(mustSeal(t, alice.ident.ID(), bob.bundle, make([]byte, tc.inner))); got != tc.want {
+			t.Errorf("inner of %d bytes: envelope of %d bytes, want %d", tc.inner, got, tc.want)
+		}
+	}
+}
+
+func TestOpenRejectsBadPadding(t *testing.T) {
+	alice, bob := testParties(t)
+	id := alice.ident.ID()
+	encoded, err := encMode.Marshal(content{Sender: id[:], Inner: []byte("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	padded, err := padding.Pad(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	floor := make([]byte, MinPaddedSize)
+	copy(floor, encoded)
+	floor[len(encoded)] = 0x80
+	trailing := bytes.Clone(floor)
+	trailing[len(trailing)-1] = 1
+	cases := map[string][]byte{
+		"Unpadded":     encoded,
+		"BelowFloor":   padded,
+		"NotABucket":   append(bytes.Clone(floor), 0),
+		"NoMarker":     make([]byte, MinPaddedSize),
+		"TrailingJunk": trailing,
+		"MarkerOnly":   append([]byte{0x80}, make([]byte, MinPaddedSize-1)...),
+	}
+	for name, plaintext := range cases {
+		if _, err := Open(bob.ident, sealRaw(t, bob, Version, plaintext)); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: %v, want ErrMalformed", name, err)
+		}
+	}
+	if opened, err := Open(bob.ident, sealRaw(t, bob, Version, floor)); err != nil || string(opened.Inner) != "x" {
+		t.Fatalf("control case: %+v, %v", opened, err)
+	}
+	if _, err := Open(bob.ident, sealRaw(t, bob, 1, encoded)); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("version 1 envelope: %v, want ErrUnsupportedVersion", err)
+	}
+	if _, err := Open(bob.ident, sealRaw(t, bob, 1, floor)); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("padded version 1 envelope: %v, want ErrUnsupportedVersion", err)
+	}
 }
 
 func TestOpenRejectsBadContent(t *testing.T) {
@@ -279,17 +367,18 @@ func TestOpenRejectsBadOuter(t *testing.T) {
 		in   []byte
 		want error
 	}{
-		{"VersionTwo", encode(envelope{Version: 2, Box: box}), ErrUnsupportedVersion},
+		{"VersionOne", encode(envelope{Version: 1, Box: box}), ErrUnsupportedVersion},
+		{"VersionThree", encode(envelope{Version: 3, Box: box}), ErrUnsupportedVersion},
 		{"VersionZero", encode(envelope{Version: 0, Box: box}), ErrUnsupportedVersion},
-		{"FutureLayout", encode(future{Version: 2, Box: box, Extra: []byte{1}}), ErrUnsupportedVersion},
+		{"FutureLayout", encode(future{Version: 3, Box: box, Extra: []byte{1}}), ErrUnsupportedVersion},
 		{"HugeVersion", encode(future{Version: 1 << 40, Box: box, Extra: []byte{1}}), ErrUnsupportedVersion},
-		{"ExtraField", encode(future{Version: 1, Box: box, Extra: []byte{1}}), ErrMalformed},
+		{"ExtraField", encode(future{Version: Version, Box: box, Extra: []byte{1}}), ErrMalformed},
 		{"NoVersion", encode(struct {
 			Box []byte `cbor:"2,keyasint"`
 		}{box}), ErrMalformed},
-		{"NonCanonicalLength", append([]byte{0xa2, 0x01, 0x01, 0x02, 0x5a, 0x00, 0x00, 0x04, 0x68}, box...), ErrMalformed},
-		{"ShortBox", encode(envelope{Version: 1, Box: box[:sealbox.Overhead-1]}), ErrDecrypt},
-		{"RandomBox", encode(envelope{Version: 1, Box: box}), ErrDecrypt},
+		{"NonCanonicalLength", append([]byte{0xa2, 0x01, Version, 0x02, 0x5a, 0x00, 0x00, 0x04, 0x68}, box...), ErrMalformed},
+		{"ShortBox", encode(envelope{Version: Version, Box: box[:sealbox.Overhead-1]}), ErrDecrypt},
+		{"RandomBox", encode(envelope{Version: Version, Box: box}), ErrDecrypt},
 		{"IndefiniteMap", []byte{0xbf, 0x01, 0x01, 0xff}, ErrMalformed},
 	}
 	for _, tc := range tests {
@@ -327,7 +416,8 @@ func TestIsEnvelope(t *testing.T) {
 		in   []byte
 		want bool
 	}{
-		"Sealed":   {[]byte{0xa2, 0x01, 0x01, 0x02, 0x5a}, true},
+		"Sealed":   {[]byte{0xa2, 0x01, 0x02, 0x02, 0x5a}, true},
+		"SealedV1": {[]byte{0xa2, 0x01, 0x01, 0x02, 0x5a}, false},
 		"Pairwise": {[]byte{0xa3, 0x01, 0x03, 0x03, 0x59}, false},
 		"Group":    {[]byte{0xa5, 0x01, 0x04, 0x02, 0x58, 0x18}, false},
 		"Short":    {[]byte{0xa2, 0x01}, false},
@@ -346,6 +436,7 @@ func FuzzOpen(f *testing.F) {
 	f.Add(mustSeal(f, alice.ident.ID(), bob.bundle, []byte("seed")))
 	f.Add([]byte{0xa2, 0x01, 0x01, 0x02, 0x40})
 	f.Add([]byte{0xa2, 0x01, 0x02, 0x02, 0x40})
+	f.Add([]byte{0xa2, 0x01, 0x02, 0x02, 0x59, 0x84, 0x70})
 	f.Add([]byte{0xa1, 0x01, 0x01})
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, in []byte) {

@@ -7,25 +7,49 @@ import (
 
 	"github.com/craguS/qchat/internal/crypto/sealbox"
 	"github.com/craguS/qchat/internal/identity"
+	"github.com/craguS/qchat/internal/padding"
 	"github.com/craguS/qchat/internal/protocol"
 )
 
 // Version is the envelope version this package produces and accepts.
-const Version = 1
+// Version 1 carried the content unpadded and is rejected.
+const Version = 2
 
 // Size limits of envelopes, in bytes.
+//
+// The content inside the box is padded with package padding to one of the
+// buckets from MinPaddedSize to MaxPaddedSize: 32, 64, 128 or 256 KiB. The
+// floor of 32 KiB is larger than the session Init (about 13 KiB for a
+// typical bundle, at most handshake.MaxInitSize) plus the ratchet header
+// and a small padded body, so the relay cannot tell a first message,
+// which carries an Init, from a later one, nor read the CBOR width of the
+// header counters or the one-time prekey ID. An envelope is therefore
+// exactly one of four sizes: the bucket plus MaxOverhead, minus two bytes
+// for the 32 KiB bucket, whose box length needs a shorter CBOR header.
 const (
-	// MaxEnvelopeSize is the largest envelope Open accepts: the largest
-	// payload the relay protocol carries.
-	MaxEnvelopeSize = protocol.MaxPayloadSize
-	// MaxOverhead bounds how many bytes Seal adds to the inner payload: the
-	// HPKE encapsulation and tag, the sender ID and the CBOR framing of
-	// both layers.
-	MaxOverhead = sealbox.Overhead + 51
-	// MaxInnerSize is the largest inner payload Seal accepts, so that every
-	// envelope fits in MaxEnvelopeSize.
-	MaxInnerSize = MaxEnvelopeSize - MaxOverhead
+	// MinPaddedSize is the smallest padded content.
+	MinPaddedSize = 32 << 10
+	// MaxPaddedSize is the largest padded content.
+	MaxPaddedSize = 256 << 10
+	// MaxOverhead is how many bytes the envelope adds to the padded
+	// content at most: the HPKE encapsulation and tag and the CBOR framing
+	// of the outer map.
+	MaxOverhead = sealbox.Overhead + 9
+	// MaxEnvelopeSize is the largest envelope Seal produces and Open
+	// accepts. It is below protocol.MaxPayloadSize; relays must allow
+	// messages of this size (the default limits.max_message_size does).
+	MaxEnvelopeSize = MaxPaddedSize + MaxOverhead
+	// contentOverhead is the CBOR framing of a content whose inner payload
+	// is at least 64 KiB: map header, two keys, the 32-byte sender ID with
+	// its header and the five-byte header of the inner payload.
+	contentOverhead = 1 + 1 + 2 + identity.IDSize + 1 + 5
+	// MaxInnerSize is the largest inner payload Seal accepts: its content
+	// and the padding marker must fit in MaxPaddedSize.
+	MaxInnerSize = MaxPaddedSize - 1 - contentOverhead
 )
+
+// The envelope must fit in every relay payload.
+var _ [protocol.MaxPayloadSize - MaxEnvelopeSize]struct{}
 
 // infoLabel starts the HPKE info string; the recipient ID follows it.
 const infoLabel = "qchat/v1/sealed"
@@ -33,13 +57,14 @@ const infoLabel = "qchat/v1/sealed"
 // envelopePrefix is how every envelope starts: a map of two pairs (0xa2)
 // whose key 1 holds Version and whose key 2 starts the box. It differs
 // from the first bytes of pairwise (version 3, three or four pairs) and
-// group (five pairs) envelopes.
+// group (five pairs) envelopes, and from version 1 sealed envelopes.
 var envelopePrefix = []byte{0xa2, 0x01, Version, 0x02}
 
 // Errors returned by this package. Callers compare them with errors.Is.
 var (
 	// ErrMalformed reports an envelope or content that is not a valid,
-	// canonical encoding, or field values out of range.
+	// canonical encoding, content that is not padded to one of the sealed
+	// buckets, or field values out of range.
 	ErrMalformed = errors.New("sealed: malformed envelope")
 	// ErrUnsupportedVersion reports an envelope of another version.
 	ErrUnsupportedVersion = errors.New("sealed: unsupported envelope version")
@@ -88,8 +113,9 @@ func info(recipient identity.ID) []byte {
 
 // Seal wraps inner, sent by sender, for the identity of the verified bundle
 // recipient. inner must hold between 1 and MaxInnerSize bytes and sender
-// must not be the zero ID. The result is at most len(inner)+MaxOverhead
-// bytes long.
+// must not be the zero ID. The content is padded to the smallest bucket
+// between MinPaddedSize and MaxPaddedSize that holds it, so the result
+// is at most MaxEnvelopeSize bytes long and reveals only that bucket.
 func Seal(sender identity.ID, recipient *identity.Bundle, inner []byte) ([]byte, error) {
 	if recipient == nil || recipient.KEMKey == nil {
 		return nil, fmt.Errorf("%w: no recipient bundle", ErrInvalidArgument)
@@ -100,9 +126,14 @@ func Seal(sender identity.ID, recipient *identity.Bundle, inner []byte) ([]byte,
 	if len(inner) == 0 || len(inner) > MaxInnerSize {
 		return nil, fmt.Errorf("%w: inner payload is %d bytes, want 1 to %d", ErrInvalidArgument, len(inner), MaxInnerSize)
 	}
-	plaintext, err := encMode.Marshal(content{Sender: sender[:], Inner: inner})
+	encoded, err := encMode.Marshal(content{Sender: sender[:], Inner: inner})
 	if err != nil {
 		return nil, fmt.Errorf("sealed: encode content: %w", err)
+	}
+	plaintext, err := padContent(encoded)
+	clear(encoded)
+	if err != nil {
+		return nil, err
 	}
 	defer clear(plaintext)
 	box, err := sealbox.Seal(recipient.KEMKey, info(recipient.ID), plaintext)
@@ -149,8 +180,13 @@ func Open(recipient Recipient, sealed []byte) (Opened, error) {
 	if err != nil {
 		return Opened{}, ErrDecrypt
 	}
+	unpadded, err := unpadContent(plaintext)
+	if err != nil {
+		clear(plaintext)
+		return Opened{}, fmt.Errorf("%w: content: %w", ErrMalformed, err)
+	}
 	var inside content
-	if err := decodeCanonical(plaintext, &inside); err != nil {
+	if err := decodeCanonical(unpadded, &inside); err != nil {
 		clear(plaintext)
 		return Opened{}, fmt.Errorf("%w: content: %w", ErrMalformed, err)
 	}
@@ -168,6 +204,34 @@ func Open(recipient Recipient, sealed []byte) (Opened, error) {
 		return Opened{}, fmt.Errorf("%w: empty inner payload", ErrMalformed)
 	}
 	return Opened{ClaimedSender: sender, Inner: inside.Inner}, nil
+}
+
+// padContent pads encoded content with the scheme of package padding (a
+// 0x80 marker, then zero bytes) to the smallest bucket of at least
+// MinPaddedSize bytes that holds it and the marker. padding.Unpad strips
+// it.
+func padContent(encoded []byte) ([]byte, error) {
+	size, err := padding.BucketFor(len(encoded))
+	if err != nil || size > MaxPaddedSize {
+		return nil, fmt.Errorf("%w: content of %d bytes does not fit", ErrInvalidArgument, len(encoded))
+	}
+	padded := make([]byte, max(size, MinPaddedSize))
+	copy(padded, encoded)
+	padded[len(encoded)] = paddingMarker
+	return padded, nil
+}
+
+// paddingMarker is the first padding byte of package padding.
+const paddingMarker = 0x80
+
+// unpadContent strips the padding of a decrypted content. It accepts only
+// a bucket between MinPaddedSize and MaxPaddedSize ending in valid
+// padding.
+func unpadContent(plaintext []byte) ([]byte, error) {
+	if len(plaintext) < MinPaddedSize || len(plaintext) > MaxPaddedSize {
+		return nil, fmt.Errorf("padded content is %d bytes, want %d to %d", len(plaintext), MinPaddedSize, MaxPaddedSize)
+	}
+	return padding.Unpad(plaintext)
 }
 
 // IsEnvelope reports whether b has the shape of a sealed envelope of this
