@@ -114,6 +114,8 @@ func TestAnonymousSessionSealedSends(t *testing.T) {
 		body any
 	}{
 		{protocol.TypeKeyRequest, protocol.KeyRequest{ID: idOf(2)}},
+		{protocol.TypePrekeyRequest, &protocol.PrekeyRequest{ID: idOf(2)}},
+		{protocol.TypePrekeyUpload, protocol.PrekeyUpload{}},
 		{protocol.TypeSend, protocol.Send{To: idOf(2), Payload: []byte("x")}},
 		{protocol.TypeRegister, protocol.Register{Bundle: []byte("b")}},
 		{protocol.TypeSetAccessKey, protocol.SetAccessKey{Verifier: idOf(1)}},
@@ -175,9 +177,9 @@ func TestAnonymousSessionRejectsDeliver(t *testing.T) {
 	})
 	s := newTestSession(t, Options{Addr: fs.addr, Pin: fs.pin, Anonymous: true})
 	runSession(t, s)
-	seen := waitFor(t, s, "disconnect after Deliver", func(ev Event) bool {
+	seen := waitFor(t, s, "end after Deliver", func(ev Event) bool {
 		sc, ok := ev.(StateChanged)
-		return ok && sc.State == Disconnected && errors.Is(sc.Err, ErrProtocolViolation)
+		return ok && sc.State == Failed && errors.Is(sc.Err, ErrProtocolViolation) && errors.Is(sc.Err, ErrAnonymousSessionEnded)
 	})
 	for _, ev := range seen {
 		if _, ok := ev.(Delivery); ok {
