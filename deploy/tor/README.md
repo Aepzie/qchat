@@ -104,7 +104,26 @@ value as `limits.max_connections` in `/etc/qchat/server.toml`:
 [limits]
 max_connections = 1000
 max_connections_per_ip = 1000
+# Shared by all onion clients: size them for all users together.
+sealed_recipients_per_minute_per_ip = 120000
+anonymous_lookups_per_hour_per_ip = 24000
 ```
+
+The sealed-sender budgets per address also become global limits. Only
+sealed entries and anonymous lookups whose access proof the relay accepts
+spend them; refused ones spend only their own connection's refusal budget,
+so clients without valid access keys cannot exhaust them for everybody.
+Clients holding a valid key still can, up to the per-connection limits per
+connection, which is why the tor-side defences below matter:
+
+```
+HiddenServicePoWDefensesEnabled 1
+HiddenServiceMaxStreams 64
+HiddenServiceMaxStreamsCloseCircuit 1
+```
+
+Put these lines into the same `torrc` section as `HiddenServiceDir`
+(`HiddenServicePoWDefensesEnabled` needs Tor 0.4.8 or later).
 
 `limits.max_connections` and `limits.max_pending_handshakes` still bound the
 server's resources. Against denial of service from the Tor side, tor itself
