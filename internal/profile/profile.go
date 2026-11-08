@@ -194,7 +194,7 @@ func Create(dir string, passphrase []byte, displayName string, params vault.Para
 
 	p := &Profile{Dir: dir, Identity: id, KDFParams: params}
 	if err := p.initialize(dbPath, dbKey, displayName); err != nil {
-		p.Close()
+		_ = p.Close()
 		removeFiles(dbPath, dbPath+"-wal", dbPath+"-shm", keyPath)
 		return nil, err
 	}
@@ -248,7 +248,7 @@ func Unlock(dir string, passphrase []byte) (*Profile, error) {
 
 	p := &Profile{Dir: dir, Identity: id, DB: db, KDFParams: vault.DefaultParams()}
 	if err := p.load(); err != nil {
-		p.Close()
+		_ = p.Close()
 		return nil, err
 	}
 	return p, nil
@@ -305,7 +305,7 @@ func Recover(dir string, passphrase, relayBundle []byte) (*Profile, error) {
 	p := &Profile{Dir: dir, Identity: id, DB: db, KDFParams: vault.DefaultParams()}
 	if adopted != nil {
 		if err := p.storeBundle(adopted.Raw, adopted.Serial); err != nil {
-			p.Close()
+			_ = p.Close()
 			removeFiles(dbPath, dbPath+"-wal", dbPath+"-shm")
 			return nil, err
 		}
@@ -602,8 +602,8 @@ func writeFileAtomic(dir, name string, contents []byte) (err error) {
 	tmp := f.Name()
 	defer func() {
 		if err != nil {
-			f.Close()
-			os.Remove(tmp)
+			_ = f.Close()
+			_ = os.Remove(tmp)
 		}
 	}()
 	if _, err = f.Write(contents); err != nil {
@@ -627,6 +627,6 @@ func writeFileAtomic(dir, name string, contents []byte) (err error) {
 // removeFiles deletes paths, ignoring errors; it is used for rollback.
 func removeFiles(paths ...string) {
 	for _, path := range paths {
-		os.Remove(path)
+		_ = os.Remove(path)
 	}
 }

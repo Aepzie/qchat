@@ -159,20 +159,20 @@ func (d *socks5Dialer) DialContext(ctx context.Context, network, addr string) (n
 	}
 
 	if err := conn.SetDeadline(time.Now().Add(d.handshakeTimeout)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("%w: %w", ErrSOCKS5, err)
 	}
 	stop := context.AfterFunc(ctx, func() {
-		conn.SetDeadline(time.Unix(1, 0))
+		_ = conn.SetDeadline(time.Unix(1, 0))
 	})
 
 	err = d.handshake(conn, request)
 	if !stop() || ctx.Err() != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("transport: socks5: handshake: %w", context.Cause(ctx))
 	}
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			return nil, fmt.Errorf("%w: handshake timed out: %w", ErrSOCKS5, err)
@@ -180,7 +180,7 @@ func (d *socks5Dialer) DialContext(ctx context.Context, network, addr string) (n
 		return nil, err
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("%w: %w", ErrSOCKS5, err)
 	}
 	return conn, nil

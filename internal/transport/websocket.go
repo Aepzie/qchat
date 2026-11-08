@@ -99,11 +99,11 @@ func DialWithState(ctx context.Context, hostport string, pin Fingerprint, opts D
 	}
 
 	if conn.Subprotocol() != Subprotocol {
-		conn.Close(websocket.StatusPolicyViolation, "unsupported subprotocol")
+		_ = conn.Close(websocket.StatusPolicyViolation, "unsupported subprotocol")
 		return nil, tls.ConnectionState{}, fmt.Errorf("transport: dial %s: server did not select subprotocol %q", host, Subprotocol)
 	}
 	if resp == nil || resp.TLS == nil || !resp.TLS.HandshakeComplete {
-		conn.Close(websocket.StatusInternalError, "")
+		_ = conn.Close(websocket.StatusInternalError, "")
 		return nil, tls.ConnectionState{}, fmt.Errorf("transport: dial %s: no TLS state for the connection", host)
 	}
 	conn.SetReadLimit(effectiveReadLimit(opts.ReadLimit))
@@ -190,7 +190,7 @@ func Accept(w http.ResponseWriter, r *http.Request, readLimit int64) (*websocket
 		return nil, fmt.Errorf("transport: accept WebSocket: %w", err)
 	}
 	if conn.Subprotocol() != Subprotocol {
-		conn.Close(websocket.StatusPolicyViolation, "unsupported subprotocol")
+		_ = conn.Close(websocket.StatusPolicyViolation, "unsupported subprotocol")
 		return nil, fmt.Errorf("transport: negotiated subprotocol is not %q", Subprotocol)
 	}
 	conn.SetReadLimit(effectiveReadLimit(readLimit))

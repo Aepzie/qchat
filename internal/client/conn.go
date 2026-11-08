@@ -566,7 +566,7 @@ func (c *liveConn) closeWith(cause error) {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		c.conn.CloseNow()
+		_ = c.conn.CloseNow()
 	}
 }
 
