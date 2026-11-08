@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/craguS/qchat/internal/crypto/vault"
+	"github.com/Aepzie/qchat/internal/crypto/vault"
 )
 
 // checkPrivateACL verifies that path has a DACL granting access only to

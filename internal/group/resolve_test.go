@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 // conflict is a control built on a common state together with its actor.

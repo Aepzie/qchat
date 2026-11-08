@@ -9,9 +9,9 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/store/serverdb"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/store/serverdb"
 )
 
 // sessionMode records which kind of requests a session has committed to.

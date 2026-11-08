@@ -61,14 +61,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/craguS/qchat/internal/app"
-	"github.com/craguS/qchat/internal/buildcfg"
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/crypto/vault"
-	"github.com/craguS/qchat/internal/profile"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/transport"
-	"github.com/craguS/qchat/internal/tui"
+	"github.com/Aepzie/qchat/internal/app"
+	"github.com/Aepzie/qchat/internal/buildcfg"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/crypto/vault"
+	"github.com/Aepzie/qchat/internal/profile"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/tui"
 )
 
 // version is the client version. Release builds override it with

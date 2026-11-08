@@ -5,7 +5,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 // Apply verifies c and returns the state that results from applying it to

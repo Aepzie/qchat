@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"math"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
 	"github.com/fxamacker/cbor/v2"
 )
 

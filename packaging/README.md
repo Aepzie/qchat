@@ -237,9 +237,9 @@ long-lived signing key exists that could leak.
    ```sh
    cosign verify-blob qchat_0.5.0_checksums.txt \
      --bundle qchat_0.5.0_checksums.txt.sigstore.json \
-     --certificate-identity "https://github.com/craguS/qchat/.github/workflows/release.yml@refs/tags/v0.5.0" \
+     --certificate-identity "https://github.com/Aepzie/qchat/.github/workflows/release.yml@refs/tags/v0.5.0" \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-     --certificate-github-workflow-repository craguS/qchat \
+     --certificate-github-workflow-repository Aepzie/qchat \
      --certificate-github-workflow-trigger push
    ```
 

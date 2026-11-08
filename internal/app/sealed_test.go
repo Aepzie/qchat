@@ -9,16 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/crypto/vault"
-	"github.com/craguS/qchat/internal/e2e"
-	"github.com/craguS/qchat/internal/filexfer"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/profile"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/sealed"
-	"github.com/craguS/qchat/internal/senderkey"
-	"github.com/craguS/qchat/internal/tui"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/crypto/vault"
+	"github.com/Aepzie/qchat/internal/e2e"
+	"github.com/Aepzie/qchat/internal/filexfer"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/profile"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/sealed"
+	"github.com/Aepzie/qchat/internal/senderkey"
+	"github.com/Aepzie/qchat/internal/tui"
 )
 
 func newSealedUser(t *testing.T, r *fakeRelay, name string) *fakeUser {

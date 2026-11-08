@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // NonceSize is the length of a relay authentication challenge nonce.

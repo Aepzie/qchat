@@ -9,9 +9,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/sealed"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/sealed"
 )
 
 // loopback is the per-IP bucket key of every test connection.

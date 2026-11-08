@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 func FuzzParseControl(f *testing.F) {

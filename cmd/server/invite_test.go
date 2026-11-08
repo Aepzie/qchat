@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/server"
-	"github.com/craguS/qchat/internal/store/serverdb"
+	"github.com/Aepzie/qchat/internal/server"
+	"github.com/Aepzie/qchat/internal/store/serverdb"
 )
 
 var inviteCodePattern = regexp.MustCompile(`(?m)^  ([A-Z2-7]{4}(?:-[A-Z2-7]{4}){5}-[A-Z2-7]{2})$`)

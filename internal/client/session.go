@@ -85,8 +85,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // Authenticator supplies the local identity. A Session with a nil

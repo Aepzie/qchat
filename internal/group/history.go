@@ -3,7 +3,7 @@ package group
 import (
 	"fmt"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 // History limits.

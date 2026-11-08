@@ -1,6 +1,6 @@
 package identity
 
-import "github.com/craguS/qchat/internal/crypto/safety"
+import "github.com/Aepzie/qchat/internal/crypto/safety"
 
 // SafetyNumber returns the 60-digit safety number of the conversation
 // between the identities of bundles a and b, without separators (format it

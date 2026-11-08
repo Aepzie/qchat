@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/crypto/safety"
-	"github.com/craguS/qchat/internal/crypto/sealbox"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/crypto/safety"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/transport"
 	"github.com/fxamacker/cbor/v2"
 )
 

@@ -7,16 +7,16 @@ import (
 	"errors"
 	"time"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/crypto/sealbox"
-	"github.com/craguS/qchat/internal/e2e"
-	"github.com/craguS/qchat/internal/handshake"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/prekey"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/ratchet"
-	"github.com/craguS/qchat/internal/store/clientdb"
-	"github.com/craguS/qchat/internal/tui"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/e2e"
+	"github.com/Aepzie/qchat/internal/handshake"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/prekey"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/ratchet"
+	"github.com/Aepzie/qchat/internal/store/clientdb"
+	"github.com/Aepzie/qchat/internal/tui"
 )
 
 // Session rules

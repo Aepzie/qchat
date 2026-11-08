@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 // testHistory returns the history of a group created by ms[0] with ms[1]

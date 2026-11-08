@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
 )
 
 var (

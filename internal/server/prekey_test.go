@@ -8,10 +8,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/fxamacker/cbor/v2"
 
-	"github.com/craguS/qchat/internal/crypto/hybridsig"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/prekey"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/crypto/hybridsig"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/prekey"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // prekeySigner signs prekeys with the signing key of a test identity, which

@@ -7,7 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/craguS/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/client"
 )
 
 // command is one entry of the command palette.

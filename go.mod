@@ -1,4 +1,4 @@
-module github.com/craguS/qchat
+module github.com/Aepzie/qchat
 
 go 1.27.3
 

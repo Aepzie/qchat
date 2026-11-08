@@ -7,8 +7,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/craguS/qchat/internal/handshake"
-	"github.com/craguS/qchat/internal/padding"
+	"github.com/Aepzie/qchat/internal/handshake"
+	"github.com/Aepzie/qchat/internal/padding"
 )
 
 // Kind is the content type of a message.

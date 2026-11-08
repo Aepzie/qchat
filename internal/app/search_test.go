@@ -11,9 +11,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/craguS/qchat/internal/profile"
-	"github.com/craguS/qchat/internal/store/clientdb"
-	"github.com/craguS/qchat/internal/tui"
+	"github.com/Aepzie/qchat/internal/profile"
+	"github.com/Aepzie/qchat/internal/store/clientdb"
+	"github.com/Aepzie/qchat/internal/tui"
 )
 
 func hitTexts(hits []tui.SearchHit) []string {

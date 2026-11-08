@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
-	"github.com/craguS/qchat/internal/handshake"
-	"github.com/craguS/qchat/internal/prekey"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/store/clientdb"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/handshake"
+	"github.com/Aepzie/qchat/internal/prekey"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/store/clientdb"
 )
 
 // Prekey policy of docs/design/phase-3-forward-secrecy.md, section

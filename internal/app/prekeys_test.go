@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/prekey"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/store/clientdb"
+	"github.com/Aepzie/qchat/internal/prekey"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/store/clientdb"
 )
 
 func (u *fakeUser) uploads() []protocol.PrekeyUpload {

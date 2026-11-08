@@ -11,10 +11,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/craguS/qchat/internal/group"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/store/clientdb"
-	"github.com/craguS/qchat/internal/tui"
+	"github.com/Aepzie/qchat/internal/group"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/store/clientdb"
+	"github.com/Aepzie/qchat/internal/tui"
 )
 
 var (

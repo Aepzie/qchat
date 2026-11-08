@@ -18,14 +18,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/craguS/qchat/internal/server"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/server"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // modulePath is the module whose client build-client compiles. The source
 // tree is checked against it so that a wrong --source fails early instead of
 // building some other program with the server's address embedded.
-const modulePath = "github.com/craguS/qchat"
+const modulePath = "github.com/Aepzie/qchat"
 
 // clientPackage is the package build-client compiles, relative to the module
 // root.

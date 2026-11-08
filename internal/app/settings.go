@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/craguS/qchat/internal/store/clientdb"
-	"github.com/craguS/qchat/internal/tui"
+	"github.com/Aepzie/qchat/internal/store/clientdb"
+	"github.com/Aepzie/qchat/internal/tui"
 )
 
 // maxUISettingLen bounds the value of an interface setting.

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 const testOnion = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:7443"

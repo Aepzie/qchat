@@ -6,8 +6,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/craguS/qchat/internal/crypto/hybridsig"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/crypto/hybridsig"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // Parameters of the textual ID format.

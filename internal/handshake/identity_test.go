@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/prekey"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/prekey"
 )
 
 var (

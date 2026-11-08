@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 func TestNewGroupAndCreate(t *testing.T) {

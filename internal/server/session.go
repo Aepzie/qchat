@@ -12,8 +12,8 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/time/rate"
 
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // closeReason names why a session ended. It is the only per-session detail

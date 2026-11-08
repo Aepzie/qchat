@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/craguS/qchat/internal/app"
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/profile"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/app"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/profile"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // lookupTimeout bounds the connection that looks up the relay's copy of the
