@@ -232,6 +232,7 @@ func (a *App) RemoveContact(contactID string) error {
 		return err
 	}
 	delete(a.unread, id)
+	a.dropConversationFiles(context.Background(), id, false)
 	return nil
 }
 
