@@ -15,8 +15,11 @@ before:
     - go mod verify
 
 # Every build uses the same flags as "qchat-server build-client", so that a
-# release is reproducible from the tagged source with the same Go toolchain.
-# mod_timestamp sets the file times in the archives to the commit time.
+# release binary is reproducible from the tagged source with the same Go
+# toolchain. mod_timestamp sets the time of the binaries to the commit time,
+# and files[].info.mtime below does the same for the other archive entries.
+# Only the binaries are checked to be reproducible; archives also depend on
+# the GoReleaser version and the file modes of the checkout.
 builds:
   - id: server
     main: ./cmd/server
@@ -57,11 +60,21 @@ archives:
       - goos: windows
         formats: [zip]
     files:
-      - LICENSE
-      - README.md
-      - CHANGELOG.md
-      - SECURITY.md
-      - deploy/**/*
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: CHANGELOG.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: SECURITY.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: "deploy/**/*"
+        info:
+          mtime: "{{ .CommitDate }}"
 
   - id: client
     ids: [client]
@@ -71,9 +84,15 @@ archives:
       - goos: windows
         formats: [zip]
     files:
-      - LICENSE
-      - README.md
-      - SECURITY.md
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: SECURITY.md
+        info:
+          mtime: "{{ .CommitDate }}"
 
 # The source archive lets operators run "qchat-server build-client --source"
 # against exactly the released code.

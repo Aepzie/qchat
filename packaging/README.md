@@ -238,11 +238,14 @@ long-lived signing key exists that could leak.
    cosign verify-blob qchat_0.5.0_checksums.txt \
      --bundle qchat_0.5.0_checksums.txt.sigstore.json \
      --certificate-identity "https://github.com/craguS/qchat/.github/workflows/release.yml@refs/tags/v0.5.0" \
-     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+     --certificate-github-workflow-repository craguS/qchat \
+     --certificate-github-workflow-trigger push
    ```
 
-   It must print `Verified OK`. Any other identity, issuer or tag means the
-   file was not produced by this repository's release workflow.
+   It must print `Verified OK`. Any other identity, issuer, repository,
+   trigger or tag means the file was not produced by a tag push to this
+   repository's release workflow.
 
 2. Verify the downloads against the checksum file:
 
