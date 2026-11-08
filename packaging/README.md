@@ -167,17 +167,42 @@ architecture, or combine both binaries with `lipo -create` first.
 ### Server
 
 The release contains `qchat-server_<version>_<arch>.deb` and `.rpm`, built by
-GoReleaser with nfpm. They install `/usr/bin/qchat-server`, the systemd unit,
-create the system user and group `qchat` and the directories `/etc/qchat`
-and `/var/lib/qchat` (mode 0700, owned by `qchat`). The service is not
-enabled until the identity exists:
+GoReleaser with nfpm. They install `/usr/bin/qchat-server` and the systemd
+unit, and create the system user and group `qchat` and the directory
+`/etc/qchat`. If a user `qchat` already exists, the package checks that it
+is a system account (UID at most `SYS_UID_MAX` from `/etc/login.defs`, 999
+by default) with a `nologin` or `false` shell, and refuses to install
+otherwise, because the server would run as that user. The intended
+permissions are:
+
+| Path | Owner | Mode | Why |
+| --- | --- | --- | --- |
+| `/etc/qchat` | `root:qchat` | 0750 | the server can read but not change its configuration |
+| `/etc/qchat/server.toml`, `server.crt` | `root:qchat` | 0640 | readable by the server and members of `qchat` |
+| `/etc/qchat/server.key` | `qchat:qchat` | 0600 | only the server reads the key (`run` warns about a key others can access) |
+| `/var/lib/qchat` | `qchat:qchat` | 0700 | the database, writable by the server only |
+
+Existing files are never changed; the package only warns about owners or
+modes that grant more access than this. The service is not enabled until
+the identity exists. Create it as root, then hand the files to `qchat`:
 
 ```sh
 sudo apt install ./qchat-server_0.5.0_amd64.deb      # or: sudo dnf install ./qchat-server-0.5.0-1.x86_64.rpm
-sudo runuser -u qchat -- qchat-server init --data-dir /etc/qchat \
+sudo qchat-server init --data-dir /etc/qchat \
   --database /var/lib/qchat/qchat.db --host chat.example.org
+sudo chown root:qchat /etc/qchat/server.toml /etc/qchat/server.crt
+sudo chmod 0640 /etc/qchat/server.toml /etc/qchat/server.crt
+sudo chown qchat:qchat /etc/qchat/server.key
+sudo chown -R qchat:qchat /var/lib/qchat
 sudo systemctl enable --now qchat-server
 ```
+
+`init` warns that `/etc/qchat` is accessible to other users; that is the
+`qchat` group, as intended. It refuses a `/var/lib/qchat` that already
+exists and is owned by `qchat` (for example from an earlier package
+version); remove it first if it is empty (`sudo rmdir /var/lib/qchat`).
+Invite codes are created as the service user, which can write the
+database: `sudo runuser -u qchat -- qchat-server invite create --config /etc/qchat/server.toml`.
 
 Removing the package stops the service and keeps the user, the identity and
 the database. Build the packages locally, without signing, with

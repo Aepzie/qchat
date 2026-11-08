@@ -13,13 +13,19 @@ fi
 
 if [ ! -f /etc/qchat/server.toml ]; then
     cat <<'MSG'
-qchat-server is installed. Create the server identity, then start it:
+qchat-server is installed. As root, create the server identity, give the
+qchat user access to it, then start the service:
 
-  runuser -u qchat -- qchat-server init --data-dir /etc/qchat \
+  qchat-server init --data-dir /etc/qchat \
       --database /var/lib/qchat/qchat.db --host chat.example.org
+  chown root:qchat /etc/qchat/server.toml /etc/qchat/server.crt
+  chmod 0640 /etc/qchat/server.toml /etc/qchat/server.crt
+  chown qchat:qchat /etc/qchat/server.key
+  chown -R qchat:qchat /var/lib/qchat
   systemctl enable --now qchat-server
 
-See /usr/share/doc/qchat-server/README.systemd.md.
+init warns that /etc/qchat is accessible to other users: that is the qchat
+group, as intended. See /usr/share/doc/qchat-server/README.systemd.md.
 MSG
 fi
 exit 0
