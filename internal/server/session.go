@@ -327,7 +327,7 @@ func (s *session) handlePing(frame protocol.Frame) bool {
 	if err != nil {
 		return s.fail(frame.ID, requestErrorCode(err))
 	}
-	return respond(s, protocol.TypePong, frame.ID, protocol.Pong{Nonce: ping.Nonce})
+	return respond(s, protocol.TypePong, frame.ID, protocol.Pong(ping))
 }
 
 // requestErrorCode maps a body decoding error to an error code. Anything the
