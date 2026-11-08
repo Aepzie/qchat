@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: goreleaser
+    runs-on: ubuntu-latest
+    permissions:
+      # Create the GitHub release and upload its assets.
+      contents: write
+      # Request the OIDC token that cosign exchanges for a short-lived
+      # Sigstore signing certificate (keyless signing).
+      id-token: write
+    # Actions and tools are pinned to exact versions. Moving them to full
+    # commit SHAs (with the version as a trailing comment) protects against
+    # a re-pointed tag; Dependabot keeps either form up to date.
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version-file: go.mod
+          # No build cache in the release job: a poisoned cache from another
+          # workflow must not end up in a signed release.
+          cache: false
+
+      - name: Test
+        run: go test -short ./...
+
+      - uses: sigstore/cosign-installer@v3.8.1
+        with:
+          cosign-release: v2.4.3
+
+      - uses: anchore/sbom-action/download-syft@v0.18.0
+
+      - uses: goreleaser/goreleaser-action@v6.3.0
+        with:
+          distribution: goreleaser
+          version: v2.8.2
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
