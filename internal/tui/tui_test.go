@@ -343,11 +343,12 @@ func TestCommands(t *testing.T) {
 	m := connected(t, newTestModel(t, 60, 40))
 
 	m, _ = submit(t, m, "/help")
-	for _, want := range []string{"/status", "/fingerprint", "/clear", "/quit"} {
+	for _, want := range []string{"Help", "/search", "/clear", "/add"} {
 		if !strings.Contains(screen(m), want) {
 			t.Errorf("/help lacks %q", want)
 		}
 	}
+	m = update(t, m, keyEsc)
 
 	m, _ = submit(t, m, "/status")
 	s := screen(m)

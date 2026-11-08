@@ -27,13 +27,31 @@ var commands = []command{
 	{"/status", "connection details"},
 	{"/fingerprint", "pinned server key"},
 	{"/group", "groups: create <name> [ids], add, remove, members…"},
+	{"/search", "find messages: /search [all] <text>"},
+	{"/theme", "change colors: /theme <name>"},
+	{"/markdown", "format messages: /markdown on|off"},
 	{"/clear", "clear this view"},
 	{"/quit", "exit qchat"},
 }
 
+// subCommands returns the palette entries for the argument of a command,
+// such as the /group subcommands or the theme names, or nil when the
+// command's argument is free text.
+func subCommands(name string) []command {
+	switch strings.ToLower(name) {
+	case "/group":
+		return groupCommands
+	case "/theme":
+		return themeCommands()
+	case "/markdown":
+		return markdownCommands
+	}
+	return nil
+}
+
 // paletteQuery returns the command prefix being typed, or false if the input
-// is not a command in progress. "/group " followed by one partial word is a
-// query for the /group subcommands.
+// is not a command in progress. A command with subcommands followed by one
+// partial word is a query for its subcommands.
 func paletteQuery(input string) (string, bool) {
 	if !strings.HasPrefix(input, "/") || strings.ContainsAny(input, "\t\n") {
 		return "", false
@@ -42,18 +60,19 @@ func paletteQuery(input string) (string, bool) {
 	if !spaced {
 		return input, true
 	}
-	if strings.ToLower(name) != "/group" || strings.Contains(sub, " ") {
+	if subCommands(name) == nil || strings.Contains(sub, " ") {
 		return "", false
 	}
 	return input, true
 }
 
 // matchCommands returns the commands whose name starts with prefix: the
-// /group subcommands when prefix holds a space, the commands otherwise.
+// subcommands of the command when prefix holds a space, the commands
+// otherwise.
 func matchCommands(prefix string) []command {
 	list := commands
-	if strings.Contains(prefix, " ") {
-		list = groupCommands
+	if name, _, spaced := strings.Cut(prefix, " "); spaced {
+		list = subCommands(name)
 	}
 	var out []command
 	for _, c := range list {
@@ -108,6 +127,10 @@ func (m *Model) runCommand(input string) tea.Cmd {
 		return m.cmdAdd(fields[1:])
 	case "/group":
 		return m.cmdGroup(fields[1:])
+	case "/theme":
+		return m.cmdTheme(fields[1:])
+	case "/markdown":
+		return m.cmdMarkdown(fields[1:])
 	case "/rename":
 		return m.cmdRename(rest)
 	case "/remove":
@@ -123,7 +146,9 @@ func (m *Model) runCommand(input string) tea.Cmd {
 			m.openWhoami()
 		}
 	case "/help":
-		m.addOutput("help", helpRows(), "")
+		m.openHelp()
+	case "/search":
+		return m.cmdSearch(rest)
 	case "/status":
 		m.addOutput("status", m.statusRows(), "")
 	case "/fingerprint":
@@ -195,21 +220,6 @@ func (m *Model) cmdRename(rest string) tea.Cmd {
 		return nil
 	}
 	return renameCmd(m.cfg.Backend, c.contact.ID, name)
-}
-
-func helpRows() []row {
-	var rows []row
-	for _, c := range commands {
-		rows = append(rows, row{c.name, c.summary})
-	}
-	return append(rows,
-		row{"any mode", "ctrl+n / ctrl+p next or previous conversation"},
-		row{"insert", "enter send · esc normal mode · tab complete · pgup/pgdn scroll"},
-		row{"normal", "J/K select · enter open · i insert · j/k line · ctrl+d/u half page · g/G top/bottom · : command · q quit"},
-		row{"status", "… sending · ✓ sent, stored by the relay until delivered · ⧗ recipient offline, not delivered (old relays) · ✕ not sent · ◷ sender clock off"},
-		row{"contacts", "✓ verified · ⚠ safety number changed, run /verify"},
-		row{"privacy", "Messages to contacts and # groups are end-to-end encrypted. The relay sees who talks to whom (for groups, every recipient), when, and sizes. Notes in System stay on this device."},
-	)
 }
 
 func (m *Model) statusRows() []row {

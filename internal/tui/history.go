@@ -178,8 +178,8 @@ func renderMessage(e entry, width int, st styles) []string {
 	}
 	out := []string{head}
 	indent := strings.Repeat(" ", noteIndent)
-	for _, line := range wrapLines(e.text, width-noteIndent) {
-		out = append(out, indent+st.text.Render(line))
+	for _, line := range renderBody(e.text, width-noteIndent, st) {
+		out = append(out, indent+line)
 	}
 	if e.status == StatusFailed && e.errText != "" {
 		for _, line := range wrapLines(e.errText, width-noteIndent) {

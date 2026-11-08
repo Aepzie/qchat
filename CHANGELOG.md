@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- TUI themes `dusk` (default), `fjord`, `ember`, `contrast` and `paper`, with
+  `/theme <name>` and completion. Themes with a background set the terminal
+  background while the client runs; QR codes stay dark on light.
+- Optional `tui.SettingsBackend`; the client stores `ui.theme` and
+  `ui.markdown` in the encrypted settings table. Other settings are not
+  reachable from the interface.
+- Markdown rendering of message bodies with glamour, limited to emphasis,
+  code spans, code blocks, lists and block quotes. Links show their address
+  in brackets and are not clickable (no OSC 8), images show as
+  `[image: alt]`, HTML is shown as text. Bodies of 8 KiB or more and bodies
+  that fail to render fall back to plain text. `/markdown on|off`.
+- `/search <text>` and `/search all <text>` with a results overlay; optional
+  `tui.SearchBackend`, implemented by decrypting and scanning at most the
+  2000 most recent messages of each conversation.
+- `/help` opens a scrollable overlay with every command grouped by topic.
+
+### Decided against
+
+- Typing indicators: they would disclose to the relay when and to whom the
+  user is writing, in real time.
+
 ## [0.6.0] - 2026-11-08
 
 Pinned client installers, reproducible builds and a signed release pipeline.
