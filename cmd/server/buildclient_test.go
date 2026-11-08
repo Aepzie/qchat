@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/craguS/qchat/internal/server"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/server"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 func testCertificate(t *testing.T, hosts ...string) *x509.Certificate {
@@ -126,8 +126,8 @@ func TestGoBuildArgs(t *testing.T) {
 	want := []string{
 		"build", "-trimpath", "-buildvcs=false",
 		"-ldflags", "-s -w -buildid=" +
-			" -X github.com/craguS/qchat/internal/buildcfg.ServerAddr=chat.example.org:7443" +
-			" -X github.com/craguS/qchat/internal/buildcfg.ServerPin=sha256:0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" +
+			" -X github.com/Aepzie/qchat/internal/buildcfg.ServerAddr=chat.example.org:7443" +
+			" -X github.com/Aepzie/qchat/internal/buildcfg.ServerPin=sha256:0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" +
 			" -X main.version=v1.2.3",
 		"-o", "/out/qchat",
 		"./cmd/client",
@@ -318,8 +318,8 @@ func TestClientFileNameAndChecksums(t *testing.T) {
 
 func TestGoModModule(t *testing.T) {
 	for content, want := range map[string]string{
-		"module github.com/craguS/qchat\n\ngo 1.27.3\n":        modulePath,
-		"// header\nmodule \"github.com/craguS/qchat\" // x\n": modulePath,
+		"module github.com/Aepzie/qchat\n\ngo 1.27.3\n":        modulePath,
+		"// header\nmodule \"github.com/Aepzie/qchat\" // x\n": modulePath,
 		"modules example.com/x\n":                              "",
 		"go 1.27\n":                                            "",
 	} {

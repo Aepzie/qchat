@@ -11,7 +11,7 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/time/rate"
 
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 func sendMulti(t *testing.T, conn *websocket.Conn, id uint64, to [][]byte, payload []byte) {

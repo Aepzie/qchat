@@ -14,8 +14,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/craguS/qchat/internal/server"
-	"github.com/craguS/qchat/internal/store/serverdb"
+	"github.com/Aepzie/qchat/internal/server"
+	"github.com/Aepzie/qchat/internal/store/serverdb"
 )
 
 // Defaults of "invite create".

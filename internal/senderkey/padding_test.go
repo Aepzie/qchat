@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/craguS/qchat/internal/padding"
+	"github.com/Aepzie/qchat/internal/padding"
 )
 
 func TestMaxPaddedPlaintextSize(t *testing.T) {

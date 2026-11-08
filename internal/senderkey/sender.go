@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/craguS/qchat/internal/crypto/hybridsig"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/padding"
+	"github.com/Aepzie/qchat/internal/crypto/hybridsig"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/padding"
 )
 
 // SenderStateVersion is the version of the serialised [Sender] format.

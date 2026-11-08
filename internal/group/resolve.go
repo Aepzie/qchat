@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 // Resolve returns the winner of two conflicting controls, that is two

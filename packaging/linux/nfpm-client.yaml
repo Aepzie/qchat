@@ -12,12 +12,12 @@ platform: linux
 version: ${QCHAT_VERSION}
 section: net
 priority: optional
-maintainer: qchat maintainers <https://github.com/craguS/qchat/issues>
+maintainer: qchat maintainers <https://github.com/Aepzie/qchat/issues>
 description: |-
   qchat terminal client.
   End-to-end encrypted chat client, locked to the server it was built for.
 vendor: qchat
-homepage: https://github.com/craguS/qchat
+homepage: https://github.com/Aepzie/qchat
 license: AGPL-3.0-only
 contents:
   - src: ${QCHAT_BINARY}

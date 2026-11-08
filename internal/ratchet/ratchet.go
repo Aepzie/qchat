@@ -9,7 +9,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 

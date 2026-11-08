@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/e2e"
-	"github.com/craguS/qchat/internal/ratchet"
-	"github.com/craguS/qchat/internal/senderkey"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/e2e"
+	"github.com/Aepzie/qchat/internal/ratchet"
+	"github.com/Aepzie/qchat/internal/senderkey"
 )
 
 // paddingProbeLengths are body lengths that fall into the smallest padding

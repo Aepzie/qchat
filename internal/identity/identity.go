@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/craguS/qchat/internal/crypto/hybridsig"
-	"github.com/craguS/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/crypto/hybridsig"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
 )
 
 // Signature context labels. Each signed structure of the protocol has its

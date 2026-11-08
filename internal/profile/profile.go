@@ -13,9 +13,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/craguS/qchat/internal/crypto/vault"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/store/clientdb"
+	"github.com/Aepzie/qchat/internal/crypto/vault"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/store/clientdb"
 )
 
 // File names inside a profile directory.

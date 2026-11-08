@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/craguS/qchat/internal/padding"
+	"github.com/Aepzie/qchat/internal/padding"
 )
 
 func TestPaddedLimits(t *testing.T) {

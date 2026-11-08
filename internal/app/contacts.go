@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/store/clientdb"
-	"github.com/craguS/qchat/internal/tui"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/store/clientdb"
+	"github.com/Aepzie/qchat/internal/tui"
 )
 
 // Errors returned to the interface. Their text is shown to the user.

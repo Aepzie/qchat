@@ -12,9 +12,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/craguS/qchat/internal/server"
-	"github.com/craguS/qchat/internal/store/serverdb"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/server"
+	"github.com/Aepzie/qchat/internal/store/serverdb"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // File names inside a data directory.

@@ -11,7 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // testClock is a settable clock for the server.

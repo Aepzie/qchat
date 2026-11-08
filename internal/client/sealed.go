@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // isolationTokenSize is the number of random bytes in an isolation token.

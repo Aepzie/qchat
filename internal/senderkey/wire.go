@@ -7,9 +7,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/craguS/qchat/internal/crypto/hybridsig"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/padding"
+	"github.com/Aepzie/qchat/internal/crypto/hybridsig"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/padding"
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/crypto/chacha20poly1305"
 )

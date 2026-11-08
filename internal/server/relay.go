@@ -8,9 +8,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/store/serverdb"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/store/serverdb"
 )
 
 // Relay defaults that are not part of the configuration file.

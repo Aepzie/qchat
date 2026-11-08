@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/craguS/qchat/internal/server"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/server"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // cmdRun starts the server from a configuration file. It stops gracefully

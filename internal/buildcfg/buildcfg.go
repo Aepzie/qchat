@@ -4,8 +4,8 @@
 // A distributor can lock a client build to one server:
 //
 //	go build -ldflags "\
-//	  -X github.com/craguS/qchat/internal/buildcfg.ServerAddr=chat.example.org:443 \
-//	  -X github.com/craguS/qchat/internal/buildcfg.ServerPin=sha256:<64 hex digits>" \
+//	  -X github.com/Aepzie/qchat/internal/buildcfg.ServerAddr=chat.example.org:443 \
+//	  -X github.com/Aepzie/qchat/internal/buildcfg.ServerPin=sha256:<64 hex digits>" \
 //	  ./cmd/client
 //
 // When both values are embedded, the client must connect to that server,
@@ -20,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // ServerAddr is the embedded server address in "host:port" form, as accepted

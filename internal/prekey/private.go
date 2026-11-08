@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
 )
 
 // PrivateVersion is the format version of the record produced by

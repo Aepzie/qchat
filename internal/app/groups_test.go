@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/e2e"
-	"github.com/craguS/qchat/internal/group"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/senderkey"
-	"github.com/craguS/qchat/internal/tui"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/e2e"
+	"github.com/Aepzie/qchat/internal/group"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/senderkey"
+	"github.com/Aepzie/qchat/internal/tui"
 )
 
 // settle delivers queued messages to every user until no queue has any

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
 )
 
 // StateVersion is the version of the serialised state format. Version 1

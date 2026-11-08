@@ -14,8 +14,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // fakeServer is a minimal qchat server on 127.0.0.1 for exercising the

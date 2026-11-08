@@ -28,8 +28,8 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // Minimum terminal size for the full layout.

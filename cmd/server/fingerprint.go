@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/craguS/qchat/internal/server"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/server"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // maxCertFileSize bounds how much of a certificate file is read.

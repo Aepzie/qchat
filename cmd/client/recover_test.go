@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/profile"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/profile"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // fakeRelay is a relaySession that replays scripted events.

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/prekey"
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/store/serverdb"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/prekey"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/store/serverdb"
 )
 
 // uploadBurst and uploadInterval define the per-session token bucket for

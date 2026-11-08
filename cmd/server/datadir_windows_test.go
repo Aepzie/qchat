@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/craguS/qchat/internal/server"
+	"github.com/Aepzie/qchat/internal/server"
 )
 
 // readSecurity returns the owner and DACL of path.

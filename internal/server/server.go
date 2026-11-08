@@ -17,9 +17,9 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/time/rate"
 
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/store/serverdb"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/store/serverdb"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // Timeouts that are not part of the configuration file.

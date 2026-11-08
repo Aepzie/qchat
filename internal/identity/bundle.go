@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/craguS/qchat/internal/crypto/hybridsig"
-	"github.com/craguS/qchat/internal/crypto/sealbox"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/crypto/hybridsig"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // Bundle format parameters.

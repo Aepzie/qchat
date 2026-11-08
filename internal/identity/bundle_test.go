@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/transport"
 	"github.com/fxamacker/cbor/v2"
 )
 

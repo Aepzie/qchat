@@ -16,7 +16,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // Default configuration values. They are also written by "qchat-server init".

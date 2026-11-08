@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/padding"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/padding"
 )
 
 // party is an identity with its verified bundle.

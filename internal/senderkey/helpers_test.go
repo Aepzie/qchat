@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/crypto/hybridsig"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/padding"
+	"github.com/Aepzie/qchat/internal/crypto/hybridsig"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/padding"
 )
 
 // testEpoch and testBinding are the group state helpers encrypt claims.

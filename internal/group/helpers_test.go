@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 // member is a test identity together with its verified bundle.

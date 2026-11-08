@@ -11,8 +11,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/craguS/qchat/internal/protocol"
-	"github.com/craguS/qchat/internal/sealed"
+	"github.com/Aepzie/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/sealed"
 )
 
 // newAccessKey returns a fresh access key.

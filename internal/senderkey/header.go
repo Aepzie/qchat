@@ -4,7 +4,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/craguS/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/identity"
 )
 
 // HeaderCandidate is one header key a receiving member holds: the header key

@@ -7,8 +7,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/transport"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/transport"
 )
 
 // maxEntries bounds the history kept in memory; the oldest entries go first.

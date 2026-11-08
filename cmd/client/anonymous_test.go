@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/craguS/qchat/internal/client"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // recordingProxy accepts SOCKS5 username/password authentication, reports

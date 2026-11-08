@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/craguS/qchat/internal/crypto/sealbox"
-	"github.com/craguS/qchat/internal/identity"
-	"github.com/craguS/qchat/internal/padding"
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/crypto/sealbox"
+	"github.com/Aepzie/qchat/internal/identity"
+	"github.com/Aepzie/qchat/internal/padding"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 // Version is the envelope version this package produces and accepts.

@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	"github.com/craguS/qchat/internal/protocol"
+	"github.com/Aepzie/qchat/internal/protocol"
 )
 
 func TestSendMultiIsARequest(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/craguS/qchat/internal/crypto/vault"
+	"github.com/Aepzie/qchat/internal/crypto/vault"
 )
 
 func TestPrivatePermissions(t *testing.T) {
