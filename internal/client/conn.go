@@ -362,6 +362,9 @@ func (c *liveConn) handleFrame(ctx context.Context, r readResult) error {
 		}
 		return c.send(ctx, protocol.TypePong, f.ID, protocol.Pong(ping))
 	case protocol.TypeDeliver:
+		if c.session.opts.Anonymous {
+			return fmt.Errorf("%w: Deliver on an anonymous connection", ErrProtocolViolation)
+		}
 		deliver, err := protocol.DecodeBody[protocol.Deliver](f, protocol.TypeDeliver)
 		if err != nil {
 			return fmt.Errorf("%w: invalid Deliver: %w", ErrProtocolViolation, err)
@@ -369,7 +372,8 @@ func (c *liveConn) handleFrame(ctx context.Context, r readResult) error {
 		c.session.emit(Delivery{From: [protocol.IDSize]byte(deliver.From), Payload: bytes.Clone(deliver.Payload), QueueID: deliver.QueueID})
 		return nil
 	case protocol.TypeRegistered, protocol.TypeAuthChallenge, protocol.TypeAuthOK,
-		protocol.TypeKeyResponse, protocol.TypeSendResult, protocol.TypeSendMultiResult, protocol.TypePrekeyStatus, protocol.TypePrekeyResponse:
+		protocol.TypeKeyResponse, protocol.TypeSendResult, protocol.TypeSendMultiResult, protocol.TypePrekeyStatus, protocol.TypePrekeyResponse,
+		protocol.TypeAccessKeySet:
 		c.resolve(f)
 		return nil
 	case protocol.TypeError:
