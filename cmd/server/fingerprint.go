@@ -53,31 +53,40 @@ func cmdFingerprint(args []string, stdout, stderr io.Writer) error {
 // certificateFingerprint returns the fingerprint of the first certificate
 // in the PEM file at path.
 func certificateFingerprint(path string) (transport.Fingerprint, error) {
+	cert, err := readCertificate(path)
+	if err != nil {
+		return transport.Fingerprint{}, err
+	}
+	return transport.FingerprintOf(cert), nil
+}
+
+// readCertificate parses the first certificate in the PEM file at path.
+func readCertificate(path string) (*x509.Certificate, error) {
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
-		return transport.Fingerprint{}, fmt.Errorf("read certificate: %w", err)
+		return nil, fmt.Errorf("read certificate: %w", err)
 	}
 	defer f.Close()
 	content, err := io.ReadAll(io.LimitReader(f, maxCertFileSize+1))
 	if err != nil {
-		return transport.Fingerprint{}, fmt.Errorf("read certificate: %w", err)
+		return nil, fmt.Errorf("read certificate: %w", err)
 	}
 	if len(content) > maxCertFileSize {
-		return transport.Fingerprint{}, fmt.Errorf("read certificate: %s is larger than %d bytes", path, maxCertFileSize)
+		return nil, fmt.Errorf("read certificate: %s is larger than %d bytes", path, maxCertFileSize)
 	}
 	for rest := content; ; {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
 		if block == nil {
-			return transport.Fingerprint{}, errors.New("read certificate: no CERTIFICATE block found in " + path)
+			return nil, errors.New("read certificate: no CERTIFICATE block found in " + path)
 		}
 		if block.Type != "CERTIFICATE" {
 			continue
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return transport.Fingerprint{}, fmt.Errorf("parse certificate: %w", err)
+			return nil, fmt.Errorf("parse certificate: %w", err)
 		}
-		return transport.FingerprintOf(cert), nil
+		return cert, nil
 	}
 }

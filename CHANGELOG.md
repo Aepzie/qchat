@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-08
+
+Pinned client installers, reproducible builds and a signed release pipeline.
+
+### Added
+
+- `qchat-server build-client`: builds clients locked to the server's
+  address and public key fingerprint for Linux, Windows and macOS (amd64,
+  arm64) from a qchat source tree, and writes `SHA256SUMS`. It reads only
+  the configuration and certificate, never the private key.
+- Reproducible client builds (`CGO_ENABLED=0`, `-trimpath`,
+  `-buildvcs=false`, empty build ID, build-affecting environment variables
+  overridden), verified by a test that builds twice and compares the output.
+- Release pipeline: `.goreleaser.yaml` for server and client archives,
+  checksums, SBOMs, server `.deb`/`.rpm` packages with a systemd unit and a
+  `qchat` system user, and a keyless cosign signature of the checksum file;
+  `.github/workflows/release.yml` runs it on `v*` tags.
+- Installer configurations for pinned clients: Inno Setup script for Windows
+  (`packaging/windows/qchat.iss`) and an nfpm configuration for Linux.
+- `packaging/README.md`: building pinned installers, Authenticode and
+  Developer ID signing with notarization, and verifying checksums and cosign
+  signatures.
+
 ## [0.5.0] - 2026-11-08
 
 Metadata protection: padding, sealed sender and optional Tor. The sealed-sender
@@ -203,7 +226,8 @@ release; only the connection between client and relay is protected.
 - The server never logs client IP addresses or client-supplied data.
 - A pinned-key mismatch blocks the connection and is never retried.
 
-[Unreleased]: https://github.com/craguS/qchat/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/craguS/qchat/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/craguS/qchat/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/craguS/qchat/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/craguS/qchat/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/craguS/qchat/compare/v0.2.0...v0.3.0

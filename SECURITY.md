@@ -64,8 +64,9 @@ The server never logs IP addresses. Planned measures include sealed sender, padd
 | 2 (v0.2.0) | Hybrid identity keys; self-authenticating IDs; 1:1 end-to-end encrypted and signed messages (no forward secrecy); safety numbers; passphrase-encrypted local storage; online-only delivery. |
 | 3 (v0.3.0) | Signed hybrid prekeys; KEM-based asynchronous session start; per-direction hybrid KEM double ratchet (forward secrecy, post-compromise security); ciphertext-only offline delivery with acknowledgements; no presence probing via send results. |
 | 4 (v0.4.0) | Groups up to 256 members: admin-signed membership controls, sender keys with hybrid-signed messages and encrypted headers, key rotation by every remaining member on removal, verified join history, out-of-sync detection. |
-| 5 (v0.5.0, current) | Padding inside the encryption; sealed sender over separate anonymous sessions with access keys and anonymous key lookups; optional Tor (SOCKS5, onion service). See the limits below and docs/design/phase-5-metadata.md. |
-| 6-8 | Installer builder, UI, tests, fuzzing, release pipeline. |
+| 5 (v0.5.0) | Padding inside the encryption; sealed sender over separate anonymous sessions with access keys and anonymous key lookups; optional Tor (SOCKS5, onion service). See the limits below and docs/design/phase-5-metadata.md. |
+| 6 (v0.6.0, current) | Pinned client builds (`build-client`), reproducible builds, `.deb`/`.rpm`/Windows installer packaging, releases with checksums signed by keyless cosign. |
+| 7-8 | UI, files, tests, fuzzing. |
 
 Planned phases are goals, not guarantees.
 
