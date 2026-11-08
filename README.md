@@ -4,6 +4,10 @@ An open-source, end-to-end-encrypted, post-quantum-hybrid terminal chat written 
 
 > **Warning: unaudited software.** qchat has not been reviewed by an independent security auditor. Do not use it for anything sensitive until an independent audit has been completed and published. The 1:1 session protocol (a KEM-based handshake and double ratchet), the group protocol (sender keys) and the sealed-sender construction are composed from standard primitives but are **not independently analysed**. Read [SECURITY.md](SECURITY.md) for exactly what is and is not protected.
 
+![qchat: a conversation with Markdown, a file transfer, sealed-sender status and a disappearing-message notice](docs/screenshots/hero.svg)
+
+More screens are in [Screenshots](#screenshots).
+
 ## Overview
 
 qchat consists of two binaries:
@@ -197,7 +201,33 @@ An independent audit is the next step. Until it is complete and published, treat
 
 ## Screenshots
 
-Screenshots are not included yet. ASCII snapshots of the terminal UI (conversation view, safety number overlay, themes) will be added here.
+All names, IDs, groups and messages in these images are made up. They are rendered from the real interface by [`tools/screenshots`](tools/screenshots); see [docs/screenshots](docs/screenshots/README.md) to regenerate them.
+
+| | |
+|---|---|
+| ![Requests tab](docs/screenshots/requests.svg) | ![Group conversation](docs/screenshots/group.svg) |
+| **Requests**: a message request from someone who is not a contact, and a group invitation, as cards you accept or decline. | **Groups**: several senders, a failed message with its reason and a message still sending. |
+| ![Safety number and QR code](docs/screenshots/verify.svg) | ![Own ID and QR code](docs/screenshots/whoami.svg) |
+| **`/verify`**: the 60-digit safety number and a QR code to compare with a contact. | **`/whoami`**: your ID and its QR code, to share with people who want to add you. |
+| ![Key-change warning](docs/screenshots/key-change.svg) | ![Search](docs/screenshots/search.svg) |
+| **Key change**: a contact's identity key changed; the banner stays until you compare safety numbers again. | **`/search`**: find messages in one conversation or in all of them. |
+| ![Files tab](docs/screenshots/files.svg) | ![System tab](docs/screenshots/system.svg) |
+| **Files**: transfers with progress, next to the conversation they belong to. | **System**: the connection log and `/status`, including what the relay can see. |
+| ![Help overlay](docs/screenshots/help.svg) | ![Create an identity](docs/screenshots/create-profile.svg) |
+| **`/help`**: every command and key. | **First run**: create an identity protected by a passphrase. |
+| ![Start screen](docs/screenshots/splash.svg) | |
+| **Start screen**: shown briefly at launch; `/animations off` turns it off. | |
+
+### Themes
+
+The same conversation in four of the built-in themes (`/theme` lists all of them):
+
+| | |
+|---|---|
+| ![phosphor theme](docs/screenshots/theme-phosphor.svg) | ![neon theme](docs/screenshots/theme-neon.svg) |
+| **phosphor** (default) | **neon** |
+| ![matrix theme](docs/screenshots/theme-matrix.svg) | ![ice theme](docs/screenshots/theme-ice.svg) |
+| **matrix** | **ice** |
 
 ## License
 
