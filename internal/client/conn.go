@@ -486,7 +486,7 @@ func (c *liveConn) ping(ctx context.Context) error {
 		return fmt.Errorf("%w: %d keepalives unanswered", ErrKeepaliveTimeout, len(c.outstanding))
 	}
 	id := c.newID()
-	nonce := rand.Uint64()
+	nonce := rand.Uint64() // #nosec G404 -- keepalive nonce only matches Pongs to Pings, not a secret
 	c.outstanding[id] = pendingPing{nonce: nonce, sent: time.Now()}
 	return c.send(ctx, protocol.TypePing, id, protocol.Ping{Nonce: nonce})
 }
@@ -566,7 +566,7 @@ func (c *liveConn) closeWith(cause error) {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		c.conn.CloseNow()
+		_ = c.conn.CloseNow()
 	}
 }
 

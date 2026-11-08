@@ -54,6 +54,20 @@ jobs:
           go-version-file: go.mod
       - name: Fuzz protocol decoder
         run: go test -run='^$' -fuzz='FuzzDecode$' -fuzztime=30s ./internal/protocol/
+      - name: Fuzz handshake bundle parser
+        run: go test -run='^$' -fuzz='^FuzzParseBundle$' -fuzztime=20s ./internal/handshake/
+      - name: Fuzz SOCKS5 reply reader
+        run: go test -run='^$' -fuzz='^FuzzReadSOCKS5Reply$' -fuzztime=20s ./internal/transport/
+      - name: Fuzz SOCKS5 CONNECT request builder
+        run: go test -run='^$' -fuzz='^FuzzSOCKS5ConnectRequest$' -fuzztime=20s ./internal/transport/
+      - name: Fuzz safety QR payload parser
+        run: go test -run='^$' -fuzz='^FuzzParseQRPayload$' -fuzztime=20s ./internal/crypto/safety/
+      - name: Fuzz group state decoder
+        run: go test -run='^$' -fuzz='^FuzzUnmarshalState$' -fuzztime=20s ./internal/group/
+      - name: Fuzz ASCII sanitizer
+        run: go test -run='^$' -fuzz='^FuzzSanitizeASCII$' -fuzztime=20s ./internal/client/
+      - name: Fuzz server config parser
+        run: go test -run='^$' -fuzz='^FuzzParseConfig$' -fuzztime=20s ./internal/server/
 
   security:
     name: security
@@ -65,6 +79,11 @@ jobs:
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
+      # The analyzers are built with "go run ...@latest", which ignores the
+      # module and may select an older toolchain than go.mod requires; pin
+      # GOTOOLCHAIN to the go.mod version so they can load this module.
+      - name: Pin toolchain to go.mod
+        run: echo "GOTOOLCHAIN=go$(go list -m -f '{{.GoVersion}}')" >> "$GITHUB_ENV"
       - name: staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
       - name: govulncheck

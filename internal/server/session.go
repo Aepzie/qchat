@@ -163,7 +163,7 @@ func newSession(srv *Server, conn *websocket.Conn, binding []byte) *session {
 		srv:            srv,
 		conn:           conn,
 		binding:        binding,
-		number:         rand.Uint64(),
+		number:         rand.Uint64(), // #nosec G404 -- log correlation ID, not a secret
 		limiter:        rate.NewLimiter(rate.Limit(limits.FramesPerSecond), limits.Burst),
 		authLimiter:    rate.NewLimiter(srv.authRate, srv.authBurst),
 		prekeyLimiter:  rate.NewLimiter(srv.prekeyRate, srv.prekeyBurst),
@@ -320,8 +320,8 @@ func (s *session) handleHello(frame protocol.Frame) bool {
 	limits := s.srv.cfg.Limits
 	welcome := protocol.Welcome{
 		Version:      version,
-		MaxFrameSize: uint32(limits.MaxFrameSize),
-		PingInterval: uint32(limits.PingInterval.Std() / time.Second),
+		MaxFrameSize: uint32(limits.MaxFrameSize),                     // #nosec G115 -- validated config, at most protocol.MaxFrameSize
+		PingInterval: uint32(limits.PingInterval.Std() / time.Second), // #nosec G115 -- validated config, 1s to protocol.MaxPingInterval
 	}
 	return respond(s, protocol.TypeWelcome, frame.ID, welcome)
 }
@@ -332,7 +332,7 @@ func (s *session) handlePing(frame protocol.Frame) bool {
 	if err != nil {
 		return s.fail(frame.ID, requestErrorCode(err))
 	}
-	return respond(s, protocol.TypePong, frame.ID, protocol.Pong{Nonce: ping.Nonce})
+	return respond(s, protocol.TypePong, frame.ID, protocol.Pong(ping))
 }
 
 // requestErrorCode maps a body decoding error to an error code. Anything the

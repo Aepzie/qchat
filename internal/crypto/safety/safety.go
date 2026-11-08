@@ -186,7 +186,7 @@ func ParseQRPayload(payload string) (first, second [IDSize]byte, number string, 
 	if !ok {
 		return first, second, "", ErrInvalidQRPayload
 	}
-	parts := strings.Split(rest, ":")
+	parts := strings.SplitN(rest, ":", 4)
 	if len(parts) != 3 || !decodeID(parts[0], &first) || !decodeID(parts[1], &second) || !isNumber(parts[2]) {
 		return [IDSize]byte{}, [IDSize]byte{}, "", ErrInvalidQRPayload
 	}

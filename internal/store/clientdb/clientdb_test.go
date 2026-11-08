@@ -662,7 +662,7 @@ func TestValidation(t *testing.T) {
 	ctx := context.Background()
 	d, _, _ := openTemp(t)
 
-	badNames := []string{"", strings.Repeat("a", MaxDisplayNameRunes+1), "bad\x1b[31m", "tab\there", "nul\x00", "\xff\xfe", "rtl‮override"}
+	badNames := []string{"", strings.Repeat("a", MaxDisplayNameRunes+1), "bad\x1b[31m", "tab\there", "nul\x00", "\xff\xfe", "rtl\u202eoverride"}
 	for _, name := range badNames {
 		c := sampleContact(t, "ok")
 		c.DisplayName = name

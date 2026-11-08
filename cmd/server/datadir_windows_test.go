@@ -338,3 +338,77 @@ func TestInitRefusesBroadlyAccessibleExistingDatabase(t *testing.T) {
 		t.Fatalf("init with a broadly readable database: exit %d, stderr %q", code, stderr)
 	}
 }
+
+func TestClassifyACE(t *testing.T) {
+	tests := []struct {
+		aceType byte
+		want    aceClass
+	}{
+		{windows.ACCESS_ALLOWED_ACE_TYPE, aceParsed},
+		{accessAllowedCallbackACEType, aceParsed},
+		{accessAllowedCompoundACEType, aceOpaqueAllow},
+		{accessAllowedObjectACEType, aceOpaqueAllow},
+		{accessAllowedCallbackObjectACEType, aceOpaqueAllow},
+		{windows.ACCESS_DENIED_ACE_TYPE, aceIgnored},
+		{systemAuditACEType, aceIgnored},
+		{accessDeniedObjectACEType, aceIgnored},
+		{accessDeniedCallbackACEType, aceIgnored},
+		{systemMandatoryLabelACEType, aceIgnored},
+		{systemAccessFilterACEType, aceIgnored},
+		{0x16, aceUnknown},
+		{0xff, aceUnknown},
+	}
+	for _, tt := range tests {
+		if got := classifyACE(tt.aceType); got != tt.want {
+			t.Errorf("classifyACE(0x%02x) = %d, want %d", tt.aceType, got, tt.want)
+		}
+	}
+}
+
+func TestBroadAccessGrantsFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		sddl string
+		want string
+	}{
+		{"Plain", "D:P(A;;FA;;;OW)(A;;FR;;;BU)", "Users"},
+		{"Callback", "D:P(A;;FA;;;OW)(XA;;FR;;;WD;(Member_of {SID(BA)}))", "Everyone"},
+		{"Object", "D:P(A;;FA;;;OW)(OA;;FR;bf967aba-0de6-11d0-a285-00aa003049e2;;AU)", "ACE type 0x05"},
+		{"CallbackObject", "D:P(A;;FA;;;OW)(ZA;;FR;bf967aba-0de6-11d0-a285-00aa003049e2;;AU;(Member_of {SID(BA)}))", "ACE type 0x0b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sd, err := windows.SecurityDescriptorFromString(tt.sddl)
+			if err != nil {
+				t.Fatalf("SecurityDescriptorFromString(%q): %v", tt.sddl, err)
+			}
+			exposed, err := broadAccessGrants(sd, broadReadRights|broadWriteRights)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(exposed) != 1 || !strings.Contains(exposed[0], tt.want) {
+				t.Errorf("broadAccessGrants(%q) = %q, want one entry mentioning %q", tt.sddl, exposed, tt.want)
+			}
+		})
+	}
+}
+
+func TestBroadAccessGrantsIgnoresHarmlessEntries(t *testing.T) {
+	sddls := []string{
+		"D:P(A;;FA;;;OW)(D;;FA;;;WD)",
+		"D:P(A;;FA;;;OW)(XA;;FR;;;OW;(Member_of {SID(BA)}))",
+	}
+	for _, sddl := range sddls {
+		sd, err := windows.SecurityDescriptorFromString(sddl)
+		if err != nil {
+			t.Fatalf("SecurityDescriptorFromString(%q): %v", sddl, err)
+		}
+		exposed, err := broadAccessGrants(sd, broadReadRights|broadWriteRights)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(exposed) != 0 {
+			t.Errorf("broadAccessGrants(%q) = %q, want none", sddl, exposed)
+		}
+	}
+}
