@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -55,6 +56,10 @@ type entry struct {
 	route    SendRoute
 	// sender is the identity ID behind an entry under Message requests.
 	sender string
+	// file describes the file a message offers; fileNo is its number for
+	// /save, assigned when the history is drawn.
+	file   *FileInfo
+	fileNo int
 }
 
 // Layout of a history line: "15:04:05" + two spaces, then a one-cell marker
@@ -100,6 +105,7 @@ func separator(prev, cur entry, width int, st styles) []string {
 // renderEntries draws the whole history at the given width.
 func renderEntries(entries []entry, width int, st styles) []string {
 	var lines []string
+	entries = numberFiles(slices.Clone(entries))
 	for i, e := range entries {
 		if i > 0 {
 			lines = append(lines, separator(entries[i-1], e, width, st)...)
@@ -178,8 +184,12 @@ func renderMessage(e entry, width int, st styles) []string {
 	}
 	out := []string{head}
 	indent := strings.Repeat(" ", noteIndent)
-	for _, line := range wrapLines(e.text, width-noteIndent) {
-		out = append(out, indent+st.text.Render(line))
+	body := renderBody(e.text, width-noteIndent, st)
+	if e.file != nil {
+		body = wrapLines(fileBody(e), width-noteIndent)
+	}
+	for _, line := range body {
+		out = append(out, indent+line)
 	}
 	if e.status == StatusFailed && e.errText != "" {
 		for _, line := range wrapLines(e.errText, width-noteIndent) {

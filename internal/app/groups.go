@@ -1017,6 +1017,9 @@ func (a *App) receiveGroupEnvelope(ctx context.Context, from identity.ID, payloa
 	}
 	pt, err := e2e.ParsePlaintext(plain)
 	clear(plain)
+	if err == nil && pt.Kind.IsExtension() {
+		return a.receiveGroupExtension(ctx, gid, sender, gen, r, pt)
+	}
 	if err != nil || pt.Kind != e2e.KindGroupText {
 		return a.dropResult()
 	}
@@ -1032,7 +1035,7 @@ func (a *App) receiveGroupEnvelope(ctx context.Context, from identity.ID, payloa
 		flags |= clientdb.FlagClockSkew
 	}
 	m := clientdb.GroupMessage{Group: gid, Sender: sender, MsgID: pt.MsgID, Dir: clientdb.Incoming, Sent: pt.Sent,
-		Received: now, Body: string(pt.Body), Status: clientdb.StatusReceived, Flags: flags}
+		Received: now, Body: string(pt.Body), Status: clientdb.StatusReceived, Flags: flags, Expires: a.expiryFor(ctx, gid, now)}
 	a.mu.Lock()
 	err = a.prof.DB.CommitGroupReceive(ctx, gid, sender, gen, state, m)
 	if err == nil {

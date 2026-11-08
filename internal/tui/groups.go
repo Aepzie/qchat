@@ -244,19 +244,19 @@ var groupCommands = []command{
 	{"/group members", "list the members"},
 }
 
-// resolveGroupSub maps a typed subcommand to its name. An exact name wins;
-// when the palette showed the subcommands (alone is true), a prefix picks
-// the selected match.
-func resolveGroupSub(arg string, alone bool, selected int) string {
+// resolveSub maps a typed subcommand of the command name to its full form.
+// An exact name wins; when the palette showed the subcommands (alone is
+// true), a prefix picks the selected match.
+func resolveSub(name, arg string, alone bool, selected int) string {
 	sub := strings.ToLower(arg)
-	if !alone || slices.ContainsFunc(groupCommands, func(c command) bool { return c.name == "/group "+sub }) {
+	if !alone || slices.ContainsFunc(subCommands(name), func(c command) bool { return c.name == name+" "+sub }) {
 		return sub
 	}
-	matches := matchCommands("/group " + sub)
+	matches := matchCommands(name + " " + sub)
 	if len(matches) == 0 {
 		return sub
 	}
-	return strings.TrimPrefix(matches[clampIndex(selected, len(matches))].name, "/group ")
+	return strings.TrimPrefix(matches[clampIndex(selected, len(matches))].name, name+" ")
 }
 
 // leaveGroupCmd leaves a group after the user confirmed it.
@@ -277,7 +277,7 @@ func (m *Model) cmdGroup(args []string) tea.Cmd {
 		m.log(entryError, groupUsage)
 		return nil
 	}
-	sub, rest := resolveGroupSub(args[0], len(args) == 1, m.paletteSel), args[1:]
+	sub, rest := resolveSub("/group", args[0], len(args) == 1, m.paletteSel), args[1:]
 	if sub == "create" {
 		return m.cmdGroupCreate(rest)
 	}

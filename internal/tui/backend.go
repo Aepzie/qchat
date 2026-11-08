@@ -63,6 +63,57 @@ type Backend interface {
 	ChangeGroup(ctx context.Context, groupID string, change GroupChange) (GroupInfo, error)
 }
 
+// Names of the interface settings kept through SettingsBackend.
+const (
+	// SettingTheme holds the name of the theme chosen with /theme.
+	SettingTheme = "ui.theme"
+	// SettingMarkdown is "on" or "off", as chosen with /markdown.
+	SettingMarkdown = "ui.markdown"
+)
+
+// SettingsBackend is implemented by a Backend that can persist interface
+// preferences, such as the theme. The interface type-asserts its Backend
+// for it; without it, preferences last until the client exits.
+//
+// Names are the Setting constants of this package. Values are short
+// strings and are validated again when they are read back.
+type SettingsBackend interface {
+	// GetSetting returns the stored value, or "" and no error when the
+	// setting was never stored.
+	GetSetting(name string) (string, error)
+	// SetSetting stores a value.
+	SetSetting(name, value string) error
+}
+
+// SearchBackend is implemented by a Backend that can search the stored
+// message history. The interface type-asserts its Backend for it; without
+// it, /search explains that search is unavailable.
+type SearchBackend interface {
+	// Search returns up to limit stored messages whose text contains
+	// query, ignoring case, newest first. conversationID is a contact or
+	// group ID to search one conversation, or "" to search all of them.
+	// Implementations may bound how much history they scan.
+	Search(ctx context.Context, query string, conversationID string, limit int) ([]SearchHit, error)
+}
+
+// SearchHit is one message found by SearchBackend.Search.
+type SearchHit struct {
+	// ConversationID is the contact or group ID the message belongs to.
+	ConversationID string
+	// MessageID identifies the message within its conversation.
+	MessageID string
+	// Outgoing reports whether the user sent the message.
+	Outgoing bool
+	// From is the sender's identity ID for an incoming group message, and
+	// empty otherwise.
+	From string
+	// Text is the message body, or for a long body an excerpt of it around
+	// the match.
+	Text string
+	// At is when the message was received, or sent for an outgoing one.
+	At time.Time
+}
+
 // GroupInfo describes one group.
 type GroupInfo struct {
 	// ID is the group ID, "grp-" and 64 hex digits.
@@ -239,6 +290,9 @@ type MessageInfo struct {
 	From string
 	// Route says how an outgoing message was sent.
 	Route SendRoute
+	// File is set for a message that offers a file; Text is then the file
+	// name.
+	File *FileInfo
 }
 
 // VerificationInfo is what the user compares to verify a contact.
@@ -256,7 +310,8 @@ type VerificationInfo struct {
 // ChatEvent is pushed by the application layer on Config.ChatEvents. The
 // concrete types are IncomingMessage, MessageStatusChanged,
 // ContactKeyChanged, ContactsChanged, GroupChanged and
-// SealedSenderChanged.
+// SealedSenderChanged, and FileChanged, MessagesExpired and
+// ConversationNotice (filesapi.go).
 type ChatEvent interface {
 	chatEvent()
 }

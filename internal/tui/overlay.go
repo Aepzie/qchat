@@ -17,6 +17,8 @@ const (
 	overlayVerify
 	overlayWhoami
 	overlayMembers
+	overlaySearch
+	overlayHelp
 )
 
 // safetyDigits is the length of a safety number.
@@ -39,6 +41,13 @@ type overlay struct {
 	// members and left describe the group of the members overlay.
 	members []GroupMember
 	left    bool
+	// query, hits and sel are the search overlay's query, results and
+	// selected result; name holds where it searched.
+	query string
+	hits  []searchResult
+	sel   int
+	// scroll is the first line shown by the help overlay.
+	scroll int
 }
 
 // confirmation is a pending y/N question shown in place of the input.
@@ -111,6 +120,12 @@ func (m *Model) handleOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "esc", "q":
 		m.overlay = overlay{}
 		return nil
+	}
+	switch m.overlay.kind {
+	case overlaySearch:
+		return m.handleSearchKey(msg)
+	case overlayHelp:
+		return m.handleHelpKey(msg)
 	}
 	b := m.cfg.Backend
 	if m.overlay.kind != overlayVerify || m.overlay.busy || b == nil {
@@ -231,8 +246,22 @@ func (m Model) renderOverlay(width, height int) []string {
 	if o.kind == overlayMembers {
 		title = st.bold.Render("# "+o.name) + st.faint.Render(fmt.Sprintf("  %d members", len(o.members)))
 	}
+	if o.kind == overlaySearch {
+		title = m.searchTitle()
+	}
+	if o.kind == overlayHelp {
+		title = st.bold.Render("Help") + st.faint.Render("  commands and keys")
+	}
 	header := []string{truncateStyled(title, innerW), ""}
-	content := m.overlayLayout(header, innerW, innerH)
+	var content []string
+	switch o.kind {
+	case overlaySearch:
+		content = append(header, m.searchLines(innerW, innerH-len(header))...)
+	case overlayHelp:
+		content = append(header, m.scrolled(m.helpLines(innerW), o.scroll, innerH-len(header), innerW)...)
+	default:
+		content = m.overlayLayout(header, innerW, innerH)
+	}
 
 	if len(content) > innerH {
 		content = content[:innerH]

@@ -152,6 +152,13 @@ func (a *App) openAndFile(ctx context.Context, queueID uint64, from identity.ID,
 		}
 		return r
 	case e2e.KindGroupControl, e2e.KindSenderKey:
+	case e2e.KindFileOffer, e2e.KindFileChunk, e2e.KindTimer:
+		r := a.openedExtension(ctx, from, o)
+		a.ratchetMu.Unlock()
+		if r.outcome == outcomeDone {
+			r.peer = &from
+		}
+		return r
 	default:
 		a.ratchetMu.Unlock()
 		a.countDropped()
@@ -240,7 +247,8 @@ func (a *App) Send(ctx context.Context, contactID, text string) (tui.MessageInfo
 	if err != nil {
 		return tui.MessageInfo{}, err
 	}
-	record := clientdb.Message{Peer: id, MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent, Body: text, Status: clientdb.StatusSent, Flags: route.flag()}
+	record := clientdb.Message{Peer: id, MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent, Body: text, Status: clientdb.StatusSent,
+		Flags: route.flag(), Expires: a.expiryFor(ctx, id, pt.Sent)}
 	payload, reason, err := a.sealOutgoing(ctx, c, pt, &record, route)
 	if err != nil {
 		return tui.MessageInfo{}, err
@@ -357,6 +365,13 @@ func (a *App) messageInfo(m clientdb.Message) tui.MessageInfo {
 		Text:      m.Body,
 		Sent:      m.Sent,
 		ClockSkew: m.Flags&clientdb.FlagClockSkew != 0,
+	}
+	if m.Flags&clientdb.FlagFile != 0 {
+		sender := m.Peer
+		if info.Outgoing {
+			sender = a.selfID()
+		}
+		info.File = a.fileInfo(context.Background(), m.Peer, sender, m.MsgID)
 	}
 	if !info.Outgoing {
 		info.Received = m.Received

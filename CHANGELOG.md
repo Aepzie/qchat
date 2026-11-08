@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-08
+
+Interface polish, encrypted file transfer and disappearing messages.
+
+### Added
+
+- TUI themes `dusk` (default), `fjord`, `ember`, `contrast` and `paper`, with
+  `/theme <name>` and completion. Themes with a background set the terminal
+  background while the client runs; QR codes stay dark on light.
+- Optional `tui.SettingsBackend`; the client stores `ui.theme` and
+  `ui.markdown` in the encrypted settings table. Other settings are not
+  reachable from the interface.
+- Markdown rendering of message bodies with glamour, limited to emphasis,
+  code spans, code blocks, lists and block quotes. Links show their address
+  in brackets and are not clickable (no OSC 8), images show as
+  `[image: alt]`, HTML is shown as text. Bodies of 8 KiB or more and bodies
+  that fail to render fall back to plain text. `/markdown on|off`.
+- `/search <text>` and `/search all <text>` with a results overlay; optional
+  `tui.SearchBackend`, implemented by decrypting and scanning at most the
+  2000 most recent messages of each conversation.
+- `/help` opens a scrollable overlay with every command grouped by topic.
+- End-to-end encrypted file transfer to contacts and groups
+  (docs/design/phase-7-files.md): `/send <path>` (or `/file`), progress in
+  the conversation, `/save` to list and `/save <n> [dir]` to save. Files of
+  up to 64 MiB are sealed in 48 KiB chunks with XChaCha20-Poly1305 under a
+  random per-file key, sent as new message kinds 5 (offer) and 6 (chunk)
+  inside the existing sessions and sender keys, verified per chunk and by
+  SHA-256, and kept encrypted in the profile's `files` directory until
+  saved. Saving never overwrites a file; sender file names are sanitised.
+  Incomplete transfers expire after 24 hours. Files from identities that
+  are not contacts are dropped.
+- Disappearing messages per conversation with `/timer off|30s|5m|1h|1d|1w`,
+  agreed in-band with message kind 7 (the latest setting wins). A sweeper
+  deletes expired messages and their files from the database and the view.
+- Package `filexfer`; optional `tui.FileBackend` and `tui.TimerBackend`.
+- Client database schema 6: an `expires` column on messages and the `files`
+  and `timers` tables.
+
+### Security
+
+- Changes from an internal review before release: Markdown rendering is
+  bounded (nesting depth, node count, output size and line count, with a
+  plain-text fallback) so a crafted message cannot freeze the client, the
+  render cache is bounded in bytes, only an allow-list of SGR colour and
+  style sequences reaches the terminal, invisible format characters are
+  stripped from message text, and search keeps a bounded number of
+  excerpt-sized hits and skips damaged rows.
+- File offers, chunks and timer changes travel like text: padded, and
+  sealed when the contact's access key is known.
+
+### Decided against
+
+- Typing indicators: they would disclose to the relay when and to whom the
+  user is writing, in real time.
+
 ## [0.6.0] - 2026-11-08
 
 Pinned client installers, reproducible builds and a signed release pipeline.
@@ -226,7 +281,8 @@ release; only the connection between client and relay is protected.
 - The server never logs client IP addresses or client-supplied data.
 - A pinned-key mismatch blocks the connection and is never retried.
 
-[Unreleased]: https://github.com/craguS/qchat/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/craguS/qchat/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/craguS/qchat/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/craguS/qchat/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/craguS/qchat/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/craguS/qchat/compare/v0.3.0...v0.4.0

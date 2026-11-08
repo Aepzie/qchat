@@ -34,6 +34,10 @@ const (
 	labelGroupMessage    = "qchat/clientdb/v1/group-message\x00"
 	labelOwnSenderKey    = "qchat/clientdb/v1/own-sender-key\x00"
 	labelMemberSenderKey = "qchat/clientdb/v1/member-sender-key\x00"
+
+	labelFile        = "qchat/clientdb/v1/file\x00"
+	labelFileMessage = "qchat/clientdb/v1/file-message\x00"
+	labelTimer       = "qchat/clientdb/v1/timer\x00"
 )
 
 // lookupSize is the length of every lookup column (HMAC-SHA256 output).

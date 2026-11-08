@@ -89,7 +89,7 @@ func equalContact(a, b Contact) bool {
 
 func equalMessage(a, b Message) bool {
 	return a.Peer == b.Peer && a.MsgID == b.MsgID && a.Dir == b.Dir && a.Sent.Equal(b.Sent) &&
-		a.Received.Equal(b.Received) && a.Body == b.Body && a.Status == b.Status && a.Flags == b.Flags
+		a.Received.Equal(b.Received) && a.Body == b.Body && a.Status == b.Status && a.Flags == b.Flags && a.Expires.Equal(b.Expires)
 }
 
 func TestContactRoundTrip(t *testing.T) {
@@ -814,7 +814,8 @@ func TestMigrationBackfillsSeen(t *testing.T) {
 	if err := d.AppendMessage(ctx, m); err != nil {
 		t.Fatal(err)
 	}
-	for _, stmt := range []string{`DROP TABLE seen`, `DROP TABLE sessions`, `DROP TABLE prekeys`, `DELETE FROM schema_migrations WHERE version >= 2`} {
+	for _, stmt := range []string{`DROP TABLE seen`, `DROP TABLE sessions`, `DROP TABLE prekeys`, `DROP INDEX messages_expires`,
+		`ALTER TABLE messages DROP COLUMN expires`, `DROP TABLE files`, `DROP TABLE timers`, `DELETE FROM schema_migrations WHERE version >= 2`} {
 		if _, err := d.conn.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}

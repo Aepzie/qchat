@@ -92,6 +92,7 @@ func (m Model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "qchat"
+	v.BackgroundColor = m.st.theme.Background
 	return v
 }
 
@@ -254,6 +255,10 @@ func (m Model) renderFooter(width int) string {
 		hints = "v verified · u not verified · esc close"
 	case m.overlay.kind == overlayWhoami || m.overlay.kind == overlayMembers:
 		hints = "esc close"
+	case m.overlay.kind == overlaySearch:
+		hints = "↑/↓ select · enter open conversation · esc close"
+	case m.overlay.kind == overlayHelp:
+		hints = "j/k scroll · g/G ends · esc close"
 	case m.confirm.active:
 		hints = m.confirm.hints()
 	}

@@ -223,7 +223,7 @@ func say(t *testing.T, m Model, s string) Model {
 	return do(t, typeText(t, m, s), keyEnter)
 }
 
-func newChatModel(t *testing.T, fb *fakeBackend, width, height int) Model {
+func newChatModel(t *testing.T, fb Backend, width, height int) Model {
 	t.Helper()
 	m := New(Config{
 		Addr:    "chat.example.org:8443",

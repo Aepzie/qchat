@@ -395,7 +395,14 @@ func (a *App) sendGroup(ctx context.Context, groupID, text string) (tui.MessageI
 	if err != nil {
 		return tui.MessageInfo{}, err
 	}
+	return a.deliverGroupMessage(ctx, groupID, out)
+}
+
+// deliverGroupMessage hands the envelope of the stored outgoing group
+// message out to the relay and records the resulting status.
+func (a *App) deliverGroupMessage(ctx context.Context, groupID string, out sealedGroupMessage) (tui.MessageInfo, error) {
 	m := out.message
+	gid := group.ID(m.Group)
 	key := messageKey{peer: identity.ID(gid), msgID: m.MsgID}
 	status, reason, missed := a.deliverMulti(ctx, out.to, out.proofs, out.envelope)
 	if len(missed) > 0 {
@@ -437,6 +444,17 @@ type sealedGroupMessage struct {
 // reach. The stored message records whether it goes sealed to every
 // recipient or identified to at least one.
 func (a *App) sealGroup(ctx context.Context, gid group.ID, text string) (sealedGroupMessage, string, error) {
+	return a.sealGroupKind(ctx, gid, e2e.KindGroupText, []byte(text), &clientdb.GroupMessage{Body: text})
+}
+
+// sealGroupKind is sealGroup for a plaintext of any kind a group envelope
+// carries. With a record template (Body and Flags set), the message is
+// stored with the advanced sender key; without one (nil), only the sender
+// key is stored, for messages that are not shown in the conversation, and
+// the returned message only carries the message ID and send time. Either
+// way the result carries the access proofs that decide whether the
+// envelope goes sealed to every recipient or identified to all of them.
+func (a *App) sealGroupKind(ctx context.Context, gid group.ID, kind e2e.Kind, body []byte, record *clientdb.GroupMessage) (sealedGroupMessage, string, error) {
 	fail := func(err error) (sealedGroupMessage, string, error) {
 		return sealedGroupMessage{}, "", err
 	}
@@ -472,7 +490,7 @@ func (a *App) sealGroup(ctx context.Context, gid group.ID, text string) (sealedG
 		notice = a.distribute(ctx, s, e.state.Epoch, to)
 	}
 	defer s.Destroy()
-	pt, err := e2e.NewPlaintext(e2e.KindGroupText, []byte(text), a.now())
+	pt, err := e2e.NewPlaintext(kind, body, a.now())
 	if err != nil {
 		return fail(err)
 	}
@@ -491,9 +509,19 @@ func (a *App) sealGroup(ctx context.Context, gid group.ID, text string) (sealedG
 	}
 	defer clear(state)
 	proofs := a.groupProofs(ctx, to)
-	m := clientdb.GroupMessage{Group: gid, Sender: a.selfID(), MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent, Body: text, Status: clientdb.StatusSent, Flags: flagSentIdentified}
+	if record == nil {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if err := a.prof.DB.PutOwnSenderKey(ctx, gid, state); err != nil {
+			return sealedGroupMessage{}, notice, err
+		}
+		m := clientdb.GroupMessage{MsgID: pt.MsgID, Sent: pt.Sent}
+		return sealedGroupMessage{message: m, envelope: envelope, to: to, proofs: proofs}, notice, nil
+	}
+	m := clientdb.GroupMessage{Group: gid, Sender: a.selfID(), MsgID: pt.MsgID, Dir: clientdb.Outgoing, Sent: pt.Sent,
+		Body: record.Body, Status: clientdb.StatusSent, Flags: record.Flags | flagSentIdentified, Expires: a.expiryFor(ctx, gid, pt.Sent)}
 	if len(proofs) == len(to) {
-		m.Flags = flagSentSealed
+		m.Flags = record.Flags | flagSentSealed
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -582,9 +610,12 @@ func (a *App) groupMessageInfo(m clientdb.GroupMessage) tui.MessageInfo {
 		}
 		a.mu.Unlock()
 	}
-	info := a.messageInfo(clientdb.Message{Peer: peer, MsgID: m.MsgID, Dir: m.Dir, Sent: m.Sent, Received: m.Received, Body: m.Body, Status: m.Status, Flags: m.Flags})
+	info := a.messageInfo(clientdb.Message{Peer: peer, MsgID: m.MsgID, Dir: m.Dir, Sent: m.Sent, Received: m.Received, Body: m.Body, Status: m.Status, Flags: m.Flags &^ clientdb.FlagFile})
 	if m.Dir == clientdb.Incoming {
 		info.From = canonicalID(identity.ID(m.Sender))
+	}
+	if m.Flags&clientdb.FlagFile != 0 {
+		info.File = a.fileInfo(context.Background(), m.Group, m.Sender, m.MsgID)
 	}
 	return info
 }

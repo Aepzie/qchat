@@ -60,7 +60,7 @@ func (d *DB) appendMessageTx(ctx context.Context, tx *sql.Tx, m Message) error {
 	if err != nil {
 		return fmt.Errorf("clientdb: append message: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO messages (peer, lookup, value) VALUES (?, ?, x'')`, peer, lookup)
+	res, err := insertMessageRow(ctx, tx, peer, lookup, m.Expires)
 	if isUniqueViolation(err) {
 		return ErrDuplicate
 	}

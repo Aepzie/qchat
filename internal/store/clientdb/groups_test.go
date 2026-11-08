@@ -647,8 +647,8 @@ func TestMigrationFromV4(t *testing.T) {
 	}
 	defer d.Close()
 	var version int
-	if err := d.conn.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 5 || len(migrations) != 5 {
-		t.Fatalf("schema version = %d, %v; want 5", version, err)
+	if err := d.conn.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != len(migrations) || len(migrations) < 5 {
+		t.Fatalf("schema version = %d, %v; want %d", version, err, len(migrations))
 	}
 	if got, err := d.GetContact(ctx, c.ID); err != nil || !equalContact(got, c) {
 		t.Fatalf("contact after migration = %+v, %v", got, err)

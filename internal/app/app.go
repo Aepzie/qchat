@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/craguS/qchat/internal/client"
+	"github.com/craguS/qchat/internal/filexfer"
 	"github.com/craguS/qchat/internal/group"
 	"github.com/craguS/qchat/internal/identity"
 	"github.com/craguS/qchat/internal/profile"
@@ -158,6 +159,17 @@ type App struct {
 	// shareDelay returns the random pause before the own access key is
 	// shared with the next peer after a rotation.
 	shareDelay func() time.Duration
+
+	// files is the profile's file store, opened on first use; sending
+	// holds the local IDs of files whose chunks are being sent; filePace
+	// spaces their chunks; lastTransferSweep is when stale transfers were
+	// last expired (see files.go and disappear.go).
+	filesOnce         sync.Once
+	files             *filexfer.Store
+	filesErr          error
+	sending           map[filexfer.LocalID]struct{}
+	filePace          time.Duration
+	lastTransferSweep time.Time
 }
 
 // New returns an App for an unlocked profile. invite is the invite code
@@ -200,6 +212,8 @@ func New(p *profile.Profile, invite string) (*App, error) {
 		shadows:        map[identity.ID]shadowSession{},
 		handshakes:     map[identity.ID][]time.Time{},
 		shareDelay:     func() time.Duration { return randomDelay(maxShareDelay) },
+		sending:        map[filexfer.LocalID]struct{}{},
+		filePace:       filePace,
 	}, nil
 }
 
@@ -253,17 +267,23 @@ func (a *App) RegistrationDenied() (client.RegistrationDenied, bool) {
 // Run consumes session events until ctx is cancelled or events is closed.
 // Whenever the session becomes Connected, and every
 // prekeyMaintenanceInterval while Run runs, it maintains the own prekeys on
-// the relay in the background. It must be called at most once.
+// the relay in the background. Every sweepInterval it deletes expired
+// disappearing messages (see disappear.go). It must be called at most once.
 func (a *App) Run(ctx context.Context, events <-chan client.Event) {
 	defer a.shutdown()
 	stop := context.AfterFunc(ctx, a.stopEmitting)
 	defer stop()
 	ticker := time.NewTicker(prekeyMaintenanceInterval)
 	defer ticker.Stop()
+	sweeper := time.NewTicker(sweepInterval)
+	defer sweeper.Stop()
+	a.sweep(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-sweeper.C:
+			a.sweep(ctx)
 		case <-ticker.C:
 			a.startMaintenance(ctx)
 		case ev, ok := <-events:

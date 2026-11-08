@@ -530,6 +530,7 @@ func (a *App) fileOpened(ctx context.Context, from identity.ID, o opened) (bool,
 		Body:     string(o.plaintext.Body),
 		Status:   clientdb.StatusReceived,
 		Flags:    flags,
+		Expires:  a.expiryFor(ctx, from, now),
 	}
 	unknown, err := a.commitIncoming(ctx, o, record)
 	if err != nil {

@@ -180,6 +180,20 @@ func (m *Model) handleResult(msg tea.Msg) (tea.Cmd, bool) {
 		return m.mergeGroups(msg.groups), true
 	case groupResultMsg:
 		return m.applyGroupResult(msg), true
+	case settingsMsg:
+		m.applySettings(msg)
+	case searchResultMsg:
+		m.applySearch(msg)
+	case sendFileResultMsg:
+		m.applySendFile(msg)
+	case saveFileResultMsg:
+		m.applySaveFile(msg)
+	case timerResultMsg:
+		m.applyTimer(msg)
+	case settingSavedMsg:
+		if msg.err != nil {
+			m.log(entryError, "Cannot save the setting "+msg.name+": "+describeBackendError(msg.err)+". It lasts until you quit.")
+		}
 	default:
 		return nil, false
 	}
@@ -349,6 +363,7 @@ func messageEntry(mi MessageInfo, from string) entry {
 		msgID:    mi.ID,
 		outgoing: mi.Outgoing,
 		skew:     mi.ClockSkew,
+		file:     cleanFile(mi.File),
 	}
 	if mi.Outgoing {
 		e.from = "you"
@@ -418,6 +433,12 @@ func (m *Model) handleChatEvent(ev ChatEvent) tea.Cmd {
 		return m.groupChanged(e)
 	case SealedSenderChanged:
 		m.sealed = e.Connected
+	case FileChanged:
+		m.fileChanged(e)
+	case MessagesExpired:
+		m.messagesExpired(e)
+	case ConversationNotice:
+		m.conversationNotice(e)
 	}
 	return nil
 }
