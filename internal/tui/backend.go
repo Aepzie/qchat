@@ -85,6 +85,34 @@ type SettingsBackend interface {
 	SetSetting(name, value string) error
 }
 
+// SearchBackend is implemented by a Backend that can search the stored
+// message history. The interface type-asserts its Backend for it; without
+// it, /search explains that search is unavailable.
+type SearchBackend interface {
+	// Search returns up to limit stored messages whose text contains
+	// query, ignoring case, newest first. conversationID is a contact or
+	// group ID to search one conversation, or "" to search all of them.
+	// Implementations may bound how much history they scan.
+	Search(ctx context.Context, query string, conversationID string, limit int) ([]SearchHit, error)
+}
+
+// SearchHit is one message found by SearchBackend.Search.
+type SearchHit struct {
+	// ConversationID is the contact or group ID the message belongs to.
+	ConversationID string
+	// MessageID identifies the message within its conversation.
+	MessageID string
+	// Outgoing reports whether the user sent the message.
+	Outgoing bool
+	// From is the sender's identity ID for an incoming group message, and
+	// empty otherwise.
+	From string
+	// Text is the message body.
+	Text string
+	// At is when the message was received, or sent for an outgoing one.
+	At time.Time
+}
+
 // GroupInfo describes one group.
 type GroupInfo struct {
 	// ID is the group ID, "grp-" and 64 hex digits.

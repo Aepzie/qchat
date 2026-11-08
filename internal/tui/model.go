@@ -136,6 +136,8 @@ type Model struct {
 	paletteSel     int
 	completionBase string
 	quitting       bool
+	// searchSeq numbers searches, so that only the latest answer is shown.
+	searchSeq int
 }
 
 // New returns a Model in insert mode, ready for its first WindowSizeMsg.

@@ -27,6 +27,7 @@ var commands = []command{
 	{"/status", "connection details"},
 	{"/fingerprint", "pinned server key"},
 	{"/group", "groups: create <name> [ids], add, remove, members…"},
+	{"/search", "find messages: /search [all] <text>"},
 	{"/theme", "change colors: /theme <name>"},
 	{"/markdown", "format messages: /markdown on|off"},
 	{"/clear", "clear this view"},
@@ -145,7 +146,9 @@ func (m *Model) runCommand(input string) tea.Cmd {
 			m.openWhoami()
 		}
 	case "/help":
-		m.addOutput("help", helpRows(), "")
+		m.openHelp()
+	case "/search":
+		return m.cmdSearch(rest)
 	case "/status":
 		m.addOutput("status", m.statusRows(), "")
 	case "/fingerprint":
@@ -217,21 +220,6 @@ func (m *Model) cmdRename(rest string) tea.Cmd {
 		return nil
 	}
 	return renameCmd(m.cfg.Backend, c.contact.ID, name)
-}
-
-func helpRows() []row {
-	var rows []row
-	for _, c := range commands {
-		rows = append(rows, row{c.name, c.summary})
-	}
-	return append(rows,
-		row{"any mode", "ctrl+n / ctrl+p next or previous conversation"},
-		row{"insert", "enter send · esc normal mode · tab complete · pgup/pgdn scroll"},
-		row{"normal", "J/K select · enter open · i insert · j/k line · ctrl+d/u half page · g/G top/bottom · : command · q quit"},
-		row{"status", "… sending · ✓ sent, stored by the relay until delivered · ⧗ recipient offline, not delivered (old relays) · ✕ not sent · ◷ sender clock off"},
-		row{"contacts", "✓ verified · ⚠ safety number changed, run /verify"},
-		row{"privacy", "Messages to contacts and # groups are end-to-end encrypted. The relay sees who talks to whom (for groups, every recipient), when, and sizes. Notes in System stay on this device."},
-	)
 }
 
 func (m *Model) statusRows() []row {

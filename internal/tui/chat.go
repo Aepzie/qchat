@@ -182,6 +182,8 @@ func (m *Model) handleResult(msg tea.Msg) (tea.Cmd, bool) {
 		return m.applyGroupResult(msg), true
 	case settingsMsg:
 		m.applySettings(msg)
+	case searchResultMsg:
+		m.applySearch(msg)
 	case settingSavedMsg:
 		if msg.err != nil {
 			m.log(entryError, "Cannot save the setting "+msg.name+": "+describeBackendError(msg.err)+". It lasts until you quit.")
