@@ -1,0 +1,26 @@
+# nfpm configuration for a .deb or .rpm of a pinned qchat client built by
+# "qchat-server build-client". Values come from the environment:
+#
+#   QCHAT_BINARY=qchat-clients/qchat_v0.5.0_linux_amd64 \
+#   QCHAT_VERSION=0.5.0 QCHAT_ARCH=amd64 \
+#   nfpm package --config packaging/linux/nfpm-client.yaml --packager deb --target qchat-clients/
+#
+# See packaging/README.md.
+name: qchat
+arch: ${QCHAT_ARCH}
+platform: linux
+version: ${QCHAT_VERSION}
+section: net
+priority: optional
+maintainer: qchat maintainers <https://github.com/craguS/qchat/issues>
+description: |-
+  qchat terminal client.
+  End-to-end encrypted chat client, locked to the server it was built for.
+vendor: qchat
+homepage: https://github.com/craguS/qchat
+license: AGPL-3.0-only
+contents:
+  - src: ${QCHAT_BINARY}
+    dst: /usr/bin/qchat
+    file_info:
+      mode: 0755
