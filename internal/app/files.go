@@ -414,7 +414,7 @@ func (a *App) sendChunks(job *fileJob) {
 func (a *App) sendChunk(job *fileJob, body []byte) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*requestTimeout)
 	defer cancel()
-	deliver := func() bool { return false }
+	var deliver func() bool
 	if job.conv.group {
 		gid := group.ID(job.conv.id)
 		out, notice, err := a.sealGroupKind(ctx, gid, e2e.KindFileChunk, body, nil)

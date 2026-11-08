@@ -335,12 +335,12 @@ func filledBox(lines []string, inner int, fill color.Color) []string {
 	return append(out, edge.Render("╰"+strings.Repeat("─", inner+2)+"╯"))
 }
 
-const sgrReset = "[m"
+const sgrReset = "\x1b[m"
 
 // backgroundSGR is the escape sequence that sets c as the background.
 func backgroundSGR(c color.Color) string {
 	r, g, b := rgb8(c)
-	return fmt.Sprintf("[48;2;%d;%d;%dm", int(r), int(g), int(b))
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", int(r), int(g), int(b))
 }
 
 // keepBackground re-applies the background sequence bg after every SGR
@@ -366,7 +366,7 @@ func keepBackground(line, bg string) string {
 
 // isReset reports whether an SGR sequence starts with a full reset.
 func isReset(seq string) bool {
-	params := strings.TrimSuffix(strings.TrimPrefix(seq, "["), "m")
+	params := strings.TrimSuffix(strings.TrimPrefix(seq, "\x1b["), "m")
 	first, _, _ := strings.Cut(params, ";")
 	return first == "" || first == "0" || first == "00"
 }

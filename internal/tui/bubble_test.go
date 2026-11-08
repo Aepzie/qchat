@@ -383,8 +383,8 @@ func TestFilledBubbleKeepsFill(t *testing.T) {
 			t.Errorf("interior line lacks the fill: %q", l)
 		}
 	}
-	const in = "a[1mb[0mc[mD[38;2;0;0;0me"
-	if got, want := keepBackground(in, "BG"), "a[1mb[0mBGc[mBGD[38;2;0;0;0me"; got != want {
+	const in = "a\x1b[1mb\x1b[0mc\x1b[mD\x1b[38;2;0;0;0me"
+	if got, want := keepBackground(in, "BG"), "a\x1b[1mb\x1b[0mBGc\x1b[mBGD\x1b[38;2;0;0;0me"; got != want {
 		t.Errorf("keepBackground = %q, want %q", got, want)
 	}
 }

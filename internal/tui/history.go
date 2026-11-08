@@ -96,31 +96,6 @@ func needsGap(prev, cur entry) bool {
 	return cur.standsAlone() || prev.standsAlone() || cur.kind == entryMessage || prev.kind == entryMessage
 }
 
-// separator returns the lines drawn between two adjacent entries: a date
-// rule when the day changes, a blank line, or nothing. renderTail draws the
-// same separators with more context and should be preferred.
-func separator(prev, cur entry, width int, st styles) []string {
-	if dayKey(prev.at) != dayKey(cur.at) {
-		return []string{"", dateRule(st, cur.at, width, renderOpts{})}
-	}
-	if needsGap(prev, cur) {
-		return []string{""}
-	}
-	return nil
-}
-
-// renderEntries draws the whole history at the given width, without
-// animation. It is renderConversation with zero options.
-func renderEntries(entries []entry, width int, st styles) []string {
-	return renderConversation(st, entries, width, renderOpts{})
-}
-
-// renderEntry draws one entry without context: a message is drawn as the
-// start of a group.
-func renderEntry(e entry, width int, st styles) []string {
-	return renderEntryIn(st, e, nil, width, renderOpts{})
-}
-
 func timestamp(e entry, st styles) string {
 	return st.faint.Render(e.at.Format("15:04:05"))
 }
