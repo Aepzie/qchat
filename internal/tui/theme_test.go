@@ -120,7 +120,7 @@ func TestThemeCommandSwitchesAndPersists(t *testing.T) {
 			t.Errorf("/theme does not list %s:\n%s", th.Name, s)
 		}
 	}
-	if !strings.Contains(s, "dusk ✓") {
+	if !strings.Contains(s, DefaultTheme().Name+" ✓") {
 		t.Errorf("/theme does not mark the current theme:\n%s", s)
 	}
 
@@ -141,24 +141,29 @@ func TestThemeCommandSwitchesAndPersists(t *testing.T) {
 		t.Error("dusk changes the terminal background")
 	}
 
-	m = say(t, m, "/theme neon")
-	if !strings.Contains(screen(m), "Unknown theme neon") || m.st.theme.Name != "dusk" {
+	m = say(t, m, "/theme nope")
+	if !strings.Contains(screen(m), "Unknown theme nope") || m.st.theme.Name != "dusk" {
 		t.Errorf("unknown theme accepted:\n%s", screen(m))
 	}
 
 	sb.setErr = errors.New("disk full")
 	m = say(t, m, "/theme fjord")
-	if m.st.theme.Name != "fjord" || !strings.Contains(screen(m), "Cannot save the setting ui.theme: disk full") {
-		t.Errorf("failed save not reported:\n%s", screen(m))
+	if log := strings.Join(entryTexts(m.convs[0].entries), "\n"); m.st.theme.Name != "fjord" || !strings.Contains(log, "Cannot save the setting ui.theme: disk full") {
+		t.Errorf("failed save not reported:\n%s", log)
 	}
 }
 
 func TestThemePaletteCompletion(t *testing.T) {
 	m := newChatModel(t, newFakeBackend(), 100, 30)
 	m = typeText(t, m, "/theme ")
-	s := screen(m)
+	if s := screen(m); !strings.Contains(s, "/theme "+DefaultTheme().Name) {
+		t.Errorf("palette lacks %s:\n%s", DefaultTheme().Name, s)
+	}
 	for _, th := range Themes() {
-		if !strings.Contains(s, "/theme "+th.Name) {
+		m.input.Reset()
+		m.resetPalette()
+		m = typeText(t, m, "/theme "+th.Name[:2])
+		if s := screen(m); !strings.Contains(s, "/theme "+th.Name) {
 			t.Errorf("palette lacks %s:\n%s", th.Name, s)
 		}
 	}
@@ -188,14 +193,14 @@ func TestStoredThemeIsApplied(t *testing.T) {
 	sb = newSettingsBackend()
 	sb.values[SettingTheme] = "\x1b[31mevil"
 	m = newChatModel(t, sb, 80, 24)
-	if m.st.theme.Name != "dusk" {
+	if m.st.theme.Name != DefaultTheme().Name {
 		t.Errorf("bogus stored theme applied: %q", m.st.theme.Name)
 	}
 
 	sb = newSettingsBackend()
 	sb.getErr = errors.New("locked")
 	m = newChatModel(t, sb, 80, 24)
-	if m.st.theme.Name != "dusk" || !strings.Contains(strings.Join(entryTexts(m.convs[0].entries), "\n"), "Cannot load your interface settings: locked") {
+	if m.st.theme.Name != DefaultTheme().Name || !strings.Contains(strings.Join(entryTexts(m.convs[0].entries), "\n"), "Cannot load your interface settings: locked") {
 		t.Errorf("settings error not reported")
 	}
 }
