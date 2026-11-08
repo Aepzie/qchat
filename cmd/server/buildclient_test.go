@@ -81,6 +81,22 @@ func TestPublicAddress(t *testing.T) {
 	if _, err := publicAddress("", &x509.Certificate{}, "0.0.0.0:7443"); err == nil {
 		t.Error("certificate without names accepted")
 	}
+	wildcard := &x509.Certificate{DNSNames: []string{"*.example.org", "chat.example.org"}}
+	if got, err := publicAddress("", wildcard, "0.0.0.0:7443"); err == nil || !strings.Contains(err.Error(), "--server") {
+		t.Errorf("wildcard certificate name: %q, %v; want an error asking for --server", got, err)
+	}
+	if got, err := publicAddress("chat.example.org:7443", wildcard, "0.0.0.0:7443"); err != nil || got != "chat.example.org:7443" {
+		t.Errorf("explicit address with wildcard certificate: %q, %v", got, err)
+	}
+	for _, quoted := range []string{`chat"example.org:443`, `chat'example.org:443`} {
+		if _, err := publicAddress(quoted, named, "0.0.0.0:7443"); !errors.Is(err, transport.ErrInvalidAddress) {
+			t.Errorf("publicAddress(%q): err = %v, want ErrInvalidAddress", quoted, err)
+		}
+	}
+	quotedName := &x509.Certificate{DNSNames: []string{`chat"x.example.org`}}
+	if _, err := publicAddress("", quotedName, "0.0.0.0:7443"); !errors.Is(err, transport.ErrInvalidAddress) {
+		t.Errorf("quoted certificate name: err = %v, want ErrInvalidAddress", err)
+	}
 }
 
 func TestIsLoopbackHost(t *testing.T) {

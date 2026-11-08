@@ -215,15 +215,20 @@ func joinTargets(targets []clientTarget) string {
 // first DNS name of cert (or its first IP address if it has none) with the
 // port of listen. The result is canonical as returned by
 // transport.ValidateHostPort, the same check the client applies to the
-// embedded value.
+// embedded value, and contains no quotes (see clientLDFlags). A wildcard
+// name such as *.example.org names no host to dial, so it requires an
+// explicit address.
 func publicAddress(explicit string, cert *x509.Certificate, listen string) (string, error) {
 	if explicit != "" {
-		return transport.ValidateHostPort(explicit)
+		return validatePublicAddress(explicit)
 	}
 	var host string
 	switch {
 	case len(cert.DNSNames) > 0:
 		host = cert.DNSNames[0]
+		if strings.HasPrefix(host, "*.") {
+			return "", fmt.Errorf("the first certificate name %q is a wildcard; pass --server host:port", host)
+		}
 	case len(cert.IPAddresses) > 0:
 		host = cert.IPAddresses[0].String()
 	default:
@@ -233,7 +238,21 @@ func publicAddress(explicit string, cert *x509.Certificate, listen string) (stri
 	if err != nil {
 		return "", fmt.Errorf("listen address %q: %w", listen, err)
 	}
-	return transport.ValidateHostPort(net.JoinHostPort(host, port))
+	return validatePublicAddress(net.JoinHostPort(host, port))
+}
+
+// validatePublicAddress canonicalizes addr with transport.ValidateHostPort
+// and rejects quotes, which the go command would interpret when it splits
+// -ldflags into words.
+func validatePublicAddress(addr string) (string, error) {
+	canonical, err := transport.ValidateHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+	if strings.ContainsAny(canonical, `'"`) {
+		return "", fmt.Errorf("%w %q: quotes are not allowed", transport.ErrInvalidAddress, addr)
+	}
+	return canonical, nil
 }
 
 // isLoopbackHost reports whether the host of a validated address refers to
@@ -252,8 +271,10 @@ func isLoopbackHost(addr string) bool {
 
 // clientLDFlags returns the -ldflags value for a pinned client: stripped
 // symbols, an empty build ID for reproducibility, and the embedded address,
-// pin and version. Every value is validated not to contain spaces or quotes,
-// so the string splits into exactly these words.
+// pin and version. None of the values contains spaces or quotes (the address
+// by transport.ValidateHostPort and validatePublicAddress, the version by
+// versionPattern, the pin by construction), so the go command splits the
+// string into exactly these words.
 func clientLDFlags(build clientBuild) string {
 	return strings.Join([]string{
 		"-s", "-w", "-buildid=",
