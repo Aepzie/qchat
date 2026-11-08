@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 )
@@ -11,32 +12,60 @@ import (
 // hostile input cannot make rendering arbitrarily slow.
 const maxEntryText = 8 << 10
 
+// tabSpaces is what a tab becomes in sanitised text.
+const tabSpaces = "    "
+
 // sanitizeText makes s safe to draw: control characters (including ESC,
-// which starts terminal escape sequences) and bidirectional formatting
-// characters (which can visually reorder text) are removed, tabs become
-// spaces, CRLF and CR become LF, and the result is capped at maxEntryText
-// bytes on a rune boundary.
+// which starts terminal escape sequences), bidirectional formatting
+// characters (which can visually reorder text) and other invisible format
+// characters are removed (see drawableRune), tabs become spaces, CRLF and CR
+// become LF, and the result is capped at exactly maxEntryText bytes on a
+// rune boundary. Invalid UTF-8 becomes U+FFFD.
 func sanitizeText(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
 	var b strings.Builder
 	b.Grow(min(len(s), maxEntryText))
-	for _, r := range s {
-		if b.Len() >= maxEntryText {
-			break
-		}
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
 		switch {
-		case r == '\n':
-			b.WriteRune(r)
 		case r == '\r':
-			b.WriteByte('\n')
+			r = '\n'
+			if i < len(s) && s[i] == '\n' {
+				i++
+			}
+		case r == '\n':
 		case r == '\t':
-			b.WriteString("    ")
-		case unicode.IsControl(r), unicode.Is(unicode.Bidi_Control, r):
-		default:
-			b.WriteRune(r)
+			if b.Len()+len(tabSpaces) > maxEntryText {
+				return b.String()
+			}
+			b.WriteString(tabSpaces)
+			continue
+		case !drawableRune(r):
+			continue
 		}
+		if b.Len()+utf8.RuneLen(r) > maxEntryText {
+			return b.String()
+		}
+		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// drawableRune reports whether r may reach the terminal. It rejects control
+// characters, bidirectional formatting characters, line and paragraph
+// separators, tag characters and every other format (Cf) character except
+// the zero width joiner, which emoji sequences need. Variation selectors are
+// nonspacing marks, not format characters, so they are kept.
+func drawableRune(r rune) bool {
+	switch {
+	case r == 0x200d:
+		return true
+	case r == 0x2028, r == 0x2029, r >= 0xe0000 && r <= 0xe007f:
+		return false
+	case unicode.IsControl(r), unicode.Is(unicode.Bidi_Control, r), unicode.Is(unicode.Cf, r):
+		return false
+	}
+	return true
 }
 
 // wrapLines wraps plain text to width cells, breaking words longer than a

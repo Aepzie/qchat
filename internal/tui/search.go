@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -258,11 +259,7 @@ func (m Model) snippet(text, query string, width int) string {
 	after := string(runes[at+n:])
 	room := max(width/3, 4)
 	if lipgloss.Width(before) > room {
-		r := []rune(before)
-		for len(r) > 0 && lipgloss.Width(string(r))+1 > room {
-			r = r[1:]
-		}
-		before = "…" + string(r)
+		before = "…" + tailWithin(before, room-1)
 	}
 	if lipgloss.Width(before)+lipgloss.Width(match) > width {
 		match = truncate(match, max(width-lipgloss.Width(before), 1))
@@ -270,6 +267,42 @@ func (m Model) snippet(text, query string, width int) string {
 	}
 	rest := width - lipgloss.Width(before) - lipgloss.Width(match)
 	return st.muted.Render(before) + st.match.Render(match) + st.muted.Render(truncate(after, rest))
+}
+
+// tailWithin returns the longest end of s that is at most width cells wide.
+// It walks backwards once, adding up the widths of single runes, so its cost
+// depends on width rather than on the length of s. Joined sequences such as
+// emoji can be wider than the sum of their runes, so the result is measured
+// as a whole at the end and shortened further while it is too wide, one
+// visible rune (with the zero-width runes after it) at a time, so that this
+// takes at most width steps.
+func tailWithin(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	start, used := len(s), 0
+	for start > 0 {
+		r, size := utf8.DecodeLastRuneInString(s[:start])
+		w := runeWidth(r)
+		if used+w > width {
+			break
+		}
+		used += w
+		start -= size
+	}
+	tail := s[start:]
+	for tail != "" && lipgloss.Width(tail) > width {
+		_, size := utf8.DecodeRuneInString(tail)
+		tail = tail[size:]
+		for tail != "" {
+			r, size := utf8.DecodeRuneInString(tail)
+			if runeWidth(r) != 0 {
+				break
+			}
+			tail = tail[size:]
+		}
+	}
+	return tail
 }
 
 // indexFold returns the rune index and length of the first match of query
