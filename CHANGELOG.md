@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-08
+
+Interface polish, encrypted file transfer and disappearing messages.
+
 ### Added
 
 - TUI themes `dusk` (default), `fjord`, `ember`, `contrast` and `paper`, with
@@ -40,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package `filexfer`; optional `tui.FileBackend` and `tui.TimerBackend`.
 - Client database schema 6: an `expires` column on messages and the `files`
   and `timers` tables.
+
+### Security
+
+- Changes from an internal review before release: Markdown rendering is
+  bounded (nesting depth, node count, output size and line count, with a
+  plain-text fallback) so a crafted message cannot freeze the client, the
+  render cache is bounded in bytes, only an allow-list of SGR colour and
+  style sequences reaches the terminal, invisible format characters are
+  stripped from message text, and search keeps a bounded number of
+  excerpt-sized hits and skips damaged rows.
+- File offers, chunks and timer changes travel like text: padded, and
+  sealed when the contact's access key is known.
 
 ### Decided against
 
@@ -265,7 +281,8 @@ release; only the connection between client and relay is protected.
 - The server never logs client IP addresses or client-supplied data.
 - A pinned-key mismatch blocks the connection and is never retried.
 
-[Unreleased]: https://github.com/craguS/qchat/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/craguS/qchat/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/craguS/qchat/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/craguS/qchat/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/craguS/qchat/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/craguS/qchat/compare/v0.3.0...v0.4.0

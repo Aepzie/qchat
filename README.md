@@ -52,7 +52,7 @@ Implemented (Phase 5, v0.5.0):
 - Sealed sender: separate anonymous sessions, access keys, anonymous key lookups; the relay stores no sender for sealed messages
 - Optional Tor: `--tor` / `--socks5`, onion service deployment ([deploy/tor](deploy/tor/README.md))
 
-Implemented (Phase 7, unreleased, interface polish):
+Implemented (Phase 7, v0.7.0):
 
 - Five themes (`dusk`, `fjord`, `ember`, `contrast`, `paper`), chosen with `/theme <name>` and stored in the encrypted local database; QR codes stay dark on light in every theme
 - Markdown in messages (`/markdown on|off`, on by default): emphasis, code, lists and block quotes only. Links are shown as text with the address in brackets and are never clickable, images as `[image: alt]`, HTML as typed. Message text is sanitised before rendering and only color escape sequences reach the terminal
@@ -62,7 +62,7 @@ Implemented (Phase 7, unreleased, interface polish):
 
 Planned:
 
-- Metadata protection: sealed sender, padding to size buckets, optional Tor onion service
+- Independent security audit
 
 ## Architecture
 
@@ -92,7 +92,7 @@ Cryptographic building blocks (established libraries only): Go standard library 
 | 4 | Groups, including key rotation (v0.4.0) | Done |
 | 5 | Metadata protection: sealed sender, padding, Tor (v0.5.0) | Done |
 | 6 | Client installer builder with embedded server config (v0.6.0) | Done |
-| 7 | TUI polish, files, themes | In progress |
+| 7 | TUI polish, files, themes (v0.7.0) | Done |
 | 8 | Tests, fuzzing, documentation, release pipeline | Planned |
 
 ## Build
