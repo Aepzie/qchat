@@ -7,8 +7,8 @@ import (
 // Results of settings calls.
 type (
 	settingsMsg struct {
-		theme string
-		err   error
+		theme, markdown string
+		err             error
 	}
 	settingSavedMsg struct {
 		name string
@@ -30,7 +30,11 @@ func (m *Model) loadSettings() tea.Cmd {
 	}
 	return func() tea.Msg {
 		theme, err := sb.GetSetting(SettingTheme)
-		return settingsMsg{theme: theme, err: err}
+		if err != nil {
+			return settingsMsg{err: err}
+		}
+		markdown, err := sb.GetSetting(SettingMarkdown)
+		return settingsMsg{theme: theme, markdown: markdown, err: err}
 	}
 }
 
@@ -54,11 +58,16 @@ func (m *Model) applySettings(msg settingsMsg) {
 	if t, ok := ThemeByName(msg.theme); ok {
 		m.setTheme(t)
 	}
+	if on, ok := parseOnOff(msg.markdown); ok {
+		m.setMarkdown(on)
+	}
 }
 
 // setTheme switches to theme t and redraws everything with it.
 func (m *Model) setTheme(t Theme) {
+	markdown := m.st.markdown
 	m.st = newStyles(t)
+	m.st.markdown = markdown
 	m.input.st = m.st
 	m.refreshHistory()
 }

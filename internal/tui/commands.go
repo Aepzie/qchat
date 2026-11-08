@@ -28,6 +28,7 @@ var commands = []command{
 	{"/fingerprint", "pinned server key"},
 	{"/group", "groups: create <name> [ids], add, remove, members…"},
 	{"/theme", "change colors: /theme <name>"},
+	{"/markdown", "format messages: /markdown on|off"},
 	{"/clear", "clear this view"},
 	{"/quit", "exit qchat"},
 }
@@ -41,6 +42,8 @@ func subCommands(name string) []command {
 		return groupCommands
 	case "/theme":
 		return themeCommands()
+	case "/markdown":
+		return markdownCommands
 	}
 	return nil
 }
@@ -125,6 +128,8 @@ func (m *Model) runCommand(input string) tea.Cmd {
 		return m.cmdGroup(fields[1:])
 	case "/theme":
 		return m.cmdTheme(fields[1:])
+	case "/markdown":
+		return m.cmdMarkdown(fields[1:])
 	case "/rename":
 		return m.cmdRename(rest)
 	case "/remove":

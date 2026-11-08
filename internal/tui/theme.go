@@ -248,23 +248,33 @@ type styles struct {
 	overlayBox lipgloss.Style
 	qr         lipgloss.Style
 	card       lipgloss.Style
+	match      lipgloss.Style
+
+	// markdown reports whether message bodies are rendered as Markdown,
+	// with md.
+	markdown bool
+	md       *markdownRenderer
 }
 
+// newStyles derives the styles of a theme, with Markdown rendering on.
 func newStyles(t Theme) styles {
 	t = t.complete()
 	base := lipgloss.NewStyle()
 	bar := base.Background(t.Surface).Foreground(t.Text)
 	return styles{
-		theme:  t,
-		text:   base.Foreground(t.Text),
-		muted:  base.Foreground(t.Muted),
-		faint:  base.Foreground(t.Faint),
-		accent: base.Foreground(t.Accent),
-		ok:     base.Foreground(t.Success),
-		warn:   base.Foreground(t.Warning),
-		danger: base.Foreground(t.Danger),
-		bold:   base.Foreground(t.Text).Bold(true),
-		border: base.Foreground(t.Border),
+		markdown: true,
+		md:       newMarkdownRenderer(t),
+		match:    base.Background(t.Accent).Foreground(t.OnAccent),
+		theme:    t,
+		text:     base.Foreground(t.Text),
+		muted:    base.Foreground(t.Muted),
+		faint:    base.Foreground(t.Faint),
+		accent:   base.Foreground(t.Accent),
+		ok:       base.Foreground(t.Success),
+		warn:     base.Foreground(t.Warning),
+		danger:   base.Foreground(t.Danger),
+		bold:     base.Foreground(t.Text).Bold(true),
+		border:   base.Foreground(t.Border),
 
 		bar:        bar,
 		barBrand:   bar.Foreground(t.Accent).Bold(true),
