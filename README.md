@@ -46,6 +46,12 @@ Implemented (Phase 4, v0.4.0):
 - Verified join history for new members and out-of-sync detection
 - Relay fan-out with `SendMulti`: payload stored once, partial delivery reporting
 
+Implemented (Phase 5, v0.5.0):
+
+- Padding of all end-to-end plaintexts to size buckets inside the encryption
+- Sealed sender: separate anonymous sessions, access keys, anonymous key lookups; the relay stores no sender for sealed messages
+- Optional Tor: `--tor` / `--socks5`, onion service deployment ([deploy/tor](deploy/tor/README.md))
+
 Planned:
 
 - Metadata protection: sealed sender, padding to size buckets, optional Tor onion service
@@ -78,7 +84,7 @@ Cryptographic building blocks (established libraries only): Go standard library 
 | 2 | Identities, hybrid keys, 1:1 end-to-end messages (v0.2.0) | Done |
 | 3 | Forward secrecy (ratchet), prekeys, offline delivery (v0.3.0) | Done |
 | 4 | Groups, including key rotation (v0.4.0) | Done |
-| 5 | Metadata protection: sealed sender, padding, Tor | Planned |
+| 5 | Metadata protection: sealed sender, padding, Tor (v0.5.0) | Done |
 | 6 | Client installer builder with embedded server config | Planned |
 | 7 | TUI polish, files, themes | Planned |
 | 8 | Tests, fuzzing, documentation, release pipeline | Planned |
