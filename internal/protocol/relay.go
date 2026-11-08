@@ -204,7 +204,9 @@ func (s SendResult) validate() error {
 // example after the next authentication, so recipients must tolerate
 // duplicates.
 type Deliver struct {
-	// From is the authenticated identity of the sender, exactly IDSize bytes.
+	// From is the authenticated identity of the sender, exactly IDSize
+	// bytes, or SealedFrom for a message sent with SealedSend or
+	// SealedSendMulti, whose sender the relay does not know.
 	From []byte `cbor:"1,keyasint"`
 	// Payload is the end-to-end encrypted ciphertext exactly as sent, between
 	// 1 and MaxPayloadSize bytes.
@@ -212,6 +214,12 @@ type Deliver struct {
 	// QueueID identifies the stored message on the relay; it is at least 1.
 	// Queue IDs increase in the order in which the relay accepted messages.
 	QueueID uint64 `cbor:"3,keyasint"`
+}
+
+// IsSealed reports whether d carries a sealed message, one whose From is
+// SealedFrom.
+func (d Deliver) IsSealed() bool {
+	return len(d.From) == IDSize && [IDSize]byte(d.From) == SealedFrom
 }
 
 func (Deliver) frameType() FrameType { return TypeDeliver }

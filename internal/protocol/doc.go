@@ -97,6 +97,19 @@
 //	                                 authentication until acknowledged
 //	  C→S  Ack{QueueID}              no response; the relay deletes the message
 //
+//	Sealed sender access (requires authentication)
+//	  C→S  SetAccessKey{Verifier, AllowUnidentified}
+//	  S→C  AccessKeySet{}
+//
+//	Sealed sending (anonymous connection only)
+//	  C→S  SealedSend{To, AccessProof, Payload}
+//	  S→C  SendResult{Status}        Accepted, or Error NotFound (unknown
+//	                                 recipient or wrong proof alike) /
+//	                                 QueueFull
+//	  C→S  SealedSendMulti{Entries[{To, AccessProof}], Payload}
+//	  S→C  SendMultiResult{Status, Failed, Reasons}
+//	  S→C  Deliver{From = SealedFrom, Payload, QueueID}
+//
 // The authentication signature covers the fingerprint of the relay's TLS
 // public key as well as the nonce and the ID, so a proof cannot be replayed
 // against another relay, and a connection is authenticated for exactly one
@@ -115,12 +128,30 @@
 // toward its recipient's queue limits. The relay sees the sender, the
 // recipient list and the payload size, but no group ID, name or membership.
 //
+// # Sealed sender
+//
+// [SealedSend] and [SealedSendMulti] let a client send without telling the
+// relay who it is. They are accepted only on an anonymous connection: one
+// that completed Hello/Welcome and never sent Register, AuthBegin or
+// AuthProof. The first sealed frame locks the connection into that mode, so
+// a later Register or AuthBegin, like a sealed frame on a connection that
+// registered or began authentication, is a fatal BadRequest; the relay
+// never sees a sealed message and an identity on one connection. Instead of
+// authenticating, the sender presents the recipient's access verifier
+// (uploaded by the recipient with [SetAccessKey]) as its access proof, which
+// the relay compares in constant time. Unknown recipients, recipients
+// without a verifier and wrong proofs are all answered NotFound. Sealed
+// messages are stored without a sender and delivered as a [Deliver] whose
+// From is [SealedFrom]; the end-to-end payload names and authenticates the
+// sender (see package sealed). These frame types were added within wire
+// version 1 like the others above.
+//
 // # Relay model
 //
 // The server is an untrusted relay. The handshake, keepalive, error,
 // registration, authentication, key lookup and prekey bodies are plaintext
-// and defined in this package. The Payload of [Send], [SendMulti] and
-// [Deliver] is end-to-end encrypted ciphertext: the relay routes and stores
+// and defined in this package. The Payload of [Send], [SendMulti],
+// [SealedSend], [SealedSendMulti] and [Deliver] is end-to-end encrypted ciphertext: the relay routes and stores
 // it by recipient ID and checks only its size, and it never needs, nor is
 // able, to interpret its contents. Identity bundles returned by the relay are verified
 // by the client, which checks that each bundle is validly self-signed and
