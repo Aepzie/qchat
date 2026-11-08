@@ -8,7 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/craguS/qchat/internal/client"
+	"github.com/Aepzie/qchat/internal/client"
 )
 
 func altKey(r rune) tea.KeyPressMsg { return press(r, "", tea.ModAlt) }
