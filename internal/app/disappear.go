@@ -263,3 +263,5 @@ func (a *App) dropMessageFile(ctx context.Context, e clientdb.ExpiredMessage) {
 	}
 	a.abandonTransfer(ctx, t.Conv, t.Sender, t.FileID)
 }
+
+var _ tui.TimerBackend = (*App)(nil)

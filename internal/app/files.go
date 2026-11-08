@@ -883,3 +883,5 @@ func (a *App) expireTransfers(ctx context.Context) []tui.ChatEvent {
 	}
 	return events
 }
+
+var _ tui.FileBackend = (*App)(nil)

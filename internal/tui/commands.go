@@ -28,6 +28,10 @@ var commands = []command{
 	{"/fingerprint", "pinned server key"},
 	{"/group", "groups: create <name> [ids], add, remove, members…"},
 	{"/search", "find messages: /search [all] <text>"},
+	{"/send", "send a file: /send <path>"},
+	{"/file", "same as /send"},
+	{"/save", "save a file: /save <n> [directory], /save lists them"},
+	{"/timer", "disappearing messages: /timer off|30s|5m|1h|1d|1w"},
 	{"/theme", "change colors: /theme <name>"},
 	{"/markdown", "format messages: /markdown on|off"},
 	{"/clear", "clear this view"},
@@ -45,6 +49,8 @@ func subCommands(name string) []command {
 		return themeCommands()
 	case "/markdown":
 		return markdownCommands
+	case "/timer":
+		return timerCommands
 	}
 	return nil
 }
@@ -149,6 +155,12 @@ func (m *Model) runCommand(input string) tea.Cmd {
 		m.openHelp()
 	case "/search":
 		return m.cmdSearch(rest)
+	case "/send", "/file":
+		return m.cmdSendFile(name, rest)
+	case "/save":
+		return m.cmdSave(fields[1:], rest)
+	case "/timer":
+		return m.cmdTimer(fields[1:])
 	case "/status":
 		m.addOutput("status", m.statusRows(), "")
 	case "/fingerprint":
@@ -257,6 +269,7 @@ func (m *Model) statusRows() []row {
 	return append(rows,
 		row{"e2e", "prekey sessions and KEM ratchet with ML-KEM-768 + X25519, session starts signed with Ed25519 + ML-DSA-65"},
 		row{"groups", "sender keys with hybrid signatures, rotated when a member leaves or is removed"},
+		row{"files", "48 KiB chunks sealed with a per-file key inside the session · stored encrypted on this device · up to 64 MiB"},
 		row{"limits", "the relay sees sender, recipients (also of group messages), time and size · not independently audited"},
 	)
 }
