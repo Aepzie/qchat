@@ -3,6 +3,8 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"image/color"
+	"math"
 	"strings"
 	"time"
 	"unicode"
@@ -149,8 +151,9 @@ func (f *field) handleKey(msg tea.KeyPressMsg) bool {
 	return true
 }
 
-// render draws the field's input row at width cells.
-func (f *field) render(st styles, focused bool, width int) string {
+// render draws the field's input row at width cells. The cursor of a
+// focused field pulses with frame.
+func (f *field) render(st styles, focused bool, width, frame int) string {
 	prompt := st.faint.Render("› ")
 	if focused {
 		prompt = st.accent.Bold(true).Render("› ")
@@ -168,20 +171,66 @@ func (f *field) render(st styles, focused bool, width int) string {
 	}
 	line := prompt + st.text.Render(shown)
 	if focused {
-		line += lipgloss.NewStyle().Background(st.theme.Accent).Render(" ")
+		line += lipgloss.NewStyle().Background(pulse(st.theme, st.theme.Accent, frame)).Render(" ")
 	}
 	return line
 }
 
-// renderCard draws a centered card with a title, a subtitle and body
-// lines, filling exactly width×height cells.
-func renderCard(st styles, width, height int, title, subtitle string, body func(inner int) []string) string {
+// renderBox draws the field as a rounded box of width cells, three rows
+// high, with label set into the top border. A focused box glows, its
+// border pulsing between the focus and glow colors with frame.
+func (f *field) renderBox(st styles, label string, focused bool, width, frame int) []string {
+	width = max(width, 6)
+	inner := width - 4
+	th := st.theme
+	edge := lipgloss.NewStyle().Foreground(th.PanelBorder)
+	title := st.muted
+	if focused {
+		phase := float64(mod(frame, pulseFrames)) / pulseFrames
+		edge = lipgloss.NewStyle().Foreground(blend(th.PanelBorderFocus, th.Glow, (1-math.Cos(2*math.Pi*phase))/2))
+		title = st.accent.Bold(true)
+	}
+	label = truncate(label, max(inner-2, 1))
+	fill := max(width-5-lipgloss.Width(label), 0)
+	top := edge.Render("╭─ ") + title.Render(label) + edge.Render(" "+strings.Repeat("─", fill)+"╮")
+	mid := edge.Render("│ ") + padRight(truncateStyled(f.render(st, focused, inner, frame), inner), inner, lipgloss.NewStyle()) + edge.Render(" │")
+	bottom := edge.Render("╰" + strings.Repeat("─", width-2) + "╯")
+	return []string{top, mid, bottom}
+}
+
+// onboardTickMsg advances the onboarding animations by one frame. It is
+// separate from animTickMsg so a host that forwards its own ticks never
+// starts a second tick chain here.
+type onboardTickMsg struct{}
+
+func onboardTick() tea.Cmd {
+	return tea.Tick(AnimInterval, func(time.Time) tea.Msg { return onboardTickMsg{} })
+}
+
+// cardBorderStops returns a wrapping gradient for a card border, so the
+// colors meet seamlessly at the starting corner.
+func cardBorderStops(stops []color.Color) []color.Color {
+	out := append([]color.Color(nil), stops...)
+	for i := len(stops) - 2; i >= 0; i-- {
+		out = append(out, stops[i])
+	}
+	return out
+}
+
+// renderCard draws a centered card with a gradient title, a subtitle and
+// body lines, filling exactly width×height cells. Its border carries the
+// theme gradient, rotating with frame.
+func renderCard(st styles, width, height, frame int, title, subtitle string, body func(inner int) []string) string {
 	if width < cardMinWidth || height < cardMinHeight {
 		return renderTooSmall(st, width, height, cardMinWidth, cardMinHeight)
 	}
+	th := st.theme
 	cardW := min(cardMaxWidth, width-2)
 	inner := cardW - 6
-	lines := []string{st.accent.Bold(true).Render(truncate(title, inner))}
+	lines := []string{
+		gradientText(truncate("◆ "+title, inner), th.Gradient),
+		gradientRule(inner, "━", th.Gradient),
+	}
 	for _, l := range wrapLines(subtitle, inner) {
 		lines = append(lines, st.muted.Render(l))
 	}
@@ -190,13 +239,20 @@ func renderCard(st styles, width, height int, title, subtitle string, body func(
 	for i, l := range lines {
 		lines[i] = padRight(truncateStyled(l, inner), inner, lipgloss.NewStyle())
 	}
-	card := st.card.Render(strings.Join(lines, "\n"))
+	card := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForegroundBlend(cardBorderStops(th.Gradient)...).
+		BorderForegroundBlendOffset(frame).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
 	return clamp(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, card), width, height)
 }
 
-// cardView wraps rendered card content in a tea.View.
-func cardView(content string) tea.View {
+// cardView wraps rendered card content in a tea.View drawn on the theme's
+// background.
+func cardView(th Theme, content string) tea.View {
 	v := tea.NewView(content)
+	v.BackgroundColor = th.Background
 	v.AltScreen = true
 	v.WindowTitle = "qchat"
 	return v
@@ -211,6 +267,8 @@ type CreateProfileConfig struct {
 	// outcome with Result and Cancelled afterwards. Otherwise the model
 	// emits ProfileSubmitted or OnboardingCancelled.
 	QuitWhenDone bool
+	// NoAnimation turns the card animations off.
+	NoAnimation bool
 }
 
 // CreateProfileModel asks for a display name and a passphrase, twice.
@@ -225,6 +283,7 @@ type CreateProfileModel struct {
 	result        ProfileSubmitted
 	done          bool
 	cancelled     bool
+	frame         int
 }
 
 // NewCreateProfile returns a CreateProfileModel with the name field focused.
@@ -244,8 +303,13 @@ func (m CreateProfileModel) Result() (ProfileSubmitted, bool) { return m.result,
 // Cancelled reports whether the user cancelled.
 func (m CreateProfileModel) Cancelled() bool { return m.cancelled }
 
-// Init implements tea.Model.
-func (m CreateProfileModel) Init() tea.Cmd { return nil }
+// Init implements tea.Model. It starts the card animation.
+func (m CreateProfileModel) Init() tea.Cmd {
+	if m.cfg.NoAnimation {
+		return nil
+	}
+	return onboardTick()
+}
 
 // Update implements tea.Model.
 func (m CreateProfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -255,6 +319,9 @@ func (m CreateProfileModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+	case onboardTickMsg:
+		m.frame++
+		return m, onboardTick()
 	case tea.PasteMsg:
 		m.focused().insert(msg.Content)
 		m.errText = ""
@@ -335,17 +402,19 @@ func (m CreateProfileModel) finish(msg tea.Msg) tea.Cmd {
 // View implements tea.Model.
 func (m CreateProfileModel) View() tea.View {
 	if m.width <= 0 || m.height <= 0 {
-		return cardView("")
+		return cardView(m.st.theme, "")
 	}
 	st := m.st
-	return cardView(renderCard(st, m.width, m.height, "Create your qchat identity",
+	return cardView(st.theme, renderCard(st, m.width, m.height, m.frame, "Create your qchat identity",
 		"Your keys are generated on this device and encrypted with your passphrase. There is no recovery if you forget it.",
 		func(inner int) []string {
 			var lines []string
-			lines = append(lines, st.muted.Render("Display name"), m.name.render(st, m.focus == 0, inner))
-			lines = append(lines, st.faint.Render("shown to you only; never sent"), "")
-			lines = append(lines, st.muted.Render("Passphrase"), m.pass.render(st, m.focus == 1, inner), m.lengthHint(), "")
-			lines = append(lines, st.muted.Render("Confirm passphrase"), m.confirm.render(st, m.focus == 2, inner), m.matchHint(), "")
+			lines = append(lines, m.name.renderBox(st, "Display name", m.focus == 0, inner, m.frame)...)
+			lines = append(lines, st.faint.Render("shown to you only; never sent"))
+			lines = append(lines, m.pass.renderBox(st, "Passphrase", m.focus == 1, inner, m.frame)...)
+			lines = append(lines, m.lengthHint())
+			lines = append(lines, m.confirm.renderBox(st, "Confirm passphrase", m.focus == 2, inner, m.frame)...)
+			lines = append(lines, m.matchHint(), "")
 			if m.errText != "" {
 				for _, l := range wrapLines(m.errText, inner) {
 					lines = append(lines, st.danger.Render(l))
@@ -394,6 +463,8 @@ type UnlockConfig struct {
 	QuitWhenDone bool
 	// Now returns the current time, for the retry delay. Nil means time.Now.
 	Now func() time.Time
+	// NoAnimation turns the card animations off.
+	NoAnimation bool
 }
 
 type (
@@ -415,6 +486,7 @@ type UnlockModel struct {
 	errText       string
 	done          bool
 	cancelled     bool
+	frame         int
 }
 
 // NewUnlock returns an UnlockModel.
@@ -434,8 +506,13 @@ func (m UnlockModel) Cancelled() bool { return m.cancelled }
 // Failures returns the number of wrong passphrases entered.
 func (m UnlockModel) Failures() int { return m.failures }
 
-// Init implements tea.Model.
-func (m UnlockModel) Init() tea.Cmd { return nil }
+// Init implements tea.Model. It starts the card animation.
+func (m UnlockModel) Init() tea.Cmd {
+	if m.cfg.NoAnimation {
+		return nil
+	}
+	return onboardTick()
+}
 
 // Update implements tea.Model.
 func (m UnlockModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -449,6 +526,9 @@ func (m UnlockModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.busy {
 			m.pass.insert(msg.Content)
 		}
+	case onboardTickMsg:
+		m.frame++
+		return m, onboardTick()
 	case unlockResultMsg:
 		return m.handleResult(msg.err)
 	case unlockTickMsg:
@@ -531,18 +611,18 @@ func (m UnlockModel) finish(msg tea.Msg) tea.Cmd {
 // View implements tea.Model.
 func (m UnlockModel) View() tea.View {
 	if m.width <= 0 || m.height <= 0 {
-		return cardView("")
+		return cardView(m.st.theme, "")
 	}
 	st := m.st
 	hint := cleanLine(m.cfg.Hint, 200)
 	if hint == "" {
 		hint = "Enter the passphrase that protects your identity on this device."
 	}
-	return cardView(renderCard(st, m.width, m.height, "Unlock qchat", hint, func(inner int) []string {
-		lines := []string{st.muted.Render("Passphrase"), m.pass.render(st, !m.busy, inner), ""}
+	return cardView(st.theme, renderCard(st, m.width, m.height, m.frame, "Unlock qchat", hint, func(inner int) []string {
+		lines := append(m.pass.renderBox(st, "Passphrase", !m.busy, inner, m.frame), "")
 		switch {
 		case m.busy:
-			lines = append(lines, st.muted.Render("Unlocking…"))
+			lines = append(lines, st.accent.Render(spinnerFrame(m.frame))+st.muted.Render(" Unlocking…"))
 		case m.waiting():
 			left := m.waitUntil.Sub(m.cfg.Now()).Round(time.Second)
 			lines = append(lines, st.warn.Render(truncate(fmt.Sprintf("Too many attempts. Try again in %s.", max(left, time.Second)), inner)))

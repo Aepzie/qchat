@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="932" height="606" viewBox="0 0 932 606" role="img" aria-label="qchat · System">
+<title>qchat · System</title>
+<rect width="932" height="606" rx="10" fill="#0b0906"/>
+<path d="M0 10 A10 10 0 0 1 10 0 H922 A10 10 0 0 1 932 10 V34 H0 Z" fill="#1b1b1f"/>
+<path d="M0 33.5 H932" stroke="#000000" stroke-opacity="0.6"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/>
+<circle cx="40" cy="17" r="6" fill="#febc2e"/>
+<circle cx="60" cy="17" r="6" fill="#28c840"/>
+<text x="466" y="21.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#a8a8b0">qchat · System</text>
+<rect x="0.5" y="0.5" width="931" height="605" rx="9.5" fill="none" stroke="#ffffff" stroke-opacity="0.12"/>
+<g shape-rendering="crispEdges">
+<rect x="16" y="50" width="27" height="18" fill="#14100a"/>
+<rect x="97" y="50" width="819" height="18" fill="#14100a"/>
+<rect x="313" y="518" width="9" height="18" fill="#ffb000"/>
+<rect x="16" y="572" width="72" height="18" fill="#ffb000"/>
+<rect x="88" y="572" width="828" height="18" fill="#14100a"/>
+</g>
+<path fill="none" stroke="#4a3510" stroke-width="1" d="M16 77.5H682M772 77.5H916M25 95.5H34M106 95.5H259M20.5 104V554M263.5 104V554M25 563.5H259"/>
+<path fill="none" stroke="#8a5e12" stroke-width="2" d="M682 77H691"/>
+<path fill="none" stroke="#a4700e" stroke-width="2" d="M691 77H700"/>
+<path fill="none" stroke="#be820a" stroke-width="2" d="M700 77H709"/>
+<path fill="none" stroke="#d89506" stroke-width="2" d="M709 77H718"/>
+<path fill="none" stroke="#f2a702" stroke-width="2" d="M718 77H727"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M277 95.5H286M376 95.5H907M272.5 104V554M911.5 104V554M286 509.5H295M574 509.5H898M281.5 518V536M902.5 518V536M286 545.5H898M277 563.5H907"/>
+<path fill="none" stroke="#ffb40e" stroke-width="2" d="M727 77H736"/>
+<path fill="none" stroke="#ffbb29" stroke-width="2" d="M736 77H745"/>
+<path fill="none" stroke="#ffc344" stroke-width="2" d="M745 77H754"/>
+<path fill="none" stroke="#ffca5f" stroke-width="2" d="M754 77H763"/>
+<path fill="none" stroke="#ffd27a" stroke-width="2" d="M763 77H772"/>
+<path fill="none" stroke="#4a3510" stroke-width="1" d="M25 95.5H25A4.5 4.5 0 0 0 20.5 100V104M259 95.5H259A4.5 4.5 0 0 1 263.5 100V104M25 563.5H25A4.5 4.5 0 0 1 20.5 559V554M259 563.5H259A4.5 4.5 0 0 0 263.5 559V554"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M277 95.5H277A4.5 4.5 0 0 0 272.5 100V104M907 95.5H907A4.5 4.5 0 0 1 911.5 100V104M286 509.5H286A4.5 4.5 0 0 0 281.5 514V518M898 509.5H898A4.5 4.5 0 0 1 902.5 514V518M286 545.5H286A4.5 4.5 0 0 1 281.5 541V536M898 545.5H898A4.5 4.5 0 0 0 902.5 541V536M277 563.5H277A4.5 4.5 0 0 1 272.5 559V554M907 563.5H907A4.5 4.5 0 0 0 911.5 559V554"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#ffc24d" xml:space="preserve" style="white-space:pre">
+<text y="63.5"><tspan x="25" fill="#8a5e12" font-weight="bold">⚡</tspan><tspan x="52" fill="#d89506">q</tspan><tspan x="61" fill="#ffb000">c</tspan><tspan x="70" fill="#ffbb29">h</tspan><tspan x="79" fill="#ffc751">a</tspan><tspan x="88" fill="#ffd27a">t</tspan><tspan x="115" textLength="63" fill="#c98a1a">1 Chats</tspan><tspan x="187" textLength="18" fill="#ffb000" font-weight="bold">●5</tspan><tspan x="223" textLength="90" fill="#c98a1a">2 Requests</tspan><tspan x="322" textLength="18" fill="#ffd27a" font-weight="bold">✦2</tspan><tspan x="358" textLength="72" fill="#c98a1a">3 Groups</tspan><tspan x="439" textLength="18" fill="#ffb000" font-weight="bold">●3</tspan><tspan x="475" textLength="90" fill="#c98a1a">4 Contacts</tspan><tspan x="574" textLength="18" fill="#ff3b2f" font-weight="bold">⚠1</tspan><tspan x="610" textLength="63" fill="#c98a1a">5 Files</tspan><tspan x="691" textLength="72" fill="#ffd27a" font-weight="bold">6 System</tspan><tspan x="808" fill="#ffe08a">●</tspan><tspan x="826" textLength="81">connected</tspan></text>
+<text y="99.5"><tspan x="43" textLength="54" fill="#ffb000" font-weight="bold">SYSTEM</tspan><tspan x="295" fill="#8a5e12" font-weight="bold">◉</tspan><tspan x="313" fill="#cd8d08">S</tspan><tspan x="322" fill="#eea403">Y</tspan><tspan x="331" fill="#ffb511">S</tspan><tspan x="340" fill="#ffbf34">T</tspan><tspan x="349" fill="#ffc857">E</tspan><tspan x="358" fill="#ffd27a">M</tspan></text>
+<text y="117.5"><tspan x="34" textLength="99" fill="#ffe08a">● connected</tspan><tspan x="286" textLength="72" font-weight="bold"># System</tspan><tspan x="376" textLength="270" fill="#8a5e12">connection log and local notes</tspan></text>
+<text y="135.5"><tspan x="34" textLength="54" fill="#8a5e12">server</tspan><tspan x="97" textLength="153">relay.nordlicht.e</tspan><tspan x="286" textLength="72" fill="#8a5e12">14:32:00</tspan><tspan x="376" fill="#ffb000">▸</tspan><tspan x="394" textLength="54" font-weight="bold">status</tspan></text>
+<text y="153.5"><tspan x="34" textLength="27" fill="#8a5e12">tls</tspan><tspan x="70" textLength="180">1.3 · X25519MLKEM768</tspan><tspan x="394" textLength="45" fill="#c98a1a">state</tspan><tspan x="493" textLength="216">connected since 13:45:00</tspan></text>
+<text y="171.5"><tspan x="34" textLength="54" fill="#8a5e12">sealed</tspan><tspan x="97" textLength="18">on</tspan><tspan x="394" textLength="54" fill="#c98a1a">server</tspan><tspan x="493" textLength="252">relay.nordlicht.example:8443</tspan></text>
+<text y="189.5"><tspan x="34" textLength="27" fill="#8a5e12">tor</tspan><tspan x="70" textLength="27">off</tspan><tspan x="394" textLength="81" fill="#c98a1a">transport</tspan><tspan x="493" textLength="315">TLS 1.3 · X25519MLKEM768 (required)</tspan></text>
+<text y="207.5"><tspan x="34" textLength="18" fill="#8a5e12">id</tspan><tspan x="61" textLength="162">qc1-xfwv-mmdi-a5np</tspan><tspan x="394" textLength="72" fill="#c98a1a">protocol</tspan><tspan x="493" textLength="162">v1 · keepalive 15s</tspan></text>
+<text y="225.5"><tspan x="34" textLength="27" fill="#8a5e12">e2e</tspan><tspan x="70" textLength="180">on · forward secrecy</tspan><tspan x="394" textLength="63" fill="#c98a1a">latency</tspan><tspan x="493" textLength="45">38 ms</tspan></text>
+<text y="243.5"><tspan x="394" textLength="27" fill="#c98a1a">pin</tspan><tspan x="493" textLength="351">3a4c fa22 a75c cedd 6ffa d833 5988 52e9</tspan></text>
+<text y="261.5"><tspan x="34" textLength="90" fill="#8a5e12">server pin</tspan><tspan x="493" textLength="351">6306 a40c 0992 2798 bb76 2b15 61af a1e3</tspan></text>
+<text y="279.5"><tspan x="43" textLength="171" fill="#c98a1a">3a4c fa22 a75c cedd</tspan><tspan x="394" textLength="27" fill="#c98a1a">tor</tspan><tspan x="493" textLength="27">off</tspan></text>
+<text y="297.5"><tspan x="43" textLength="171" fill="#c98a1a">6ffa d833 5988 52e9</tspan><tspan x="394" textLength="72" fill="#c98a1a">identity</tspan><tspan x="493" textLength="162">qc1-xfwv-mmdi-a5np</tspan></text>
+<text y="315.5"><tspan x="43" textLength="171" fill="#c98a1a">6306 a40c 0992 2798</tspan><tspan x="394" textLength="27" fill="#c98a1a">e2e</tspan><tspan x="493" textLength="396">prekey sessions and KEM ratchet with ML-KEM-</tspan></text>
+<text y="333.5"><tspan x="43" textLength="171" fill="#c98a1a">bb76 2b15 61af a1e3</tspan><tspan x="493" textLength="360">768 + X25519, session starts signed with</tspan></text>
+<text y="351.5"><tspan x="493" textLength="171">Ed25519 + ML-DSA-65</tspan></text>
+<text y="369.5"><tspan x="394" textLength="54" fill="#c98a1a">groups</tspan><tspan x="493" textLength="387">sender keys with hybrid signatures, rotated</tspan></text>
+<text y="387.5"><tspan x="493" textLength="306">when a member leaves or is removed</tspan></text>
+<text y="405.5"><tspan x="394" textLength="45" fill="#c98a1a">files</tspan><tspan x="493" textLength="360">48 KiB chunks sealed with a per-file key</tspan></text>
+<text y="423.5"><tspan x="493" textLength="405">inside the session · stored encrypted on this</tspan></text>
+<text y="441.5"><tspan x="493" textLength="189">device · up to 64 MiB</tspan></text>
+<text y="459.5"><tspan x="394" textLength="54" fill="#c98a1a">limits</tspan><tspan x="493" textLength="378">the relay sees sender, recipients (also of</tspan></text>
+<text y="477.5"><tspan x="493" textLength="324">group messages), time and size · not</tspan></text>
+<text y="495.5"><tspan x="493" textLength="189">independently audited</tspan></text>
+<text y="513.5"><tspan x="304" fill="#ffb000">✎</tspan><tspan x="322" textLength="243">note · stays on this device</tspan></text>
+<text y="531.5"><tspan x="295" fill="#ffb000" font-weight="bold">›</tspan><tspan x="313" fill="#0b0906">T</tspan><tspan x="322" textLength="171" fill="#8a5e12">ype a note or /help</tspan></text>
+<text y="585.5"><tspan x="25" textLength="54" fill="#0b0906" font-weight="bold">INSERT</tspan><tspan x="106" textLength="801" fill="#8a5e12">enter send · esc normal · alt+1-6 tabs · ctrl+n/p switch · tab complete… notes stay local</tspan></text>
+</g>
+</svg>

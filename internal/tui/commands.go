@@ -34,6 +34,7 @@ var commands = []command{
 	{"/timer", "disappearing messages: /timer off|30s|5m|1h|1d|1w"},
 	{"/theme", "change colors: /theme <name>"},
 	{"/markdown", "format messages: /markdown on|off"},
+	{"/animations", "motion: /animations on|off"},
 	{"/clear", "clear this view"},
 	{"/quit", "exit qchat"},
 }
@@ -49,6 +50,8 @@ func subCommands(name string) []command {
 		return themeCommands()
 	case "/markdown":
 		return markdownCommands
+	case "/animations":
+		return animationsCommands
 	case "/timer":
 		return timerCommands
 	}
@@ -137,6 +140,8 @@ func (m *Model) runCommand(input string) tea.Cmd {
 		return m.cmdTheme(fields[1:])
 	case "/markdown":
 		return m.cmdMarkdown(fields[1:])
+	case "/animations":
+		return m.cmdAnimations(fields[1:])
 	case "/rename":
 		return m.cmdRename(rest)
 	case "/remove":

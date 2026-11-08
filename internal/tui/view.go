@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,49 +12,64 @@ import (
 
 // Layout constants.
 const (
-	sidebarWidth    = 24
+	// leftPanelWidth is the outer width of the list panel, borders included.
+	leftPanelWidth = 28
+	// sidebarMinTotal is the narrowest terminal that shows the list panel.
 	sidebarMinTotal = 70
-	maxPaletteRows  = 5
-	maxInputHeight  = 3
+	// ruleMinHeight is the shortest terminal that gets the tab underline.
+	ruleMinHeight  = 16
+	maxPaletteRows = 5
+	maxInputHeight = 3
 )
 
-// dims is the computed layout for the current terminal size.
+// dims is the computed layout for the current terminal size. The body sits
+// between the tab bar (plus its underline) and the footer and holds the
+// list panel on the left and the conversation panel on the right, both
+// framed. Inside the right panel: header + banner + history + palette +
+// input box == innerH.
 type dims struct {
 	tooSmall bool
-	sidebarW int
+	ruleH    int
+	leftW    int
 	mainW    int
+	innerW   int
 	bodyH    int
+	innerH   int
 	bannerH  int
 	inputH   int
 	paletteH int
 	historyH int
 }
 
-// dims computes the layout. Every row of the body is accounted for:
-// header + banner + history + palette + separator + input == bodyH.
+// dims computes the layout.
 func (m *Model) dims() dims {
 	d := dims{}
 	if m.width < MinWidth || m.height < MinHeight {
 		d.tooSmall = true
 		return d
 	}
-	if m.width >= sidebarMinTotal {
-		d.sidebarW = sidebarWidth
+	if m.height >= ruleMinHeight {
+		d.ruleH = 1
 	}
-	d.mainW = m.width - d.sidebarW
-	d.bodyH = m.height - 2
+	if m.width >= sidebarMinTotal {
+		d.leftW = leftPanelWidth
+	}
+	d.mainW = m.width - d.leftW
+	d.innerW = d.mainW - 2
+	d.bodyH = m.height - 2 - d.ruleH
+	d.innerH = d.bodyH - 2
 	d.inputH = min(max(m.input.Height(), 1), maxInputHeight)
 	if m.confirm.active {
-		d.inputH = 1
+		d.inputH = min(len(wrapLines(m.confirm.prompt(), max(d.innerW-4, 1))), maxInputHeight)
 	}
 	if matches, open := m.paletteMatches(); open {
 		d.paletteH = min(max(len(matches), 1), maxPaletteRows)
 	}
-	room := d.bodyH - 2 - d.inputH
-	d.bannerH = len(m.renderBanner(d.mainW, room))
+	room := d.innerH - 1 - (d.inputH + 2)
+	d.bannerH = len(m.renderBanner(d.innerW, room))
 	room -= d.bannerH
 	d.paletteH = min(d.paletteH, max(room-1, 0))
-	d.historyH = room - d.paletteH
+	d.historyH = max(room-d.paletteH, 0)
 	return d
 }
 
@@ -66,7 +80,7 @@ func (m *Model) historyWidth() int {
 	if d.tooSmall {
 		return 0
 	}
-	return d.mainW - 2
+	return d.innerW - 2
 }
 
 // layout applies the current terminal size to the child components.
@@ -78,15 +92,19 @@ func (m *Model) layout() {
 	if d.tooSmall {
 		return
 	}
-	m.input.SetWidth(d.mainW - 2)
+	m.input.SetWidth(d.innerW - 4)
 	d = m.dims()
-	m.history.SetWidth(d.mainW - 2)
+	atBottom := m.history.AtBottom()
+	m.history.SetWidth(d.innerW - 2)
 	m.history.SetHeight(d.historyH)
 	m.syncHistory()
+	if atBottom {
+		m.history.GotoBottom()
+	}
 }
 
 // View implements tea.Model. The program runs in the alternate screen with
-// mouse wheel reporting enabled.
+// mouse reporting enabled, for the wheel and clicks on tabs.
 func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
@@ -105,17 +123,24 @@ func (m Model) render() string {
 	if d.tooSmall {
 		return renderTooSmall(m.st, m.width, m.height, MinWidth, MinHeight)
 	}
+	if m.splash && m.animAllowed() {
+		return clamp(splashView(m.width, m.height, m.frame, m.st.theme), m.width, m.height)
+	}
 	lines := make([]string, 0, m.height)
-	lines = append(lines, m.renderStatus(m.width))
+	bar, _ := m.renderTabBar(m.width)
+	lines = append(lines, bar)
+	if d.ruleH > 0 {
+		lines = append(lines, m.renderTabRule(m.width))
+	}
 	if m.overlay.kind != overlayNone {
 		lines = append(lines, m.renderOverlay(m.width, d.bodyH)...)
 	} else {
-		sidebar := m.renderSidebar(d)
+		left := m.renderLeftPanel(d)
 		main := m.renderMain(d)
 		for i := 0; i < d.bodyH; i++ {
 			line := main[i]
-			if d.sidebarW > 0 {
-				line = sidebar[i] + line
+			if d.leftW > 0 {
+				line = left[i] + line
 			}
 			lines = append(lines, line)
 		}
@@ -154,73 +179,8 @@ func e2eBadges(enabled bool) []string {
 	return []string{" E2E · forward secrecy ", " E2E · FS ", " E2E "}
 }
 
-func (m Model) renderStatus(width int) string {
-	st := m.st
-	t := st.theme
-	segments := []statusSegment{
-		{st.barBrand.Render("qchat"), 100},
-		{m.stateSegment(), 99},
-	}
-	if m.conn.state == client.Connected {
-		segments = append(segments, statusSegment{st.barMuted.Render("🔒 TLS 1.3 · PQ-hybrid"), 40})
-	}
-	segments = append(segments,
-		statusSegment{st.barFaint.Render("pin ") + st.barMuted.Render(shortFingerprint(m.cfg.Pin)), 20},
-		statusSegment{st.barFaint.Render("Tor: ") + st.barMuted.Render(onOff(m.cfg.Tor)), 10},
-	)
-	if m.sealed {
-		segments = append(segments, statusSegment{st.barMuted.Render("sealed"), 35})
-	}
-	if m.conn.state == client.Connected && m.conn.hasRTT {
-		segments = append(segments, statusSegment{st.bar.Foreground(t.Text).Render(formatRTT(m.conn.rtt)), 30})
-	}
-	if m.hasSelf && m.self.ShortID != "" {
-		segments = append(segments, statusSegment{st.barFaint.Render("id ") + st.barMuted.Render(m.self.ShortID), 25})
-	}
-	sep := st.bar.Render("  ")
-	lead := st.bar.Render(" ")
-	join := func(segs []statusSegment) string {
-		parts := make([]string, len(segs))
-		for i, s := range segs {
-			parts[i] = s.text
-		}
-		return lead + strings.Join(parts, sep)
-	}
-	fit := func(right string) (string, bool) {
-		segs := slices.Clone(segments)
-		left := join(segs)
-		lost := false
-		for lipgloss.Width(left)+1+lipgloss.Width(right) > width && len(segs) > 2 {
-			drop := 0
-			for i, s := range segs {
-				if s.priority < segs[drop].priority {
-					drop = i
-				}
-			}
-			lost = lost || segs[drop].priority >= 30
-			segs = slices.Delete(segs, drop, drop+1)
-			left = join(segs)
-		}
-		return left, !lost
-	}
-
-	badges := e2eBadges(m.cfg.Backend != nil)
-	var left, right string
-	for i, b := range badges {
-		right = st.barBadge.Render(b)
-		var kept bool
-		left, kept = fit(right)
-		if kept && lipgloss.Width(left)+1+lipgloss.Width(right) <= width || i == len(badges)-1 {
-			break
-		}
-	}
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		return padRight(left, width, st.bar)
-	}
-	return left + st.bar.Render(strings.Repeat(" ", gap)) + right
-}
-
+// stateSegment is the connection state in the status bar, with a spinner
+// while connecting.
 func (m Model) stateSegment() string {
 	st := m.st
 	t := st.theme
@@ -230,9 +190,9 @@ func (m Model) stateSegment() string {
 	case m.conn.state == client.Connected:
 		return st.bar.Foreground(t.Success).Render("●") + st.bar.Render(" connected")
 	case m.conn.state == client.Connecting:
-		return st.bar.Foreground(t.Warning).Render("◌ connecting")
+		return st.bar.Foreground(t.Warning).Render(m.spinner() + " connecting")
 	case m.conn.state == client.Authenticating:
-		return st.bar.Foreground(t.Warning).Render("◌ authenticating")
+		return st.bar.Foreground(t.Warning).Render(m.spinner() + " authenticating")
 	case m.conn.state == client.Disconnected:
 		return st.bar.Foreground(t.Danger).Render("✕ disconnected")
 	case m.conn.state == client.Failed:
@@ -242,26 +202,42 @@ func (m Model) stateSegment() string {
 	}
 }
 
+// footerHints returns the key hints for the current focus.
+func (m Model) footerHints() string {
+	switch {
+	case m.overlay.kind == overlayVerify:
+		return "v verified · u not verified · esc close"
+	case m.overlay.kind == overlayWhoami || m.overlay.kind == overlayMembers:
+		return "esc close"
+	case m.overlay.kind == overlaySearch:
+		return "↑/↓ select · enter open conversation · esc close"
+	case m.overlay.kind == overlayHelp:
+		return "j/k scroll · g/G ends · esc close"
+	case m.confirm.active:
+		return m.confirm.hints()
+	case m.prompt.kind != promptNone:
+		return "enter confirm · esc cancel"
+	case m.mode == ModeInsert:
+		return "enter send · esc normal · alt+1-6 tabs · ctrl+n/p switch · tab complete · /help"
+	}
+	switch m.tab {
+	case tabRequests:
+		return "J/K select · a accept · d dismiss · l decline · enter view · 1-6 tabs"
+	case tabContacts:
+		return "J/K select · enter open · v verify · r rename · x remove · 1-6 tabs"
+	case tabFiles:
+		return "J/K select · enter/s save · 1-6 tabs · [ ] cycle"
+	}
+	return "J/K select · enter open · 1-6 tabs · [ ] cycle · j/k scroll · : command · q quit"
+}
+
 func (m Model) renderFooter(width int) string {
 	st := m.st
 	pill := st.pillInsert.Render(" INSERT ")
-	hints := "enter send · ctrl+n/p switch · esc normal · tab complete · /help"
 	if m.mode == ModeNormal {
 		pill = st.pillNormal.Render(" NORMAL ")
-		hints = "J/K select · enter open · j/k scroll · g/G ends · : command · q quit"
 	}
-	switch {
-	case m.overlay.kind == overlayVerify:
-		hints = "v verified · u not verified · esc close"
-	case m.overlay.kind == overlayWhoami || m.overlay.kind == overlayMembers:
-		hints = "esc close"
-	case m.overlay.kind == overlaySearch:
-		hints = "↑/↓ select · enter open conversation · esc close"
-	case m.overlay.kind == overlayHelp:
-		hints = "j/k scroll · g/G ends · esc close"
-	case m.confirm.active:
-		hints = m.confirm.hints()
-	}
+	hints := m.footerHints()
 	c := m.conv(m.open)
 	note := "notes stay local "
 	switch {
@@ -286,56 +262,125 @@ func (m Model) renderFooter(width int) string {
 	return left + st.bar.Render(strings.Repeat(" ", gap)) + right
 }
 
-// renderSidebar draws the conversation list, exactly d.bodyH lines of
-// d.sidebarW cells, the last column being the border. The list scrolls to
-// keep the selected row visible.
-func (m Model) renderSidebar(d dims) []string {
-	if d.sidebarW == 0 {
+// panel frames content in a rounded border of exactly width×height cells.
+// The title sits in the top border; focused panels glow.
+func (m Model) panel(content []string, width, height int, title string, focused bool) []string {
+	th := m.st.theme
+	border := lipgloss.NewStyle().Foreground(colorOr(th.PanelBorder, th.Border))
+	if focused {
+		border = lipgloss.NewStyle().Foreground(colorOr(th.PanelBorderFocus, th.Accent))
+	}
+	inner := max(width-2, 0)
+	innerH := max(height-2, 0)
+	top := border.Render("╭")
+	if title != "" && inner >= 6 {
+		t := truncateStyled(title, inner-4)
+		top += border.Render("─ ") + t + border.Render(" ")
+		if rest := inner - 3 - lipgloss.Width(t); rest > 0 {
+			top += border.Render(strings.Repeat("─", rest))
+		}
+	} else {
+		top += border.Render(strings.Repeat("─", inner))
+	}
+	top += border.Render("╮")
+	out := make([]string, 0, height)
+	out = append(out, top)
+	edge := border.Render("│")
+	plain := lipgloss.NewStyle()
+	for i := 0; i < innerH; i++ {
+		line := ""
+		if i < len(content) {
+			line = content[i]
+		}
+		out = append(out, edge+padRight(truncateStyled(line, inner), inner, plain)+edge)
+	}
+	out = append(out, border.Render("╰"+strings.Repeat("─", inner)+"╯"))
+	return out
+}
+
+// renderLeftPanel draws the list panel of the active tab, exactly d.bodyH
+// lines of d.leftW cells.
+func (m Model) renderLeftPanel(d dims) []string {
+	if d.leftW == 0 {
 		return nil
 	}
-	st := m.st
-	inner := d.sidebarW - 1
-	plain := lipgloss.NewStyle()
-	lines := []string{"", "  " + st.sidebarTitle.Render("CONVERSATIONS"), ""}
+	inner := d.leftW - 2
+	content := m.listContent(inner, d.bodyH-2)
+	title := m.st.accent.Bold(true).Render(strings.ToUpper(m.tab.String()))
+	return m.panel(content, d.leftW, d.bodyH, title, m.mode == ModeNormal && m.overlay.kind == overlayNone)
+}
 
+// listContent returns the lines of the list of the active tab.
+func (m Model) listContent(width, height int) []string {
+	switch m.tab {
+	case tabRequests:
+		return m.renderRequestCards(width, height)
+	case tabFiles:
+		return m.renderTransfers(width, height)
+	case tabSystem:
+		return m.renderSystemSummary(width)
+	}
+	st := m.st
+	keys := m.listKeys()
 	var hint []string
-	if len(m.convs) == 1 {
+	if len(keys) == 0 {
 		text := "No contacts yet. /add <qc1-id> [name]"
-		if m.cfg.Backend == nil {
+		switch {
+		case m.cfg.Backend == nil:
 			text = "No identity loaded; messaging is off."
+		case m.tab == tabGroups:
+			text = "No groups yet. /group create <name> [qc1-ids]"
 		}
 		hint = append(hint, "")
-		for _, l := range wrapLines(text, inner-4) {
-			hint = append(hint, "  "+st.faint.Italic(true).Render(l))
+		for _, l := range wrapLines(text, width-2) {
+			hint = append(hint, " "+st.faint.Italic(true).Render(l))
 		}
 	}
-	rows := max(d.bodyH-len(lines)-len(hint), 1)
+	var footer []string
+	if m.tab == tabContacts && len(keys) > 0 {
+		footer = []string{st.faint.Render(truncate(" v verify · r rename · x remove", width))}
+	}
+	rows := max(height-len(hint)-len(footer), 1)
 	focus := m.open
 	if m.mode == ModeNormal {
 		focus = m.cursor
 	}
-	start := max(m.convIndex(focus)-rows+1, 0)
-	for i := start; i < len(m.convs) && i < start+rows; i++ {
-		c := &m.convs[i]
-		lines = append(lines, m.renderConversation(c, c.key == m.open, m.mode == ModeNormal && c.key == m.cursor, inner))
+	sel := 0
+	for i, k := range keys {
+		if k == focus {
+			sel = i
+		}
+	}
+	start := max(sel-rows+1, 0)
+	var lines []string
+	for i := start; i < len(keys) && i < start+rows; i++ {
+		c := m.convByKey(keys[i])
+		lines = append(lines, m.renderListRow(c, c.key == m.open, m.mode == ModeNormal && c.key == m.cursor, width))
 	}
 	lines = append(lines, hint...)
-
-	out := make([]string, d.bodyH)
-	edge := st.border.Render("│")
-	for i := range out {
-		line := ""
-		if i < len(lines) {
-			line = lines[i]
+	if len(footer) > 0 {
+		for len(lines) < height-len(footer) {
+			lines = append(lines, "")
 		}
-		out[i] = padRight(line, inner, plain) + edge
+		lines = append(lines, footer...)
 	}
-	return out
+	return lines
 }
 
-// renderConversation draws one sidebar row: name, verification marker and
+// convByKey returns a copy of the conversation with key, or an empty one.
+func (m Model) convByKey(key string) *conversation {
+	for i := range m.convs {
+		if m.convs[i].key == key {
+			c := m.convs[i]
+			return &c
+		}
+	}
+	return &conversation{}
+}
+
+// renderListRow draws one list row: avatar, name, verification marker and
 // unread badge.
-func (m Model) renderConversation(c *conversation, selected, cursor bool, width int) string {
+func (m Model) renderListRow(c *conversation, selected, cursor bool, width int) string {
 	st := m.st
 	t := st.theme
 	badge, badgeW := "", 0
@@ -367,12 +412,20 @@ func (m Model) renderConversation(c *conversation, selected, cursor bool, width 
 			mark, markColor = " ?", t.Warning
 		}
 	}
+	icon := st.accent.Render("#")
+	if c.kind == convContact {
+		icon = avatar(t, c.key, c.contact.label())
+	}
+	iconW := lipgloss.Width(icon) + 1
 	markW := lipgloss.Width(mark)
-	nameW := max(width-3-badgeW-markW, 1)
-	name := truncate(c.title(), nameW)
+	name := c.title()
+	if c.kind == convGroup {
+		name = c.group.Name
+	}
+	name = truncate(name, max(width-3-iconW-badgeW-markW, 1))
 	if selected {
-		body := st.rowSelected.Render(padPlain(" "+name, width-1-badgeW-markW))
-		return st.rowMarker.Render("▌") + body + st.rowSelected.Foreground(markColor).Render(mark) + badge
+		body := st.rowSelected.Render(padPlain(" "+name, width-1-iconW-badgeW-markW))
+		return st.rowMarker.Render("▌") + icon + " " + body + st.rowSelected.Foreground(markColor).Render(mark) + badge
 	}
 	lead := "  "
 	if cursor {
@@ -382,47 +435,94 @@ func (m Model) renderConversation(c *conversation, selected, cursor bool, width 
 	if c.kind == convGroup && c.group.Left {
 		nameStyle = st.faint
 	}
-	row := lead + nameStyle.Render(name) + lipgloss.NewStyle().Foreground(markColor).Render(mark)
+	row := lead + icon + " " + nameStyle.Render(name) + lipgloss.NewStyle().Foreground(markColor).Render(mark)
 	return padRight(row, width-badgeW, lipgloss.NewStyle()) + badge
 }
 
-// renderMain draws the right pane, exactly d.bodyH lines of d.mainW cells.
+// renderMain draws the right panel, exactly d.bodyH lines of d.mainW cells:
+// header, banner, history, palette and the input box.
 func (m Model) renderMain(d dims) []string {
 	st := m.st
-	plain := lipgloss.NewStyle()
-	fit := func(s string) string { return padRight(" "+s, d.mainW, plain) }
+	th := st.theme
+	fit := func(s string) string { return " " + s }
 
-	lines := make([]string, 0, d.bodyH)
-	lines = append(lines, m.renderHeader(d.mainW))
-	for _, b := range m.renderBanner(d.mainW, d.bodyH-2-d.inputH) {
-		lines = append(lines, fit(b))
+	lines := make([]string, 0, d.innerH)
+	lines = append(lines, m.renderHeader(d.innerW))
+	lines = append(lines, m.renderBanner(d.innerW, d.innerH-1-d.inputH-2)...)
+
+	var body []string
+	if d.leftW == 0 && m.mode == ModeNormal && m.tab != tabChats {
+		body = m.listContent(d.innerW-2, d.historyH)
+	} else {
+		body = strings.Split(m.history.View(), "\n")
 	}
-
-	history := strings.Split(m.history.View(), "\n")
 	for i := 0; i < d.historyH; i++ {
 		line := ""
-		if i < len(history) {
-			line = history[i]
+		if i < len(body) {
+			line = body[i]
 		}
 		lines = append(lines, fit(line))
 	}
 	for _, p := range m.renderPalette(d) {
 		lines = append(lines, fit(p))
 	}
-	lines = append(lines, st.border.Render(strings.Repeat("─", d.mainW)))
 
 	input := strings.Split(m.input.View(), "\n")
 	if m.confirm.active {
-		input = []string{st.warn.Bold(true).Render(truncate(m.confirm.prompt(), d.mainW-2))}
-	}
-	for i := 0; i < d.inputH; i++ {
-		line := ""
-		if i < len(input) {
-			line = input[i]
+		input = nil
+		for _, l := range wrapLines(m.confirm.prompt(), max(d.innerW-4, 1)) {
+			input = append(input, st.warn.Bold(true).Render(l))
 		}
-		lines = append(lines, fit(line))
 	}
-	return lines
+	for len(input) < d.inputH {
+		input = append(input, "")
+	}
+	input = input[:d.inputH]
+	for i, l := range input {
+		input[i] = " " + l
+	}
+	focused := m.mode == ModeInsert && m.overlay.kind == overlayNone
+	boxTitle := st.accent.Render("✎ ") + st.text.Render(m.inputTitle())
+	if m.prompt.kind != promptNone {
+		boxTitle = st.accent.Bold(true).Render(m.prompt.title())
+	}
+	lines = append(lines, m.panel(input, d.innerW, d.inputH+2, boxTitle, focused)...)
+	title := st.accent.Bold(true).Render(gradientText(m.panelTitle(), th.Gradient))
+	return m.panel(lines, d.mainW, d.bodyH, title, focused)
+}
+
+// panelTitle names the right panel.
+func (m Model) panelTitle() string {
+	c := m.conv(m.open)
+	if c == nil {
+		return "SYSTEM"
+	}
+	switch c.kind {
+	case convSystem:
+		return "◉ SYSTEM"
+	case convRequests:
+		return "✦ REQUESTS"
+	case convGroup:
+		return "◆ GROUP"
+	}
+	return "◆ CHAT"
+}
+
+// inputTitle is the title of the input box: who a message goes to.
+func (m Model) inputTitle() string {
+	c := m.conv(m.open)
+	if c == nil {
+		return "note"
+	}
+	switch c.kind {
+	case convContact:
+		return "message " + c.contact.label()
+	case convGroup:
+		return "message " + c.title()
+	case convRequests:
+		return "read only · a accept in the list"
+	}
+	return "note · stays on this device"
 }
 
 // renderHeader draws the conversation title with, for contacts, the short
@@ -462,7 +562,7 @@ func (m Model) renderHeader(width int) string {
 			extras = []string{st.faint.Render(count + " · /group members"), st.faint.Render(count)}
 		}
 	default:
-		title = " " + st.bold.Render(truncate(c.contact.label(), max(room/2, 8)))
+		title = " " + avatar(st.theme, c.key, c.contact.label()) + " " + st.bold.Render(truncate(c.contact.label(), max(room/2, 8)))
 		state := []string{st.ok.Render("  ✓ verified"), st.ok.Render("  ✓")}
 		switch {
 		case c.contact.KeyChanged:
@@ -483,28 +583,34 @@ func (m Model) renderHeader(width int) string {
 }
 
 // renderBanner draws the warning of the open conversation (a changed
-// safety number, or a group out of sync): a box when there is room, one
-// line otherwise, nothing when there is no warning.
+// safety number, or a group out of sync) or, in the Chats tab, the pointer
+// to unseen message requests: a box when there is room, one line
+// otherwise, nothing when there is nothing to say.
 // room is the height left for banner and history together.
 func (m Model) renderBanner(mainW, room int) []string {
 	c := m.conv(m.open)
 	if c == nil || room < 2 {
 		return nil
 	}
+	st := m.st
 	var title, text, short string
 	switch {
 	case c.kind == convContact && c.contact.KeyChanged:
-		title, short = "⚠ Safety number changed", "⚠ Safety number changed · compare it with /verify"
-		text = c.contact.label() + "'s keys changed. This happens after a reinstall, or when someone intercepts. " +
-			"Sending still works, but compare the new safety number with /verify before you trust this conversation."
+		opts := renderOpts{Frame: m.frame, Animate: m.animating() && m.frame < m.flashUntil, Now: m.cfg.Now()}
+		if box := renderKeyChangeBanner(st, c.contact.label(), mainW-2, opts); room-len(box) >= 4 {
+			return box
+		}
+		return []string{st.alertTitle.Render(truncate("⚠ Safety number changed · compare it with /verify", mainW-2))}
 	case c.kind == convGroup && c.group.OutOfSync && !c.group.Left:
 		title, short = "⚠ Group out of sync", "⚠ group state differs — messages may be from a different membership view"
 		text = "The group state differs from this member — messages may be from a different membership view. " +
 			"It settles once every member has seen the latest change; /group members shows your view."
 	default:
+		if banner := m.requestsBanner(); banner != "" {
+			return []string{" " + st.accent.Bold(true).Render(truncate(banner, mainW-2))}
+		}
 		return nil
 	}
-	st := m.st
 	inner := min(mainW-2, maxAlertWidth) - 4
 	body := []string{st.alertTitle.Render(truncate(title, inner))}
 	for _, l := range wrapLines(text, inner) {
@@ -526,15 +632,15 @@ func (m Model) renderPalette(d dims) []string {
 	}
 	st := m.st
 	matches, _ := m.paletteMatches()
+	width := d.innerW - 2
 	if len(matches) == 0 {
-		return []string{st.faint.Render(truncate("  no matching command · /help lists them", d.mainW-2))}
+		return []string{st.faint.Render(truncate("  no matching command · /help lists them", width))}
 	}
 	sel := clampIndex(m.paletteSel, len(matches))
 	start := 0
 	if sel >= d.paletteH {
 		start = sel - d.paletteH + 1
 	}
-	width := d.mainW - 2
 	nameW := 13
 	for _, c := range matches {
 		nameW = max(nameW, len(c.name))

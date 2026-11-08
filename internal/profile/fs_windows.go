@@ -111,10 +111,17 @@ func checkOwner(dir string, user *windows.SID) error {
 	if owner == nil {
 		return fmt.Errorf("profile: %s has no owner", dir)
 	}
-	if !owner.Equals(user) {
-		return fmt.Errorf("profile: %s is owned by another account (%s)", dir, owner)
+	if owner.Equals(user) {
+		return nil
 	}
-	return nil
+	// An elevated process creates objects owned by the Administrators group
+	// rather than by the user. Accept that owner only when this process is
+	// itself elevated, i.e. the directory was created by the same user
+	// running as administrator; any other foreign owner is still refused.
+	if owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) && windows.GetCurrentProcessToken().IsElevated() {
+		return nil
+	}
+	return fmt.Errorf("profile: %s is owned by another account (%s)", dir, owner)
 }
 
 // currentUserSID returns the SID of the user running this process.

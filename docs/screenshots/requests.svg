@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="932" height="606" viewBox="0 0 932 606" role="img" aria-label="qchat · Requests">
+<title>qchat · Requests</title>
+<rect width="932" height="606" rx="10" fill="#0b0906"/>
+<path d="M0 10 A10 10 0 0 1 10 0 H922 A10 10 0 0 1 932 10 V34 H0 Z" fill="#1b1b1f"/>
+<path d="M0 33.5 H932" stroke="#000000" stroke-opacity="0.6"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/>
+<circle cx="40" cy="17" r="6" fill="#febc2e"/>
+<circle cx="60" cy="17" r="6" fill="#28c840"/>
+<text x="466" y="21.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#a8a8b0">qchat · Requests</text>
+<rect x="0.5" y="0.5" width="931" height="605" rx="9.5" fill="none" stroke="#ffffff" stroke-opacity="0.12"/>
+<g shape-rendering="crispEdges">
+<rect x="16" y="50" width="27" height="18" fill="#14100a"/>
+<rect x="97" y="50" width="819" height="18" fill="#14100a"/>
+<rect x="331" y="338" width="378" height="18" fill="#1c160c"/>
+<rect x="331" y="356" width="378" height="18" fill="#1c160c"/>
+<rect x="331" y="428" width="369" height="18" fill="#1c160c"/>
+<rect x="331" y="446" width="369" height="18" fill="#1c160c"/>
+<rect x="313" y="518" width="9" height="18" fill="#ffb000"/>
+<rect x="16" y="572" width="72" height="18" fill="#ffb000"/>
+<rect x="88" y="572" width="828" height="18" fill="#14100a"/>
+</g>
+<path fill="none" stroke="#1c160c" stroke-width="1" d="M331 329.5H709M326.5 338V374M713.5 338V374M331 383.5H709M331 419.5H700M326.5 428V464M704.5 428V464M331 473.5H700"/>
+<path fill="none" stroke="#4a3510" stroke-width="1" d="M16 77.5H214M349 77.5H916M25 95.5H34M124 95.5H259M20.5 104V554M263.5 104V554M25 563.5H259"/>
+<path fill="none" stroke="#4a3510" stroke-width="2" d="M29 176V230"/>
+<path fill="none" stroke="#8a5e12" stroke-width="1" d="M286 293.5H295M619 293.5H628"/>
+<path fill="none" stroke="#8a5e12" stroke-width="2" d="M214 77H223"/>
+<path fill="none" stroke="#926311" stroke-width="1" d="M628 293.5H637"/>
+<path fill="none" stroke="#926411" stroke-width="1" d="M295 293.5H304"/>
+<path fill="none" stroke="#9a6910" stroke-width="1" d="M304 293.5H313M637 293.5H646"/>
+<path fill="none" stroke="#9b6a0f" stroke-width="2" d="M223 77H232"/>
+<path fill="none" stroke="#a16e0e" stroke-width="1" d="M646 293.5H655"/>
+<path fill="none" stroke="#a26f0e" stroke-width="1" d="M313 293.5H322"/>
+<path fill="none" stroke="#a9740d" stroke-width="1" d="M655 293.5H664"/>
+<path fill="none" stroke="#aa750d" stroke-width="1" d="M322 293.5H331"/>
+<path fill="none" stroke="#ab750d" stroke-width="2" d="M232 77H241"/>
+<path fill="none" stroke="#b1790c" stroke-width="1" d="M664 293.5H673"/>
+<path fill="none" stroke="#b27a0c" stroke-width="1" d="M331 293.5H340"/>
+<path fill="none" stroke="#b97f0b" stroke-width="1" d="M673 293.5H682"/>
+<path fill="none" stroke="#ba800b" stroke-width="1" d="M340 293.5H349"/>
+<path fill="none" stroke="#bc810a" stroke-width="2" d="M241 77H250"/>
+<path fill="none" stroke="#c1840a" stroke-width="1" d="M682 293.5H691"/>
+<path fill="none" stroke="#c28609" stroke-width="1" d="M349 293.5H358"/>
+<path fill="none" stroke="#c88a08" stroke-width="1" d="M691 293.5H700"/>
+<path fill="none" stroke="#cb8b08" stroke-width="1" d="M358 293.5H367"/>
+<path fill="none" stroke="#cd8d08" stroke-width="2" d="M250 77H259"/>
+<path fill="none" stroke="#d08f07" stroke-width="1" d="M700 293.5H709"/>
+<path fill="none" stroke="#d39107" stroke-width="1" d="M367 293.5H376"/>
+<path fill="none" stroke="#d89506" stroke-width="1" d="M709 293.5H718"/>
+<path fill="none" stroke="#db9706" stroke-width="1" d="M376 293.5H385"/>
+<path fill="none" stroke="#de9905" stroke-width="2" d="M259 77H268"/>
+<path fill="none" stroke="#e09a05" stroke-width="1" d="M718 293.5H727"/>
+<path fill="none" stroke="#e39c04" stroke-width="1" d="M385 293.5H394"/>
+<path fill="none" stroke="#e8a004" stroke-width="1" d="M727 293.5H736"/>
+<path fill="none" stroke="#eba203" stroke-width="1" d="M394 293.5H403"/>
+<path fill="none" stroke="#eea403" stroke-width="2" d="M268 77H277"/>
+<path fill="none" stroke="#efa502" stroke-width="1" d="M736 293.5H745"/>
+<path fill="none" stroke="#f3a802" stroke-width="1" d="M403 293.5H412"/>
+<path fill="none" stroke="#f7ab01" stroke-width="1" d="M745 293.5H754"/>
+<path fill="none" stroke="#fbad01" stroke-width="1" d="M412 293.5H421"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M277 95.5H286M394 95.5H907M272.5 104V554M911.5 104V554M754 293.5H763M286 509.5H295M619 509.5H898M281.5 518V536M902.5 518V536M286 545.5H898M277 563.5H907"/>
+<path fill="none" stroke="#ffb000" stroke-width="2" d="M277 77H286"/>
+<path fill="none" stroke="#ffb104" stroke-width="1" d="M421 293.5H430"/>
+<path fill="none" stroke="#ffb208" stroke-width="1" d="M763 293.5H772"/>
+<path fill="none" stroke="#ffb40d" stroke-width="1" d="M430 293.5H439"/>
+<path fill="none" stroke="#ffb510" stroke-width="1" d="M772 293.5H781"/>
+<path fill="none" stroke="#ffb511" stroke-width="2" d="M286 77H295"/>
+<path fill="none" stroke="#ffb615" stroke-width="1" d="M439 293.5H448"/>
+<path fill="none" stroke="#ffb718" stroke-width="1" d="M781 293.5H790"/>
+<path fill="none" stroke="#ffb81d" stroke-width="1" d="M448 293.5H457"/>
+<path fill="none" stroke="#ffb921" stroke-width="1" d="M790 293.5H799"/>
+<path fill="none" stroke="#ffba23" stroke-width="2" d="M295 77H304"/>
+<path fill="none" stroke="#ffbb26" stroke-width="1" d="M457 293.5H466"/>
+<path fill="none" stroke="#ffbb29" stroke-width="1" d="M799 293.5H808"/>
+<path fill="none" stroke="#ffbd2e" stroke-width="1" d="M466 293.5H475"/>
+<path fill="none" stroke="#ffbe31" stroke-width="1" d="M808 293.5H817"/>
+<path fill="none" stroke="#ffbf34" stroke-width="2" d="M304 77H313"/>
+<path fill="none" stroke="#ffbf37" stroke-width="1" d="M475 293.5H484"/>
+<path fill="none" stroke="#ffc039" stroke-width="1" d="M817 293.5H826"/>
+<path fill="none" stroke="#ffc23f" stroke-width="1" d="M484 293.5H493"/>
+<path fill="none" stroke="#ffc241" stroke-width="1" d="M826 293.5H835"/>
+<path fill="none" stroke="#ffc346" stroke-width="2" d="M313 77H322"/>
+<path fill="none" stroke="#ffc448" stroke-width="1" d="M493 293.5H502"/>
+<path fill="none" stroke="#ffc449" stroke-width="1" d="M835 293.5H844"/>
+<path fill="none" stroke="#ffc650" stroke-width="1" d="M502 293.5H511"/>
+<path fill="none" stroke="#ffc751" stroke-width="1" d="M844 293.5H853"/>
+<path fill="none" stroke="#ffc857" stroke-width="2" d="M322 77H331"/>
+<path fill="none" stroke="#ffc958" stroke-width="1" d="M511 293.5H520"/>
+<path fill="none" stroke="#ffc959" stroke-width="1" d="M853 293.5H862"/>
+<path fill="none" stroke="#ffcb61" stroke-width="1" d="M520 293.5H529"/>
+<path fill="none" stroke="#ffcb62" stroke-width="1" d="M862 293.5H871"/>
+<path fill="none" stroke="#ffcd69" stroke-width="1" d="M529 293.5H538"/>
+<path fill="none" stroke="#ffcd69" stroke-width="2" d="M331 77H340"/>
+<path fill="none" stroke="#ffcd6a" stroke-width="1" d="M871 293.5H880"/>
+<path fill="none" stroke="#ffd072" stroke-width="1" d="M538 293.5H547M880 293.5H889"/>
+<path fill="none" stroke="#ffd27a" stroke-width="1" d="M547 293.5H556M889 293.5H898"/>
+<path fill="none" stroke="#ffd27a" stroke-width="2" d="M340 77H349M29 104V158"/>
+<path fill="none" stroke="#1c160c" stroke-width="1" d="M331 329.5H331A4.5 4.5 0 0 0 326.5 334V338M709 329.5H709A4.5 4.5 0 0 1 713.5 334V338M331 383.5H331A4.5 4.5 0 0 1 326.5 379V374M709 383.5H709A4.5 4.5 0 0 0 713.5 379V374M331 419.5H331A4.5 4.5 0 0 0 326.5 424V428M700 419.5H700A4.5 4.5 0 0 1 704.5 424V428M331 473.5H331A4.5 4.5 0 0 1 326.5 469V464M700 473.5H700A4.5 4.5 0 0 0 704.5 469V464"/>
+<path fill="none" stroke="#4a3510" stroke-width="1" d="M25 95.5H25A4.5 4.5 0 0 0 20.5 100V104M259 95.5H259A4.5 4.5 0 0 1 263.5 100V104M25 563.5H25A4.5 4.5 0 0 1 20.5 559V554M259 563.5H259A4.5 4.5 0 0 0 263.5 559V554"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M277 95.5H277A4.5 4.5 0 0 0 272.5 100V104M907 95.5H907A4.5 4.5 0 0 1 911.5 100V104M286 509.5H286A4.5 4.5 0 0 0 281.5 514V518M898 509.5H898A4.5 4.5 0 0 1 902.5 514V518M286 545.5H286A4.5 4.5 0 0 1 281.5 541V536M898 545.5H898A4.5 4.5 0 0 0 902.5 541V536M277 563.5H277A4.5 4.5 0 0 1 272.5 559V554M907 563.5H907A4.5 4.5 0 0 0 911.5 559V554"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#ffc24d" xml:space="preserve" style="white-space:pre">
+<text y="63.5"><tspan x="25" fill="#8a5e12" font-weight="bold">⚡</tspan><tspan x="52" fill="#d89506">q</tspan><tspan x="61" fill="#ffb000">c</tspan><tspan x="70" fill="#ffbb29">h</tspan><tspan x="79" fill="#ffc751">a</tspan><tspan x="88" fill="#ffd27a">t</tspan><tspan x="115" textLength="63" fill="#c98a1a">1 Chats</tspan><tspan x="187" textLength="18" fill="#ffb000" font-weight="bold">●5</tspan><tspan x="223" textLength="117" fill="#ffd27a" font-weight="bold">2 Requests ✦2</tspan><tspan x="358" textLength="72" fill="#c98a1a">3 Groups</tspan><tspan x="439" textLength="18" fill="#ffb000" font-weight="bold">●3</tspan><tspan x="475" textLength="90" fill="#c98a1a">4 Contacts</tspan><tspan x="574" textLength="18" fill="#ff3b2f" font-weight="bold">⚠1</tspan><tspan x="610" textLength="153" fill="#c98a1a">5 Files  6 System</tspan><tspan x="808" fill="#ffe08a">●</tspan><tspan x="826" textLength="81">connected</tspan></text>
+<text y="99.5"><tspan x="43" textLength="72" fill="#ffb000" font-weight="bold">REQUESTS</tspan><tspan x="295" fill="#8a5e12" font-weight="bold">✦</tspan><tspan x="313" fill="#be820a">R</tspan><tspan x="322" fill="#d89506">E</tspan><tspan x="331" fill="#f2a702">Q</tspan><tspan x="340" fill="#ffb40e">U</tspan><tspan x="349" fill="#ffbb29">E</tspan><tspan x="358" fill="#ffc344">S</tspan><tspan x="367" fill="#ffca5f">T</tspan><tspan x="376" fill="#ffd27a">S</tspan></text>
+<text y="117.5"><tspan x="43" textLength="27" fill="#b8862b" font-weight="bold">(Q)</tspan><tspan x="79" textLength="117" font-weight="bold">qc1-blbp-vg5t</tspan><tspan x="286" textLength="162" font-weight="bold"># Message requests</tspan><tspan x="466" textLength="288" fill="#8a5e12">from people not in your contacts</tspan></text>
+<text y="135.5"><tspan x="43" textLength="216" fill="#c98a1a">Hi! Lena gave me your I…</tspan></text>
+<text y="153.5"><tspan x="43" textLength="216" fill="#8a5e12">14:15 · 2 msg · a accep…</tspan></text>
+<text y="189.5"><tspan x="43" fill="#ffb000">#</tspan><tspan x="61" textLength="171" font-weight="bold"># Bouldering Sunday</tspan></text>
+<text y="207.5"><tspan x="43" textLength="216" fill="#c98a1a">group invitation · 3 me…</tspan></text>
+<text y="225.5"><tspan x="43" textLength="180" fill="#8a5e12">a accept · l decline</tspan><tspan x="286" fill="#8a5e12">•</tspan><tspan x="304" textLength="594" fill="#c98a1a">Message from qc1-blbp vg5t 7kue ton3 pkbm ve3c rnjd 7twx 7wzs ikpg</tspan></text>
+<text y="243.5"><tspan x="304" textLength="576" fill="#c98a1a">wwqc fhbr yica, who is not in your contacts. To reply, type /add</tspan></text>
+<text y="261.5"><tspan x="304" textLength="405" fill="#c98a1a">and press tab to fill in the ID, then a name.</tspan></text>
+<text y="297.5"><tspan x="565" textLength="45" fill="#c98a1a">Today</tspan></text>
+<text y="315.5"><tspan x="322" textLength="117" fill="#b8862b" font-weight="bold">qc1-blbp-vg5t</tspan></text>
+<text y="351.5"><tspan x="286" textLength="27" fill="#b8862b" font-weight="bold">(Q)</tspan><tspan x="340" textLength="360">Hi! Lena gave me your ID. I'm organising</tspan></text>
+<text y="369.5"><tspan x="340" textLength="162">the climbing trip.</tspan></text>
+<text y="405.5"><tspan x="331" textLength="45" fill="#8a5e12">14:14</tspan></text>
+<text y="441.5"><tspan x="340" textLength="351" fill="#f2e3c6">Could you add me so we can plan the car</tspan></text>
+<text y="459.5"><tspan x="340" textLength="45" fill="#f2e3c6">pool?</tspan></text>
+<text y="495.5"><tspan x="331" textLength="45" fill="#8a5e12">14:15</tspan></text>
+<text y="513.5"><tspan x="304" fill="#ffb000">✎</tspan><tspan x="322" textLength="288">read only · a accept in the list</tspan></text>
+<text y="531.5"><tspan x="295" fill="#ffb000" font-weight="bold">›</tspan><tspan x="313" fill="#0b0906">R</tspan><tspan x="322" textLength="369" fill="#8a5e12">ead only · /add &lt;qc1-id&gt; [name] to accept</tspan></text>
+<text y="585.5"><tspan x="25" textLength="54" fill="#0b0906" font-weight="bold">INSERT</tspan><tspan x="106" textLength="801" fill="#8a5e12">enter send · esc normal · alt+1-6 tabs · ctrl+n/p switch · tab complete · /help read only</tspan></text>
+</g>
+</svg>

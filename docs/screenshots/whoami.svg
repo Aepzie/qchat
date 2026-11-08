@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="932" height="606" viewBox="0 0 932 606" role="img" aria-label="qchat · /whoami">
+<title>qchat · /whoami</title>
+<rect width="932" height="606" rx="10" fill="#0b0906"/>
+<path d="M0 10 A10 10 0 0 1 10 0 H922 A10 10 0 0 1 932 10 V34 H0 Z" fill="#1b1b1f"/>
+<path d="M0 33.5 H932" stroke="#000000" stroke-opacity="0.6"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/>
+<circle cx="40" cy="17" r="6" fill="#febc2e"/>
+<circle cx="60" cy="17" r="6" fill="#28c840"/>
+<text x="466" y="21.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#a8a8b0">qchat · /whoami</text>
+<rect x="0.5" y="0.5" width="931" height="605" rx="9.5" fill="none" stroke="#ffffff" stroke-opacity="0.12"/>
+<g shape-rendering="crispEdges">
+<rect x="16" y="50" width="27" height="18" fill="#14100a"/>
+<rect x="97" y="50" width="819" height="18" fill="#14100a"/>
+<rect x="34" y="140" width="369" height="18" fill="#000000"/>
+<rect x="34" y="158" width="369" height="18" fill="#000000"/>
+<rect x="34" y="176" width="369" height="18" fill="#000000"/>
+<rect x="34" y="194" width="369" height="18" fill="#000000"/>
+<rect x="34" y="212" width="369" height="18" fill="#000000"/>
+<rect x="34" y="230" width="369" height="18" fill="#000000"/>
+<rect x="34" y="248" width="369" height="18" fill="#000000"/>
+<rect x="34" y="266" width="369" height="18" fill="#000000"/>
+<rect x="34" y="284" width="369" height="18" fill="#000000"/>
+<rect x="34" y="302" width="369" height="18" fill="#000000"/>
+<rect x="34" y="320" width="369" height="18" fill="#000000"/>
+<rect x="34" y="338" width="369" height="18" fill="#000000"/>
+<rect x="34" y="356" width="369" height="18" fill="#000000"/>
+<rect x="34" y="374" width="369" height="18" fill="#000000"/>
+<rect x="34" y="392" width="369" height="18" fill="#000000"/>
+<rect x="34" y="410" width="369" height="18" fill="#000000"/>
+<rect x="34" y="428" width="369" height="18" fill="#000000"/>
+<rect x="34" y="446" width="369" height="18" fill="#000000"/>
+<rect x="34" y="464" width="369" height="18" fill="#000000"/>
+<rect x="34" y="482" width="369" height="18" fill="#000000"/>
+<rect x="34" y="500" width="369" height="18" fill="#000000"/>
+<rect x="16" y="572" width="72" height="18" fill="#ffb000"/>
+<rect x="88" y="572" width="828" height="18" fill="#14100a"/>
+<path fill="#ffffff" d="M34 140h369v18h-369zM34 158h369v18h-369zM34 176h36v18h-36zM79 185h45v9h-45zM133 176h9v18h-9zM142 176h36v9h-36zM178 185h18v9h-18zM196 176h9v9h-9zM214 176h9v9h-9zM232 176h9v18h-9zM250 185h9v9h-9zM259 176h9v18h-9zM268 176h9v9h-9zM295 176h9v18h-9zM313 185h45v9h-45zM367 176h36v18h-36zM34 194h36v18h-36zM79 194h9v18h-9zM115 194h9v18h-9zM133 194h18v18h-18zM160 203h27v9h-27zM205 194h9v9h-9zM223 194h18v18h-18zM259 194h9v18h-9zM268 203h9v9h-9zM277 194h9v9h-9zM295 194h9v18h-9zM313 194h9v18h-9zM349 194h9v18h-9zM367 194h36v18h-36zM34 212h36v18h-36zM79 212h9v18h-9zM88 221h27v9h-27zM115 212h9v18h-9zM133 212h9v18h-9zM142 221h18v9h-18zM178 221h9v9h-9zM196 221h9v9h-9zM205 212h9v9h-9zM223 212h9v18h-9zM232 212h9v9h-9zM250 212h27v9h-27zM295 212h9v18h-9zM313 212h9v18h-9zM322 221h27v9h-27zM349 212h9v18h-9zM367 212h36v18h-36zM34 230h36v18h-36zM70 239h63v9h-63zM133 230h9v18h-9zM142 239h9v9h-9zM151 230h9v9h-9zM169 230h9v18h-9zM187 230h9v9h-9zM205 230h9v9h-9zM214 239h9v9h-9zM223 230h9v9h-9zM241 230h9v9h-9zM250 239h9v9h-9zM259 230h9v9h-9zM277 230h9v18h-9zM295 230h9v18h-9zM304 239h63v9h-63zM367 230h36v18h-36zM34 248h36v18h-36zM70 257h9v9h-9zM79 248h9v9h-9zM88 257h9v9h-9zM97 248h9v9h-9zM115 248h9v18h-9zM124 257h9v9h-9zM133 248h18v18h-18zM151 248h9v9h-9zM169 248h9v9h-9zM178 248h9v18h-9zM196 248h9v9h-9zM205 248h9v18h-9zM232 248h27v18h-27zM268 248h18v18h-18zM295 248h9v18h-9zM304 248h9v9h-9zM313 248h9v18h-9zM322 257h9v9h-9zM331 248h9v9h-9zM340 248h9v18h-9zM349 257h9v9h-9zM358 248h9v9h-9zM367 248h36v18h-36zM34 266h36v18h-36zM70 275h9v9h-9zM79 266h9v9h-9zM106 266h9v18h-9zM115 275h18v9h-18zM142 275h9v9h-9zM151 266h9v18h-9zM160 275h9v9h-9zM169 266h9v18h-9zM178 266h18v9h-18zM205 266h9v18h-9zM214 266h18v9h-18zM232 266h18v18h-18zM268 266h9v18h-9zM277 266h9v9h-9zM286 266h9v18h-9zM295 275h9v9h-9zM304 266h9v18h-9zM313 275h9v9h-9zM322 266h9v18h-9zM340 266h9v18h-9zM358 275h9v9h-9zM367 266h36v18h-36zM34 284h36v18h-36zM70 284h27v9h-27zM97 293h9v9h-9zM106 284h9v18h-9zM124 293h9v9h-9zM133 284h9v18h-9zM142 284h9v9h-9zM151 293h9v9h-9zM160 284h9v18h-9zM169 284h27v9h-27zM205 284h9v9h-9zM223 293h9v9h-9zM232 284h9v18h-9zM241 293h9v9h-9zM259 293h9v9h-9zM268 284h9v18h-9zM277 293h9v9h-9zM286 284h9v18h-9zM313 284h18v18h-18zM340 284h9v9h-9zM367 284h36v18h-36zM34 302h36v18h-36zM70 311h9v9h-9zM79 302h18v18h-18zM97 302h9v9h-9zM106 302h9v18h-9zM115 311h18v9h-18zM133 302h9v9h-9zM142 311h9v9h-9zM160 302h9v9h-9zM178 302h9v9h-9zM187 302h18v18h-18zM205 311h9v9h-9zM223 302h9v9h-9zM232 311h9v9h-9zM241 302h9v9h-9zM250 302h9v18h-9zM268 302h18v18h-18zM286 302h9v9h-9zM313 302h27v9h-27zM340 302h9v18h-9zM349 311h18v9h-18zM367 302h36v18h-36zM34 320h36v18h-36zM70 320h9v9h-9zM88 329h9v9h-9zM97 320h9v9h-9zM124 329h9v9h-9zM133 320h18v18h-18zM151 320h9v9h-9zM160 329h9v9h-9zM169 320h9v18h-9zM178 320h9v9h-9zM187 320h18v18h-18zM205 329h9v9h-9zM214 320h9v18h-9zM223 329h9v9h-9zM232 320h9v18h-9zM241 329h9v9h-9zM259 329h9v9h-9zM268 320h9v9h-9zM277 329h9v9h-9zM313 329h9v9h-9zM322 320h9v18h-9zM340 320h18v18h-18zM367 320h36v18h-36zM34 338h36v18h-36zM70 338h9v9h-9zM79 338h9v18h-9zM97 347h18v9h-18zM124 347h18v9h-18zM142 338h9v9h-9zM151 347h18v9h-18zM178 347h9v9h-9zM187 338h9v9h-9zM205 338h9v18h-9zM214 338h18v9h-18zM232 347h9v9h-9zM241 338h9v9h-9zM259 338h9v9h-9zM277 338h9v9h-9zM313 338h18v18h-18zM340 347h9v9h-9zM349 338h9v18h-9zM367 338h36v18h-36zM34 356h63v18h-63zM97 365h9v9h-9zM106 356h9v18h-9zM115 365h18v9h-18zM142 356h18v9h-18zM160 356h9v18h-9zM205 356h9v9h-9zM214 356h9v18h-9zM223 365h9v9h-9zM232 356h9v9h-9zM241 365h9v9h-9zM250 356h9v9h-9zM268 356h18v18h-18zM313 365h9v9h-9zM322 356h9v18h-9zM331 356h9v9h-9zM340 356h18v18h-18zM367 356h36v18h-36zM34 374h36v18h-36zM70 383h9v9h-9zM79 374h9v9h-9zM88 383h9v9h-9zM97 374h9v9h-9zM106 383h9v9h-9zM115 374h9v18h-9zM124 383h9v9h-9zM142 374h9v9h-9zM151 374h9v18h-9zM160 374h9v9h-9zM178 383h18v9h-18zM196 374h9v18h-9zM205 374h9v9h-9zM214 374h9v18h-9zM223 374h45v9h-45zM268 383h9v9h-9zM277 374h9v9h-9zM286 374h9v18h-9zM295 383h9v9h-9zM304 374h9v18h-9zM313 374h9v9h-9zM322 374h9v18h-9zM331 383h9v9h-9zM340 374h9v18h-9zM358 383h9v9h-9zM367 374h36v18h-36zM34 392h36v18h-36zM70 401h9v9h-9zM79 392h9v18h-9zM88 401h9v9h-9zM97 392h18v18h-18zM115 401h18v9h-18zM133 392h9v18h-9zM151 392h9v9h-9zM160 392h9v18h-9zM178 392h9v9h-9zM187 392h9v18h-9zM205 392h9v18h-9zM214 392h9v9h-9zM232 392h18v18h-18zM268 392h9v9h-9zM295 401h27v9h-27zM331 401h9v9h-9zM340 392h27v9h-27zM367 392h36v18h-36zM34 410h36v18h-36zM79 419h45v9h-45zM133 410h18v18h-18zM160 410h9v18h-9zM169 410h18v9h-18zM196 410h9v9h-9zM205 410h9v18h-9zM223 410h9v9h-9zM241 410h27v9h-27zM277 419h9v9h-9zM295 410h9v18h-9zM304 419h9v9h-9zM313 410h9v18h-9zM331 419h18v9h-18zM358 419h9v9h-9zM367 410h36v18h-36zM34 428h36v18h-36zM79 428h9v18h-9zM115 428h9v18h-9zM133 428h9v18h-9zM142 437h9v9h-9zM151 428h9v9h-9zM160 428h18v18h-18zM178 428h9v9h-9zM196 428h18v9h-18zM223 428h9v9h-9zM232 437h18v9h-18zM250 428h9v9h-9zM259 437h9v9h-9zM268 428h9v9h-9zM277 428h9v18h-9zM286 437h27v9h-27zM340 428h18v18h-18zM367 428h36v18h-36zM34 446h36v18h-36zM79 446h9v18h-9zM88 455h27v9h-27zM115 446h9v18h-9zM133 446h9v18h-9zM142 455h36v9h-36zM178 446h9v18h-9zM187 455h27v9h-27zM223 446h9v9h-9zM241 446h9v9h-9zM250 455h9v9h-9zM259 446h9v9h-9zM286 446h18v9h-18zM304 446h9v18h-9zM322 455h9v9h-9zM331 446h9v9h-9zM340 455h9v9h-9zM349 446h9v9h-9zM358 455h9v9h-9zM367 446h36v18h-36zM34 464h36v18h-36zM70 473h63v9h-63zM133 464h9v18h-9zM142 473h9v9h-9zM151 464h9v18h-9zM160 473h9v9h-9zM169 464h9v18h-9zM178 473h36v9h-36zM214 464h9v18h-9zM223 473h9v9h-9zM232 464h18v18h-18zM250 473h18v9h-18zM268 464h9v18h-9zM277 473h36v9h-36zM313 464h18v18h-18zM331 473h9v9h-9zM340 464h9v18h-9zM349 473h18v9h-18zM367 464h36v18h-36zM34 482h369v18h-369zM34 500h369v9h-369z"/>
+</g>
+<path fill="none" stroke="#4a3510" stroke-width="1" d="M16 77.5H106M214 77.5H916"/>
+<path fill="none" stroke="#8a5e12" stroke-width="2" d="M106 77H115"/>
+<path fill="none" stroke="#9f6d0f" stroke-width="2" d="M115 77H124"/>
+<path fill="none" stroke="#b57c0b" stroke-width="2" d="M124 77H133"/>
+<path fill="none" stroke="#ca8b08" stroke-width="2" d="M133 77H142"/>
+<path fill="none" stroke="#df9a05" stroke-width="2" d="M142 77H151"/>
+<path fill="none" stroke="#f4a902" stroke-width="2" d="M151 77H160"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M25 95.5H907M20.5 104V554M911.5 104V554M25 563.5H907"/>
+<path fill="none" stroke="#ffb30b" stroke-width="2" d="M160 77H169"/>
+<path fill="none" stroke="#ffb921" stroke-width="2" d="M169 77H178"/>
+<path fill="none" stroke="#ffbf37" stroke-width="2" d="M178 77H187"/>
+<path fill="none" stroke="#ffc64e" stroke-width="2" d="M187 77H196"/>
+<path fill="none" stroke="#ffcc64" stroke-width="2" d="M196 77H205"/>
+<path fill="none" stroke="#ffd27a" stroke-width="2" d="M205 77H214"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M25 95.5H25A4.5 4.5 0 0 0 20.5 100V104M907 95.5H907A4.5 4.5 0 0 1 911.5 100V104M25 563.5H25A4.5 4.5 0 0 1 20.5 559V554M907 563.5H907A4.5 4.5 0 0 0 911.5 559V554"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#ffc24d" xml:space="preserve" style="white-space:pre">
+<text y="63.5"><tspan x="25" fill="#8a5e12" font-weight="bold">⚡</tspan><tspan x="52" fill="#d89506">q</tspan><tspan x="61" fill="#ffb000">c</tspan><tspan x="70" fill="#ffbb29">h</tspan><tspan x="79" fill="#ffc751">a</tspan><tspan x="88" fill="#ffd27a">t</tspan><tspan x="115" textLength="63" fill="#ffd27a" font-weight="bold">1 Chats</tspan><tspan x="187" textLength="18" fill="#ffb000" font-weight="bold">●5</tspan><tspan x="223" textLength="90" fill="#c98a1a">2 Requests</tspan><tspan x="322" textLength="18" fill="#ffd27a" font-weight="bold">✦1</tspan><tspan x="358" textLength="72" fill="#c98a1a">3 Groups</tspan><tspan x="439" textLength="18" fill="#ffb000" font-weight="bold">●3</tspan><tspan x="475" textLength="90" fill="#c98a1a">4 Contacts</tspan><tspan x="574" textLength="18" fill="#ff3b2f" font-weight="bold">⚠1</tspan><tspan x="610" textLength="63" fill="#c98a1a">5 Files</tspan><tspan x="682" textLength="18" fill="#ffb000" font-weight="bold">⇄1</tspan><tspan x="718" textLength="72" fill="#c98a1a">6 System</tspan><tspan x="808" fill="#ffe08a">●</tspan><tspan x="826" textLength="81">connected</tspan></text>
+<text y="117.5"><tspan x="34" textLength="117" font-weight="bold">Your qchat ID</tspan><tspan x="160" textLength="63" fill="#c98a1a">· Robin</tspan></text>
+<text y="153.5"><tspan x="430" textLength="63" fill="#c98a1a">Your ID</tspan></text>
+<text y="171.5"><tspan x="430" textLength="432">qc1-xfwv mmdi a5np ymln 27hm avw7 aypc 4z3p 2zmf</tspan></text>
+<text y="189.5"><tspan x="430" textLength="171">aio7 66ia puya y4hq</tspan></text>
+<text y="225.5"><tspan x="430" textLength="441" fill="#8a5e12">Others need this ID to /add you. It is public and</tspan></text>
+<text y="243.5"><tspan x="430" textLength="468" fill="#8a5e12">reveals nothing secret; share it with the people you</tspan></text>
+<text y="261.5"><tspan x="430" textLength="162" fill="#8a5e12">want to hear from.</tspan></text>
+<text y="297.5"><tspan x="430" textLength="81" fill="#c98a1a">esc close</tspan></text>
+<text y="585.5"><tspan x="25" textLength="54" fill="#0b0906" font-weight="bold">INSERT</tspan><tspan x="106" textLength="81" fill="#8a5e12">esc close</tspan><tspan x="727" textLength="180" fill="#8a5e12">end-to-end encrypted</tspan></text>
+</g>
+</svg>

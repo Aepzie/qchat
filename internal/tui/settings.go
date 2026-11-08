@@ -7,8 +7,8 @@ import (
 // Results of settings calls.
 type (
 	settingsMsg struct {
-		theme, markdown string
-		err             error
+		theme, markdown, animations string
+		err                         error
 	}
 	settingSavedMsg struct {
 		name string
@@ -34,7 +34,11 @@ func (m *Model) loadSettings() tea.Cmd {
 			return settingsMsg{err: err}
 		}
 		markdown, err := sb.GetSetting(SettingMarkdown)
-		return settingsMsg{theme: theme, markdown: markdown, err: err}
+		if err != nil {
+			return settingsMsg{err: err}
+		}
+		animations, err := sb.GetSetting(SettingAnimations)
+		return settingsMsg{theme: theme, markdown: markdown, animations: animations, err: err}
 	}
 }
 
@@ -60,6 +64,10 @@ func (m *Model) applySettings(msg settingsMsg) {
 	}
 	if on, ok := parseOnOff(msg.markdown); ok {
 		m.setMarkdown(on)
+	}
+	m.animOff = !parseAnimations(msg.animations)
+	if m.animOff {
+		m.splash = false
 	}
 }
 
@@ -106,4 +114,41 @@ func (m *Model) cmdTheme(args []string) tea.Cmd {
 	m.setTheme(t)
 	m.log(entryGood, "Theme "+t.Name+".")
 	return m.saveSetting(SettingTheme, t.Name)
+}
+
+// SettingAnimations is "on" or "off", as chosen with /animations. It is
+// kept through SettingsBackend like the other interface settings.
+const SettingAnimations = "ui.animations"
+
+// animationsCommands are the /animations palette entries.
+var animationsCommands = []command{
+	{"/animations on", "splash, spinners, pulsing badges and fade-in"},
+	{"/animations off", "a still interface that uses no CPU while idle"},
+}
+
+// cmdAnimations runs /animations on|off; without an argument it shows the
+// current state.
+func (m *Model) cmdAnimations(args []string) tea.Cmd {
+	if len(args) == 0 {
+		state := "on"
+		if m.animOff {
+			state = "off"
+		}
+		m.log(entrySystem, "Animations are "+state+". Switch with /animations on|off; they also stay off on terminals smaller than 60×20.")
+		return nil
+	}
+	on, ok := parseOnOff(resolveSub("/animations", args[0], len(args) == 1, m.paletteSel))
+	if !ok {
+		m.log(entryError, "usage: /animations on|off")
+		return nil
+	}
+	m.animOff = !on
+	if !on {
+		m.splash = false
+		m.log(entryGood, "Animations off.")
+	} else {
+		m.log(entryGood, "Animations on.")
+	}
+	m.refreshHistory()
+	return m.saveSetting(SettingAnimations, onOff(on))
 }

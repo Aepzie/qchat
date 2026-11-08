@@ -246,6 +246,7 @@ func (m *Model) openConversation(key string) tea.Cmd {
 	}
 	changed := key != m.open
 	m.open, m.cursor = key, key
+	m.followTab(key)
 	m.input.placeholder = placeholderFor(c)
 	var cmds []tea.Cmd
 	stored := c.kind == convContact || c.kind == convGroup
@@ -466,7 +467,7 @@ func (m *Model) receive(e IncomingMessage) tea.Cmd {
 	if e.Message.ID != "" && slices.ContainsFunc(c.entries, func(x entry) bool { return x.kind == entryMessage && x.msgID == e.Message.ID }) {
 		return tea.Batch(cmds...)
 	}
-	m.addTo(id, messageEntry(e.Message, c.contact.label()))
+	m.addTo(id, m.freshEntry(messageEntry(e.Message, c.contact.label())))
 	if id == m.open {
 		return tea.Batch(append(cmds, m.markRead(id))...)
 	}
@@ -481,6 +482,7 @@ func (m *Model) receiveRequest(id string, mi MessageInfo) {
 	req := m.conv(requestsKey)
 	if !slices.Contains(req.senders, id) {
 		req.senders = append(req.senders, id)
+		m.unseen[id] = true
 		m.addTo(requestsKey, entry{kind: entrySystem, sender: id, text: "Message from " + groupID(id) +
 			", who is not in your contacts. To reply, type /add and press tab to fill in the ID, then a name."})
 	}
@@ -517,6 +519,7 @@ func (m *Model) keyChanged(id string) tea.Cmd {
 		return m.loadContacts()
 	}
 	c.contact.KeyChanged, c.contact.Verified = true, false
+	m.flashUntil = m.frame + keyFlashFrames
 	m.addTo(id, entry{kind: entryError, text: "The safety number with " + c.contact.label() +
 		" changed. Run /verify and compare it again before you trust this conversation."})
 	return nil
@@ -603,6 +606,7 @@ func (m *Model) adoptRequests(ci ContactInfo) {
 	}
 	req.entries = keep
 	req.senders = slices.DeleteFunc(req.senders, func(s string) bool { return s == ci.ID })
+	delete(m.unseen, ci.ID)
 	empty := len(req.senders) == 0
 	c := m.conv(ci.ID)
 	c.entries = append(moved, c.entries...)
@@ -687,4 +691,16 @@ func (m *Model) applyMarkVerified(msg markVerifiedMsg) {
 		return
 	}
 	m.addTo(msg.contactID, entry{kind: entryWarn, text: "You marked " + c.contact.label() + " as not verified."})
+}
+
+// keyFlashFrames is how long a key-change warning flashes, in frames.
+const keyFlashFrames = 30
+
+// freshEntry marks a live incoming entry so that it fades in.
+func (m *Model) freshEntry(e entry) entry {
+	e.fresh, e.arrival = true, m.frame
+	if e.msgID != "" {
+		m.newSince[e.msgID] = m.frame
+	}
+	return e
 }

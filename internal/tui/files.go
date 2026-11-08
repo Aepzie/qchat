@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // fileSendTimeout bounds SendFile, which returns once the offer is sent.
@@ -398,4 +399,110 @@ func (m *Model) conversationNotice(e ConversationNotice) {
 	if notice := cleanLine(e.Notice, 600); notice != "" && m.conv(key) != nil {
 		m.addTo(key, entry{kind: entrySystem, text: notice})
 	}
+}
+
+// Geometry of file cards.
+const (
+	// minCardWidth is the narrowest file card, borders included.
+	minCardWidth = 16
+	// maxCardWidth is the widest file card, borders included.
+	maxCardWidth = 48
+)
+
+// renderFileCard draws a file as a bordered card at most width cells wide:
+// icon and name, size and state, a gradient progress bar with percent and,
+// for a complete file numbered no, the /save hint. Below minCardWidth it
+// falls back to wrapped plain lines.
+func renderFileCard(st styles, f FileInfo, no, width int) []string {
+	name := cleanLine(f.Name, 255)
+	if width < minCardWidth {
+		var out []string
+		for _, l := range wrapLines("📄 "+name+" · "+formatSize(f.Size)+" · "+f.State.String(), max(width, 1)) {
+			out = append(out, st.text.Render(l))
+		}
+		return fitWidth(out, width)
+	}
+	inner := min(width, maxCardWidth) - 4
+	var body []string
+	for _, l := range wrapLines("📄 "+name, inner) {
+		body = append(body, st.bold.Render(l))
+	}
+	details := formatSize(f.Size) + " · " + fileStateLabel(f)
+	if no > 0 {
+		details = "file " + strconv.Itoa(no) + " · " + details
+	}
+	for _, l := range wrapLines(details, inner) {
+		body = append(body, fileStateStyle(st, f.State).Render(l))
+	}
+	body = append(body, progressBar(st, f, inner))
+	if no > 0 && f.State == FileComplete {
+		body = append(body, st.faint.Render(truncate("/save "+strconv.Itoa(no), inner)))
+	}
+	border := st.theme.Border
+	if f.State == FileFailed || f.State == FileExpired {
+		border = st.theme.Danger
+	}
+	return boxLines(body, inner, lipgloss.NewStyle().Foreground(border))
+}
+
+// fileStateLabel names the state of a transfer, with chunk counts while it
+// runs.
+func fileStateLabel(f FileInfo) string {
+	switch f.State {
+	case FileSending, FileReceiving:
+		if f.Total > 0 {
+			return fmt.Sprintf("%s %d/%d", f.State, min(f.Done, f.Total), f.Total)
+		}
+		return f.State.String()
+	case FileComplete:
+		return "done"
+	}
+	return f.State.String()
+}
+
+func fileStateStyle(st styles, s FileState) lipgloss.Style {
+	switch s {
+	case FileComplete:
+		return st.ok
+	case FileFailed, FileExpired:
+		return st.danger
+	}
+	return st.muted
+}
+
+// filePercent is how much of a file was transferred, 0 to 100.
+func filePercent(f FileInfo) int {
+	if f.State == FileComplete {
+		return 100
+	}
+	if f.Total <= 0 {
+		return 0
+	}
+	return min(max(f.Done, 0)*100/f.Total, 100)
+}
+
+// progressBar draws a transfer's progress as a gradient bar of █ with a
+// ▓▒ edge on a ░ track, followed by the percent, in width cells.
+func progressBar(st styles, f FileInfo, width int) string {
+	pct := filePercent(f)
+	label := fmt.Sprintf(" %3d%%", pct)
+	bar := width - len(label)
+	if bar < 4 {
+		return st.muted.Render(truncate(strings.TrimSpace(label), width))
+	}
+	filled := bar * pct / 100
+	var head string
+	switch {
+	case filled >= bar:
+	case filled+2 <= bar && pct > 0:
+		head = "▓▒"
+	case pct > 0:
+		head = "▓"
+	}
+	track := bar - filled - len([]rune(head))
+	out := gradientText(strings.Repeat("█", filled)+head, st.theme.Gradient) + st.faint.Render(strings.Repeat("░", track))
+	if f.State == FileFailed || f.State == FileExpired {
+		out = st.danger.Render(strings.Repeat("█", filled)+head) + st.faint.Render(strings.Repeat("░", track))
+	}
+	return out + fileStateStyle(st, f.State).Render(label)
 }

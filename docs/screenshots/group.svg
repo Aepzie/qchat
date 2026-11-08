@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="932" height="606" viewBox="0 0 932 606" role="img" aria-label="qchat · Team Nordlicht">
+<title>qchat · Team Nordlicht</title>
+<rect width="932" height="606" rx="10" fill="#0b0906"/>
+<path d="M0 10 A10 10 0 0 1 10 0 H922 A10 10 0 0 1 932 10 V34 H0 Z" fill="#1b1b1f"/>
+<path d="M0 33.5 H932" stroke="#000000" stroke-opacity="0.6"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/>
+<circle cx="40" cy="17" r="6" fill="#febc2e"/>
+<circle cx="60" cy="17" r="6" fill="#28c840"/>
+<text x="466" y="21.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#a8a8b0">qchat · Team Nordlicht</text>
+<rect x="0.5" y="0.5" width="931" height="605" rx="9.5" fill="none" stroke="#ffffff" stroke-opacity="0.12"/>
+<g shape-rendering="crispEdges">
+<rect x="16" y="50" width="27" height="18" fill="#14100a"/>
+<rect x="97" y="50" width="819" height="18" fill="#14100a"/>
+<rect x="331" y="158" width="207" height="18" fill="#1c160c"/>
+<rect x="25" y="176" width="9" height="18" fill="#2a1e08"/>
+<rect x="52" y="176" width="207" height="18" fill="#2a1e08"/>
+<rect x="331" y="266" width="261" height="18" fill="#1c160c"/>
+<rect x="547" y="356" width="342" height="18" fill="#3d2a00"/>
+<rect x="628" y="446" width="261" height="18" fill="#3d2a00"/>
+<rect x="313" y="518" width="9" height="18" fill="#ffb000"/>
+<rect x="16" y="572" width="72" height="18" fill="#ffb000"/>
+<rect x="88" y="572" width="828" height="18" fill="#14100a"/>
+<path fill="#ffb000" d="M25 176h4.5v18h-4.5z"/>
+</g>
+<path fill="none" stroke="#1c160c" stroke-width="1" d="M331 149.5H538M326.5 158V176M542.5 158V176M331 185.5H538M331 257.5H592M326.5 266V284M596.5 266V284M331 293.5H592"/>
+<path fill="none" stroke="#3d2a00" stroke-width="1" d="M547 347.5H889M542.5 356V374M893.5 356V374M547 383.5H889M628 437.5H889M623.5 446V464M893.5 446V464M628 473.5H889"/>
+<path fill="none" stroke="#4a3510" stroke-width="1" d="M16 77.5H106M187 77.5H916M25 95.5H34M97 95.5H259M20.5 104V554M263.5 104V554M25 563.5H259"/>
+<path fill="none" stroke="#8a5e12" stroke-width="2" d="M106 77H115"/>
+<path fill="none" stroke="#a7730e" stroke-width="2" d="M115 77H124"/>
+<path fill="none" stroke="#c58709" stroke-width="2" d="M124 77H133"/>
+<path fill="none" stroke="#e29c05" stroke-width="2" d="M133 77H142"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M277 95.5H286M367 95.5H907M272.5 104V554M911.5 104V554M286 509.5H295M547 509.5H898M281.5 518V536M902.5 518V536M286 545.5H898M277 563.5H907"/>
+<path fill="none" stroke="#ffb000" stroke-width="2" d="M142 77H151"/>
+<path fill="none" stroke="#ffb91f" stroke-width="2" d="M151 77H160"/>
+<path fill="none" stroke="#ffc13d" stroke-width="2" d="M160 77H169"/>
+<path fill="none" stroke="#ffca5c" stroke-width="2" d="M169 77H178"/>
+<path fill="none" stroke="#ffd27a" stroke-width="2" d="M178 77H187"/>
+<path fill="none" stroke="#1c160c" stroke-width="1" d="M331 149.5H331A4.5 4.5 0 0 0 326.5 154V158M538 149.5H538A4.5 4.5 0 0 1 542.5 154V158M331 185.5H331A4.5 4.5 0 0 1 326.5 181V176M538 185.5H538A4.5 4.5 0 0 0 542.5 181V176M331 257.5H331A4.5 4.5 0 0 0 326.5 262V266M592 257.5H592A4.5 4.5 0 0 1 596.5 262V266M331 293.5H331A4.5 4.5 0 0 1 326.5 289V284M592 293.5H592A4.5 4.5 0 0 0 596.5 289V284"/>
+<path fill="none" stroke="#3d2a00" stroke-width="1" d="M547 347.5H547A4.5 4.5 0 0 0 542.5 352V356M889 347.5H889A4.5 4.5 0 0 1 893.5 352V356M547 383.5H547A4.5 4.5 0 0 1 542.5 379V374M889 383.5H889A4.5 4.5 0 0 0 893.5 379V374M628 437.5H628A4.5 4.5 0 0 0 623.5 442V446M889 437.5H889A4.5 4.5 0 0 1 893.5 442V446M628 473.5H628A4.5 4.5 0 0 1 623.5 469V464M889 473.5H889A4.5 4.5 0 0 0 893.5 469V464"/>
+<path fill="none" stroke="#4a3510" stroke-width="1" d="M25 95.5H25A4.5 4.5 0 0 0 20.5 100V104M259 95.5H259A4.5 4.5 0 0 1 263.5 100V104M25 563.5H25A4.5 4.5 0 0 1 20.5 559V554M259 563.5H259A4.5 4.5 0 0 0 263.5 559V554"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M277 95.5H277A4.5 4.5 0 0 0 272.5 100V104M907 95.5H907A4.5 4.5 0 0 1 911.5 100V104M286 509.5H286A4.5 4.5 0 0 0 281.5 514V518M898 509.5H898A4.5 4.5 0 0 1 902.5 514V518M286 545.5H286A4.5 4.5 0 0 1 281.5 541V536M898 545.5H898A4.5 4.5 0 0 0 902.5 541V536M277 563.5H277A4.5 4.5 0 0 1 272.5 559V554M907 563.5H907A4.5 4.5 0 0 0 911.5 559V554"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#ffc24d" xml:space="preserve" style="white-space:pre">
+<text y="63.5"><tspan x="25" fill="#8a5e12" font-weight="bold">⚡</tspan><tspan x="52" fill="#d89506">q</tspan><tspan x="61" fill="#ffb000">c</tspan><tspan x="70" fill="#ffbb29">h</tspan><tspan x="79" fill="#ffc751">a</tspan><tspan x="88" fill="#ffd27a">t</tspan><tspan x="115" textLength="63" fill="#ffd27a" font-weight="bold">1 Chats</tspan><tspan x="196" textLength="90" fill="#c98a1a">2 Requests</tspan><tspan x="295" textLength="18" fill="#ffd27a" font-weight="bold">✦1</tspan><tspan x="331" textLength="180" fill="#c98a1a">3 Groups  4 Contacts</tspan><tspan x="520" textLength="18" fill="#ff3b2f" font-weight="bold">⚠1</tspan><tspan x="556" textLength="63" fill="#c98a1a">5 Files</tspan><tspan x="628" textLength="18" fill="#ffb000" font-weight="bold">⇄1</tspan><tspan x="664" textLength="72" fill="#c98a1a">6 System</tspan><tspan x="808" fill="#ffe08a">●</tspan><tspan x="826" textLength="81">connected</tspan></text>
+<text y="99.5"><tspan x="43" textLength="45" fill="#ffb000" font-weight="bold">CHATS</tspan><tspan x="295" fill="#8a5e12" font-weight="bold">◆</tspan><tspan x="313" fill="#d89506">G</tspan><tspan x="322" fill="#ffb000">R</tspan><tspan x="331" fill="#ffbb29">O</tspan><tspan x="340" fill="#ffc751">U</tspan><tspan x="349" fill="#ffd27a">P</tspan></text>
+<text y="117.5"><tspan x="43" textLength="27" fill="#ffe9b0" font-weight="bold">(M)</tspan><tspan x="79" textLength="36" fill="#c98a1a">Mara</tspan><tspan x="124" fill="#ffe08a">✓</tspan><tspan x="286" textLength="144" font-weight="bold"># Team Nordlicht</tspan><tspan x="448" textLength="81" fill="#8a5e12">4 members</tspan><tspan x="538" textLength="135" fill="#ffb000">· you are admin</tspan><tspan x="682" textLength="144" fill="#8a5e12">· /group members</tspan></text>
+<text y="135.5"><tspan x="43" textLength="27" fill="#e07b00" font-weight="bold">(J)</tspan><tspan x="79" textLength="45" fill="#c98a1a">Jonas</tspan><tspan x="286" textLength="297" fill="#ffb000" font-weight="bold">✦ 1 new message request — press 2</tspan></text>
+<text y="153.5"><tspan x="43" textLength="27" fill="#e07b00" font-weight="bold">(L)</tspan><tspan x="79" textLength="36" fill="#c98a1a">Lena</tspan><tspan x="124" fill="#ff3b2f">⚠</tspan></text>
+<text y="171.5"><tspan x="43" textLength="27" fill="#f2a65a" font-weight="bold">(T)</tspan><tspan x="79" textLength="36" fill="#c98a1a">Theo</tspan><tspan x="124" fill="#ffe08a">✓</tspan><tspan x="286" textLength="27" fill="#e07b00" font-weight="bold">(J)</tspan><tspan x="340" textLength="189">Room 2.14 is booked ✔</tspan></text>
+<text y="189.5"><tspan x="34" fill="#ffb000">#</tspan><tspan x="61" textLength="126" font-weight="bold">Team Nordlicht</tspan></text>
+<text y="207.5"><tspan x="43" fill="#ffb000">#</tspan><tspan x="61" textLength="153" fill="#c98a1a">Bouldering Sunday</tspan><tspan x="223" fill="#ff8a00">?</tspan><tspan x="331" textLength="45" fill="#8a5e12">14:30</tspan></text>
+<text y="243.5"><tspan x="322" textLength="36" fill="#e07b00" font-weight="bold">Lena</tspan></text>
+<text y="279.5"><tspan x="286" textLength="27" fill="#e07b00" font-weight="bold">(L)</tspan><tspan x="340" textLength="171">Then see you all on</tspan><tspan x="520" textLength="54" font-weight="bold">Friday</tspan><tspan x="574">!</tspan></text>
+<text y="315.5"><tspan x="331" textLength="45" fill="#8a5e12">14:31</tspan></text>
+<text y="369.5"><tspan x="556" textLength="324" fill="#ffd58a">Can someone mail the offline slides?</tspan></text>
+<text y="405.5"><tspan x="745" textLength="45" fill="#8a5e12">14:32</tspan><tspan x="799" textLength="90" fill="#ff3b2f">✕ not sent</tspan></text>
+<text y="423.5"><tspan x="736" textLength="153" fill="#ff3b2f">relay unreachable</tspan></text>
+<text y="459.5"><tspan x="637" textLength="216" fill="#ffd58a">I'll bring the projector</tspan><tspan x="862" fill="#ffd58a">🎥</tspan></text>
+<text y="495.5"><tspan x="754" textLength="135" fill="#8a5e12">14:32 ◌ sending</tspan></text>
+<text y="513.5"><tspan x="304" fill="#ffb000">✎</tspan><tspan x="322" textLength="216">message # Team Nordlicht</tspan></text>
+<text y="531.5"><tspan x="295" fill="#ffb000" font-weight="bold">›</tspan><tspan x="313" fill="#0b0906">M</tspan><tspan x="322" textLength="432" fill="#8a5e12">essage # Team Nordlicht · /group members · /help</tspan></text>
+<text y="585.5"><tspan x="25" textLength="54" fill="#0b0906" font-weight="bold">INSERT</tspan><tspan x="106" textLength="801" fill="#8a5e12">enter send · esc normal · alt+1-6 tabs · ct… end-to-end encrypted · relay sees recipients</tspan></text>
+</g>
+</svg>

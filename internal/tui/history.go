@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"slices"
 	"strings"
 	"time"
 
@@ -60,6 +59,17 @@ type entry struct {
 	// /save, assigned when the history is drawn.
 	file   *FileInfo
 	fileNo int
+	// delivered marks an outgoing message the recipient confirmed; it is
+	// drawn as ✓✓.
+	delivered bool
+	// ttl is the disappearing message timer the message was filed under,
+	// zero for none; it is drawn as ⏱.
+	ttl time.Duration
+
+	// fresh marks a live incoming entry that fades in, starting at the
+	// animation frame arrival (see renderOpts).
+	fresh   bool
+	arrival int
 }
 
 // Layout of a history line: "15:04:05" + two spaces, then a one-cell marker
@@ -81,80 +91,13 @@ func (e entry) standsAlone() bool {
 // Consecutive messages from the same sender stay together.
 func needsGap(prev, cur entry) bool {
 	if prev.kind == entryMessage && cur.kind == entryMessage {
-		return prev.outgoing != cur.outgoing || prev.from != cur.from
+		return !continues(prev, cur)
 	}
 	return cur.standsAlone() || prev.standsAlone() || cur.kind == entryMessage || prev.kind == entryMessage
 }
 
-// separator returns the lines drawn between two adjacent entries: a date
-// divider when the day changes, a blank line, or nothing.
-func separator(prev, cur entry, width int, st styles) []string {
-	py, pm, pd := prev.at.Date()
-	cy, cm, cd := cur.at.Date()
-	if py != cy || pm != cm || pd != cd {
-		label := "── " + cur.at.Format("Mon 2 Jan 2006") + " "
-		rule := max(min(width, 48)-lipgloss.Width(label), 0)
-		return []string{"", st.faint.Render(truncate(label+strings.Repeat("─", rule), width))}
-	}
-	if needsGap(prev, cur) {
-		return []string{""}
-	}
-	return nil
-}
-
-// renderEntries draws the whole history at the given width.
-func renderEntries(entries []entry, width int, st styles) []string {
-	var lines []string
-	entries = numberFiles(slices.Clone(entries))
-	for i, e := range entries {
-		if i > 0 {
-			lines = append(lines, separator(entries[i-1], e, width, st)...)
-		}
-		lines = append(lines, renderEntry(e, width, st)...)
-	}
-	return lines
-}
-
-func renderEntry(e entry, width int, st styles) []string {
-	switch e.kind {
-	case entryNote:
-		return renderNote(e, width, st)
-	case entryOutput:
-		return renderOutput(e, width, st)
-	case entryAlert:
-		return renderAlert(e, width, st)
-	case entryMessage:
-		return renderMessage(e, width, st)
-	default:
-		return renderLine(e, width, st)
-	}
-}
-
 func timestamp(e entry, st styles) string {
 	return st.faint.Render(e.at.Format("15:04:05"))
-}
-
-// renderLine draws a one-paragraph system message with a colored marker.
-func renderLine(e entry, width int, st styles) []string {
-	marker, body := st.faint.Render("•"), st.muted
-	switch e.kind {
-	case entryGood:
-		marker, body = st.ok.Render("●"), st.text
-	case entryWarn:
-		marker, body = st.warn.Render("◌"), st.text
-	case entryError:
-		marker, body = st.danger.Render("✕"), st.danger
-	}
-	indent := strings.Repeat(" ", bodyIndent)
-	var out []string
-	for i, line := range wrapLines(e.text, width-bodyIndent) {
-		if i == 0 {
-			out = append(out, timestamp(e, st)+"  "+marker+" "+body.Render(line))
-			continue
-		}
-		out = append(out, indent+body.Render(line))
-	}
-	return out
 }
 
 // renderNote draws a note the user typed. Notes are never transmitted, and
