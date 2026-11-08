@@ -120,6 +120,7 @@ func (m *Model) mergeGroups(list []GroupInfo) tea.Cmd {
 			continue
 		}
 		seen[g.ID] = true
+		m.noteInvite(g)
 		c := conversation{key: g.ID, kind: convGroup}
 		if old := m.conv(g.ID); old != nil {
 			c = *old
@@ -168,7 +169,7 @@ func (m *Model) receiveGroup(e IncomingMessage) tea.Cmd {
 	}
 	en := messageEntry(e.Message, m.memberLabel(c, sender))
 	en.sender = sender
-	m.addTo(id, en)
+	m.addTo(id, m.freshEntry(en))
 	if id == m.open {
 		return tea.Batch(append(cmds, m.markRead(id))...)
 	}
@@ -426,4 +427,16 @@ func (m Model) membersText(width int) []string {
 	add("The relay sees the recipients of every group message, but not the group's name or ID.", func(s string) string { return st.faint.Render(s) })
 	add("esc close", func(s string) string { return st.muted.Render(s) })
 	return lines
+}
+
+// noteInvite marks a new group invitation as unseen, and forgets it once it
+// is no longer pending.
+func (m *Model) noteInvite(g GroupInfo) {
+	if !g.Invite || g.Left {
+		delete(m.unseen, g.ID)
+		return
+	}
+	if old := m.conv(g.ID); old == nil || !old.group.Invite {
+		m.unseen[g.ID] = true
+	}
 }

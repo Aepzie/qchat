@@ -226,11 +226,12 @@ func say(t *testing.T, m Model, s string) Model {
 func newChatModel(t *testing.T, fb Backend, width, height int) Model {
 	t.Helper()
 	m := New(Config{
-		Addr:    "chat.example.org:8443",
-		Pin:     testPin(),
-		Version: "0.2.0",
-		Backend: fb,
-		Now:     func() time.Time { return testClock },
+		Addr:        "chat.example.org:8443",
+		Pin:         testPin(),
+		Version:     "0.2.0",
+		Backend:     fb,
+		Now:         func() time.Time { return testClock },
+		NoAnimation: true,
 	})
 	m = update(t, m, tea.WindowSizeMsg{Width: width, Height: height})
 	return drain(t, m, m.Init())
@@ -242,8 +243,8 @@ var keyCtrlP = press('p', "", tea.ModCtrl)
 func sidebarLine(t *testing.T, m Model, name string) string {
 	t.Helper()
 	for _, l := range strings.Split(screen(m), "\n") {
-		if len(l) > 0 && strings.Contains(truncatePlain(l, sidebarWidth), name) {
-			return truncatePlain(l, sidebarWidth)
+		if len(l) > 0 && strings.Contains(truncatePlain(l, leftPanelWidth), name) {
+			return truncatePlain(l, leftPanelWidth)
 		}
 	}
 	t.Fatalf("sidebar has no row %q:\n%s", name, screen(m))
@@ -258,10 +259,10 @@ func truncatePlain(s string, n int) string {
 func TestChatSidebarShowsContacts(t *testing.T) {
 	m := newChatModel(t, newFakeBackend(), 100, 24)
 	s := screen(m)
-	top := strings.SplitN(s, "\n", 2)[0]
-	for _, want := range []string{"E2E · forward secrecy", "id qc1-ssss-ssss"} {
-		if !strings.Contains(top, want) {
-			t.Errorf("status bar %q lacks %q", top, want)
+	sys := screen(do(t, m, press('6', "", tea.ModAlt)))
+	for _, want := range []string{"forward secrecy", "id qc1-ssss-ssss"} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("System tab lacks %q:\n%s", want, sys)
 		}
 	}
 	if !strings.Contains(sidebarLine(t, m, "Alice"), "✓") {
@@ -299,18 +300,25 @@ func TestSidebarNavigation(t *testing.T) {
 		t.Fatalf("ctrl+p twice: open %q", m.open)
 	}
 
+	if m.tab != tabSystem {
+		t.Fatalf("System did not switch to the System tab: %v", m.tab)
+	}
 	m = do(t, m, keyEsc)
+	m = do(t, m, press('1', "1", 0))
+	if m.tab != tabChats || m.open != aliceID {
+		t.Fatalf("1: tab %v, open %q", m.tab, m.open)
+	}
 	m = do(t, m, press('j', "J", tea.ModShift))
-	m = do(t, m, press('j', "J", tea.ModShift))
-	if m.cursor != bobID || m.open != systemKey {
+	if m.cursor != bobID || m.open != aliceID {
 		t.Fatalf("J moved cursor to %q, open %q", m.cursor, m.open)
 	}
-	m = do(t, m, press('k', "K", tea.ModShift))
-	if !strings.Contains(sidebarLine(t, m, "Alice"), "›") {
+	if !strings.Contains(sidebarLine(t, m, "Bob"), "›") {
 		t.Error("cursor row not marked")
 	}
+	m = do(t, m, press('k', "K", tea.ModShift))
+	m = do(t, m, press('j', "J", tea.ModShift))
 	m = do(t, m, keyEnter)
-	if m.open != aliceID || m.Mode() != ModeInsert {
+	if m.open != bobID || m.Mode() != ModeInsert {
 		t.Fatalf("enter opened %q in mode %v", m.open, m.Mode())
 	}
 	checkFits(t, m)
@@ -344,7 +352,7 @@ func TestSendFlow(t *testing.T) {
 	m = do(t, m, keyCtrlN)
 	m = typeText(t, m, "secret plans")
 	m, cmd := updateCmd(t, m, keyEnter)
-	if !strings.Contains(screen(m), "… sending") {
+	if !strings.Contains(screen(m), "◌ sending") {
 		t.Fatalf("pending message not shown as sending:\n%s", screen(m))
 	}
 	m = drain(t, m, cmd)
@@ -382,7 +390,7 @@ func TestKeyChangeBanner(t *testing.T) {
 	m = do(t, m, keyCtrlN)
 	m = do(t, m, chatEventMsg{ContactKeyChanged{ContactID: aliceID}})
 	s := screen(m)
-	for _, want := range []string{"⚠ Safety number changed", "╭", "Sending still works", "⚠ key changed — /verify"} {
+	for _, want := range []string{"KEY CHANGED", "╭", "Compare it before trusting", "⚠ key changed — /verify"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("key change view lacks %q:\n%s", want, s)
 		}
@@ -391,13 +399,13 @@ func TestKeyChangeBanner(t *testing.T) {
 		t.Error("sidebar lacks ⚠")
 	}
 	m = say(t, m, "still works?")
-	if len(fb.sent) != 1 || !strings.Contains(screen(m), "⚠ Safety number changed") {
+	if len(fb.sent) != 1 || !hasKeyWarning(screen(m)) {
 		t.Errorf("sending with a changed key failed or removed the banner")
 	}
 	checkFits(t, m)
 	for _, h := range []int{10, 12, 16} {
 		small := update(t, m, tea.WindowSizeMsg{Width: 50, Height: h})
-		if !strings.Contains(screen(small), "Safety number changed") {
+		if !hasKeyWarning(screen(small)) {
 			t.Errorf("50x%d: banner missing:\n%s", h, screen(small))
 		}
 		checkFits(t, small)
@@ -405,14 +413,14 @@ func TestKeyChangeBanner(t *testing.T) {
 
 	m = say(t, m, "/verify")
 	m = do(t, m, keyEsc)
-	if !strings.Contains(screen(m), "⚠ Safety number changed") {
+	if !hasKeyWarning(screen(m)) {
 		t.Error("closing /verify without a decision cleared the banner")
 	}
 	m = say(t, m, "/verify")
 	m = do(t, m, press('v', "v", 0))
 	m = do(t, m, keyEsc)
 	s = screen(m)
-	if strings.Contains(s, "Safety number changed ") || strings.Contains(sidebarLine(t, m, "Alice"), "⚠") || !fb.marked[aliceID] {
+	if hasKeyWarning(s) || strings.Contains(sidebarLine(t, m, "Alice"), "⚠") || !fb.marked[aliceID] {
 		t.Errorf("verification did not clear the warning:\n%s", s)
 	}
 	if !strings.Contains(s, "You marked Alice as verified.") {
@@ -491,12 +499,12 @@ func TestMessageRequests(t *testing.T) {
 	m := newChatModel(t, fb, 100, 30)
 	stranger := testID('z')
 	m = do(t, m, chatEventMsg{IncomingMessage{ContactID: stranger, UnknownSender: true, Message: MessageInfo{ID: "z1", Text: "hello from a stranger", Received: testClock}}})
-	if !strings.Contains(sidebarLine(t, m, "Message req"), " 1 ") {
-		t.Errorf("request not counted: %q", sidebarLine(t, m, "Message req"))
+	if s := screen(m); !strings.Contains(s, "2 Requests ✦1") || !strings.Contains(s, "✦ 1 new message request — press 2") {
+		t.Errorf("request not counted or no banner:\n%s", s)
 	}
 	m = do(t, m, keyCtrlN)
 	s := screen(m)
-	for _, want := range []string{"# Message requests", "hello from a stranger", "type /add and press tab", "qc1-zzzz zzzz"} {
+	for _, want := range []string{"# Message requests", "hello from a stranger", "press tab to fill in the ID", "qc1-zzzz zzzz"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("requests view lacks %q:\n%s", want, s)
 		}
@@ -835,4 +843,10 @@ func TestUnlockRetryAndRateLimit(t *testing.T) {
 	if !m.Unlocked() || tried[len(tried)-1] != "correct horse" {
 		t.Fatalf("unlock after the delay failed: tried %q\n%s", tried, view())
 	}
+}
+
+// hasKeyWarning reports whether a screen shows the key-change warning, as
+// a box or as its one-line form.
+func hasKeyWarning(s string) bool {
+	return strings.Contains(s, "KEY CHANGED") || strings.Contains(s, "Safety number changed")
 }

@@ -21,7 +21,7 @@ var helpCommandGroups = []struct {
 }{
 	{"Conversations", []string{"/search", "/send", "/file", "/save", "/timer", "/clear"}},
 	{"Contacts", []string{"/add", "/verify", "/rename", "/remove", "/whoami"}},
-	{"Appearance", []string{"/theme", "/markdown"}},
+	{"Appearance", []string{"/theme", "/markdown", "/animations"}},
 	{"Connection", []string{"/status", "/fingerprint"}},
 	{"General", []string{"/help", "/quit"}},
 }
@@ -50,6 +50,10 @@ func helpSections() []helpSection {
 	}
 	return append(out,
 		helpSection{"Keys", []row{
+			{"tabs", "1-6 in normal mode, alt+1-6 anywhere · ctrl+←/→ or [ ] cycle · click a tab · 1 Chats 2 Requests 3 Groups 4 Contacts 5 Files 6 System"},
+			{"requests", "J/K select · a accept (asks for a name) · d dismiss · l decline an invitation · enter view"},
+			{"contacts", "J/K select · enter open · v verify · r rename · x remove"},
+			{"files", "J/K select · enter or s save (asks for a directory, empty = Downloads)"},
 			{"any mode", "ctrl+n / ctrl+p next or previous conversation"},
 			{"insert", "enter send · esc normal mode · tab complete · ↑/↓ palette · pgup/pgdn scroll · shift+enter new line"},
 			{"normal", "J/K select · enter open · i insert · j/k line · ctrl+d/u half page · g/G top/bottom · : command · q quit"},

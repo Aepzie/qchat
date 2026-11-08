@@ -66,11 +66,11 @@ func TestSendFileShowsProgress(t *testing.T) {
 		t.Fatalf("SendFile calls %q", fb.sentFiles)
 	}
 	m = do(t, m, chatEventMsg{FileChanged{ConversationID: aliceID, MessageID: "f1", File: FileInfo{Name: "report.pdf", Size: 3 << 20, State: FileSending, Done: 16, Total: 64}}})
-	if s := screen(m); !strings.Contains(s, "file 1 · report.pdf · 3.0 MiB · sending 16/64 (25%)") {
+	if s := screen(m); !strings.Contains(s, "📄 report.pdf") || !strings.Contains(s, "file 1 · 3.0 MiB · sending 16/64") || !strings.Contains(s, "25%") {
 		t.Fatalf("progress not shown:\n%s", s)
 	}
 	m = do(t, m, chatEventMsg{FileChanged{ConversationID: aliceID, MessageID: "f1", File: FileInfo{Name: "report.pdf", Size: 3 << 20, State: FileComplete, Done: 64, Total: 64}}})
-	if s := screen(m); !strings.Contains(s, "complete · /save 1") {
+	if s := screen(m); !strings.Contains(s, "file 1 · 3.0 MiB · done") || !strings.Contains(s, "/save 1") || !strings.Contains(s, "100%") {
 		t.Fatalf("completion not shown:\n%s", s)
 	}
 	m = say(t, m, "/file")
@@ -86,7 +86,7 @@ func TestIncomingFileAndSave(t *testing.T) {
 	m = do(t, m, chatEventMsg{IncomingMessage{ContactID: aliceID, Message: MessageInfo{ID: "o1", Text: "x", Received: testClock,
 		File: &FileInfo{Name: "evil\x1b[2J\u202Ename.txt", Size: 1536, State: FileReceiving, Done: 1, Total: 4}}}})
 	s := screen(m)
-	if !strings.Contains(s, "file 1 · evil[2Jname.txt · 1.5 KiB · receiving 1/4 (25%)") {
+	if !strings.Contains(s, "📄 evil[2Jname.txt") || !strings.Contains(s, "file 1 · 1.5 KiB · receiving 1/4") {
 		t.Fatalf("incoming file not shown:\n%s", s)
 	}
 	if strings.Contains(m.View().Content, "\x1b[2J") || strings.Contains(m.View().Content, "\u202E") {

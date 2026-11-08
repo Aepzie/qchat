@@ -272,7 +272,7 @@ func (m Model) renderOverlay(width, height int) []string {
 	for i, l := range content {
 		content[i] = padRight(l, innerW, lipgloss.NewStyle())
 	}
-	box := st.overlayBox
+	box := st.overlayBox.Border(lipgloss.RoundedBorder()).BorderForeground(colorOr(st.theme.PanelBorderFocus, st.theme.Accent))
 	if o.keyChanged {
 		box = box.BorderForeground(st.theme.Danger)
 	}

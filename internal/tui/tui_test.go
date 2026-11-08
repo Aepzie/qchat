@@ -32,10 +32,11 @@ func newTestModel(t *testing.T, width, height int) Model {
 	t.Helper()
 	clock := time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC)
 	m := New(Config{
-		Addr:    "chat.example.org:8443",
-		Pin:     testPin(),
-		Version: "0.1.0",
-		Now:     func() time.Time { return clock },
+		Addr:        "chat.example.org:8443",
+		Pin:         testPin(),
+		Version:     "0.1.0",
+		Now:         func() time.Time { return clock },
+		NoAnimation: true,
 	})
 	return update(t, m, tea.WindowSizeMsg{Width: width, Height: height})
 }
@@ -150,7 +151,7 @@ func TestTooSmall(t *testing.T) {
 }
 
 func TestStatusBarConnectionStates(t *testing.T) {
-	m := newTestModel(t, 120, 30)
+	m := newTestModel(t, 160, 30)
 	top := func() string { return strings.SplitN(screen(m), "\n", 2)[0] }
 
 	if !strings.Contains(top(), "E2E: off") {
@@ -163,16 +164,13 @@ func TestStatusBarConnectionStates(t *testing.T) {
 
 	m = connected(t, m)
 	s := top()
-	for _, want := range []string{"qchat", "● connected", "🔒 TLS 1.3 · PQ-hybrid", "pin " + shortFingerprint(testPin()), "Tor: off", "23 ms", "E2E: off"} {
+	for _, want := range []string{"qchat", "● connected", "🔒 TLS 1.3 · PQ-hybrid", "Tor: off", "23 ms", "E2E: off"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status bar %q lacks %q", s, want)
 		}
 	}
 	if m.State() != client.Connected {
 		t.Errorf("State() = %v", m.State())
-	}
-	if !strings.HasSuffix(strings.TrimRight(s, " "), "E2E: off") {
-		t.Errorf("E2E badge not right-aligned: %q", s)
 	}
 
 	m = update(t, m, event(client.StateChanged{State: client.Disconnected, Err: client.ErrKeepaliveTimeout, RetryIn: 4 * time.Second}))
@@ -187,7 +185,7 @@ func TestStatusBarConnectionStates(t *testing.T) {
 func TestStatusBarDropsSegmentsWhenNarrow(t *testing.T) {
 	m := connected(t, newTestModel(t, 40, 12))
 	top := strings.SplitN(screen(m), "\n", 2)[0]
-	for _, want := range []string{"qchat", "● connected", "E2E: off"} {
+	for _, want := range []string{"qchat", "● connected"} {
 		if !strings.Contains(top, want) {
 			t.Errorf("narrow status bar %q lacks %q", top, want)
 		}
@@ -198,13 +196,13 @@ func TestStatusBarDropsSegmentsWhenNarrow(t *testing.T) {
 func TestSidebarVisibility(t *testing.T) {
 	wide := newTestModel(t, 70, 20)
 	s := screen(wide)
-	for _, want := range []string{"CONVERSATIONS", "System", "No identity", "messaging is off"} {
+	for _, want := range []string{"CHATS", "System", "No identity", "messaging is off"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("sidebar at width 70 lacks %q", want)
 		}
 	}
 	narrow := newTestModel(t, 69, 20)
-	if strings.Contains(screen(narrow), "CONVERSATIONS") {
+	if strings.Contains(screen(narrow), "CHATS") {
 		t.Error("sidebar shown at width 69")
 	}
 }
@@ -212,7 +210,7 @@ func TestSidebarVisibility(t *testing.T) {
 func TestUnreadCounter(t *testing.T) {
 	m := newTestModel(t, 100, 20)
 	m.convs[0].unread = 3
-	if !strings.Contains(screen(m), "System") || !strings.Contains(screen(m), " 3 ") {
+	if !strings.Contains(screen(m), "System") || !strings.Contains(screen(m), "●3") {
 		t.Errorf("unread counter not rendered:\n%s", screen(m))
 	}
 	checkFits(t, m)
@@ -357,7 +355,7 @@ func TestCommands(t *testing.T) {
 			t.Errorf("/status lacks %q:\n%s", want, s)
 		}
 	}
-	compact := strings.Join(strings.Fields(s), "")
+	compact := strings.Join(strings.Fields(unframe(s)), "")
 	hex := strings.ReplaceAll(testPin().Grouped(), " ", "")
 	if !strings.Contains(compact, hex) {
 		t.Errorf("/status lacks the full fingerprint")
@@ -369,7 +367,7 @@ func TestCommands(t *testing.T) {
 	}
 
 	m, _ = submit(t, m, "/fingerprint")
-	compact = strings.Join(strings.Fields(screen(m)), "")
+	compact = strings.Join(strings.Fields(unframe(screen(m))), "")
 	if !strings.Contains(compact, testPin().String()) || !strings.Contains(compact, hex) {
 		t.Errorf("/fingerprint lacks the fingerprint:\n%s", screen(m))
 	}
@@ -454,7 +452,7 @@ func TestSecurityAlert(t *testing.T) {
 			t.Errorf("alert view lacks %q:\n%s", want, s)
 		}
 	}
-	compact := strings.Join(strings.Fields(s), "")
+	compact := strings.Join(strings.Fields(unframe(s)), "")
 	for _, fp := range []transport.Fingerprint{testPin(), presented} {
 		for _, g := range strings.Fields(fp.Grouped())[:8] {
 			if !strings.Contains(compact, g) {
@@ -603,4 +601,10 @@ func TestSnapshot(t *testing.T) {
 	checkFits(t, a)
 	t.Logf("alert snapshot 100x30:\n%s", screen(a))
 	t.Logf("minimum 40x10:\n%s", screen(connected(t, newTestModel(t, 40, 10))))
+}
+
+// unframe removes panel borders from a screen, so that text wrapped inside
+// a panel can be searched as one string.
+func unframe(s string) string {
+	return strings.NewReplacer("│", " ", "╭", " ", "╮", " ", "╰", " ", "╯", " ", "─", " ").Replace(s)
 }

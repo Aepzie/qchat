@@ -79,6 +79,9 @@ type Config struct {
 	Theme Theme
 	// Now returns the current time, for timestamps. Nil means time.Now.
 	Now func() time.Time
+	// NoAnimation turns off the splash screen and every animation, whatever
+	// the ui.animations setting says. Tests and screen readers use it.
+	NoAnimation bool
 }
 
 // connStatus is what the interface knows about the connection.
@@ -140,6 +143,36 @@ type Model struct {
 	quitting       bool
 	// searchSeq numbers searches, so that only the latest answer is shown.
 	searchSeq int
+
+	// tab is the active tab; reqSel and fileSel the selected card of the
+	// Requests tab and the selected transfer of the Files tab.
+	tab     tab
+	reqSel  int
+	fileSel int
+	// unseen holds the keys of message requests (sender IDs) and group
+	// invitations (group IDs) that arrived since the Requests tab was last
+	// shown. Their badge pulses.
+	unseen map[string]bool
+	// prompt is the inline question answered in the input box, such as the
+	// name for an accepted message request.
+	prompt prompt
+
+	// frame counts animation ticks; ticking reports that a tick is in
+	// flight. splash shows the start screen until a key or SplashFrames.
+	frame   int
+	ticking bool
+	splash  bool
+	// animOff is the ui.animations setting turned off.
+	animOff bool
+	// newSince maps the IDs of freshly arrived messages to the frame they
+	// arrived in, for the fade-in drawn by the history.
+	newSince map[string]int
+	// flashUntil is the frame until which a key-change warning flashes.
+	flashUntil int
+	// stableLines caches the rendering of the open conversation up to
+	// entry stableFrom, the part that no longer changes with the frame.
+	stableFrom  int
+	stableLines []string
 }
 
 // New returns a Model in insert mode, ready for its first WindowSizeMsg.
@@ -154,6 +187,11 @@ func New(cfg Config) Model {
 		convs:  []conversation{{key: systemKey, kind: convSystem, loaded: true}},
 		open:   systemKey,
 		cursor: systemKey,
+
+		tab:      tabChats,
+		unseen:   map[string]bool{},
+		newSince: map[string]int{},
+		splash:   !cfg.NoAnimation,
 	}
 
 	m.history = viewport.New()
@@ -224,48 +262,67 @@ func (m Model) listenChat() tea.Cmd {
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cmd := m.update(msg)
+	if tick := m.startTick(); tick != nil {
+		cmd = tea.Batch(cmd, tick)
+	}
+	return m, cmd
+}
+
+func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
-		return m, nil
+		return nil
+	case animTickMsg:
+		return m.handleTick()
 	case sessionEventMsg:
 		m.handleEvent(msg.event)
 		m.layout()
-		return m, m.listen()
+		return m.listen()
 	case sessionClosedMsg:
 		m.ended = true
-		return m, nil
+		return nil
 	case chatEventMsg:
 		cmd := m.handleChatEvent(msg.event)
 		m.layout()
-		return m, tea.Batch(cmd, m.listenChat())
+		return tea.Batch(cmd, m.listenChat())
 	case chatClosedMsg:
 		m.chatEnded = true
-		return m, nil
+		return nil
 	case tea.KeyPressMsg:
+		if m.splash && msg.String() != "ctrl+c" {
+			m.splash = false
+			return nil
+		}
 		cmd := m.handleKey(msg)
 		m.layout()
-		return m, cmd
+		return cmd
+	case tea.MouseClickMsg:
+		m.splash = false
+		cmd := m.handleClick(msg)
+		m.layout()
+		return cmd
 	case tea.MouseWheelMsg:
 		if m.overlay.kind != overlayNone {
-			return m, nil
+			return nil
 		}
 		var cmd tea.Cmd
 		m.history, cmd = m.history.Update(msg)
-		return m, cmd
+		return cmd
 	case tea.PasteMsg:
 		if m.overlay.kind == overlayNone && !m.confirm.active && m.mode == ModeInsert && m.input.Update(msg) {
 			m.resetPalette()
 		}
 		m.layout()
-		return m, nil
+		return nil
 	}
 	if cmd, ok := m.handleResult(msg); ok {
 		m.layout()
-		return m, cmd
+		return cmd
 	}
-	return m, nil
+	return nil
 }
 
 // handleKey dispatches a key press according to what has focus.
@@ -285,6 +342,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.step(1)
 	case "ctrl+p":
 		return m.step(-1)
+	case "ctrl+right":
+		return m.cycleTab(1)
+	case "ctrl+left":
+		return m.cycleTab(-1)
+	}
+	if t, ok := altTabKey(msg.String()); ok {
+		return m.setTab(t)
 	}
 	if m.mode == ModeNormal {
 		return m.handleNormalKey(msg)
@@ -295,6 +359,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 func (m *Model) handleInsertKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
+		if m.prompt.kind != promptNone {
+			m.cancelPrompt()
+			return nil
+		}
 		m.setMode(ModeNormal)
 		return nil
 	case "enter":
@@ -325,6 +393,9 @@ func (m *Model) handleInsertKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) handleNormalKey(msg tea.KeyPressMsg) tea.Cmd {
+	if cmd, ok := m.handleTabKey(msg.String()); ok {
+		return cmd
+	}
 	switch msg.String() {
 	case "q":
 		m.quitting = true
@@ -369,6 +440,9 @@ func (m *Model) setMode(mode Mode) {
 	m.resetPalette()
 	if mode == ModeNormal {
 		m.cursor = m.open
+		if keys := m.listKeys(); len(keys) > 0 && !slices.Contains(keys, m.cursor) {
+			m.cursor = keys[0]
+		}
 		m.input.Blur()
 		return
 	}
@@ -381,11 +455,16 @@ func (m *Model) submit() tea.Cmd {
 	raw := strings.TrimSpace(m.input.Value())
 	m.input.Reset()
 	defer m.resetPalette()
+	if m.prompt.kind != promptNone {
+		return m.answerPrompt(raw)
+	}
 	if raw == "" {
 		return nil
 	}
 	if strings.HasPrefix(raw, "/") {
-		return m.runCommand(raw)
+		cmd := m.runCommand(raw)
+		m.history.GotoBottom()
+		return cmd
 	}
 	c := m.openConv()
 	switch c.kind {
@@ -592,22 +671,19 @@ func (m *Model) addTo(key string, e entry) {
 		}
 		return
 	}
-	if trimmed || e.file != nil {
-		m.renderedWidth = 0
+	if width := m.historyWidth(); !trimmed && width > 0 && m.renderedWidth == width {
+		m.renderedLines = append(m.renderedLines, renderTail(m.st, c.entries, len(c.entries)-1, width, m.renderOpts())...)
+		m.syncHistory()
+		return
 	}
-	if m.renderedWidth > 0 {
-		if n := len(c.entries); n > 1 {
-			m.renderedLines = append(m.renderedLines, separator(c.entries[n-2], e, m.renderedWidth, m.st)...)
-		}
-		m.renderedLines = append(m.renderedLines, renderEntry(e, m.renderedWidth, m.st)...)
-	}
-	m.syncHistory()
+	m.refreshHistory()
 }
 
 // refreshHistory re-renders every entry of the open conversation, after a
 // width change, a switch of conversation or a change to an entry.
 func (m *Model) refreshHistory() {
 	m.renderedWidth = 0
+	m.stableFrom, m.stableLines = -1, nil
 	m.syncHistory()
 }
 
@@ -619,7 +695,7 @@ func (m *Model) syncHistory() {
 		return
 	}
 	if m.renderedWidth != width {
-		m.renderedLines = renderEntries(m.openConv().entries, width, m.st)
+		m.renderedLines = renderConversation(m.st, m.openConv().entries, width, m.renderOpts())
 		m.renderedWidth = width
 	}
 	atBottom := m.history.AtBottom()
@@ -695,4 +771,97 @@ func formatDelay(d time.Duration) string {
 		return fmt.Sprintf("%d ms", d.Milliseconds())
 	}
 	return d.Round(time.Second).String()
+}
+
+// animAllowed reports whether animations may run: not turned off by the
+// configuration or the ui.animations setting, and a terminal of at least
+// 60×20 cells.
+func (m *Model) animAllowed() bool {
+	return !m.cfg.NoAnimation && !m.animOff && m.width >= 60 && m.height >= 20
+}
+
+// animating reports whether frame-dependent drawing is on.
+func (m Model) animating() bool { return m.animAllowed() }
+
+// connecting reports whether a connection attempt is in progress.
+func (m Model) connecting() bool {
+	return m.conn.state == client.Connecting || m.conn.state == client.Authenticating
+}
+
+// spinner is the connecting indicator: a spinner frame while animating, a
+// static circle otherwise.
+func (m Model) spinner() string {
+	if m.animating() {
+		return spinnerFrame(m.frame)
+	}
+	return "◌"
+}
+
+// renderOpts are the frame-dependent options of conversation rendering.
+func (m *Model) renderOpts() renderOpts {
+	c := m.openConv()
+	return renderOpts{Frame: m.frame, Animate: m.animAllowed(), Now: m.cfg.Now(), Group: c.kind == convGroup}
+}
+
+// needsAnim reports whether anything animates right now: the splash, the
+// connecting spinner, an unseen request badge, a flashing key-change
+// warning, or a fading or sending message in the open conversation.
+func (m *Model) needsAnim() bool {
+	if !m.animAllowed() {
+		return false
+	}
+	return m.splash || m.connecting() || len(m.unseen) > 0 || m.frame < m.flashUntil ||
+		conversationAnimating(m.openConv().entries, m.renderOpts())
+}
+
+// startTick starts the animation loop when something animates and no tick
+// is in flight. There is never more than one tick in flight.
+func (m *Model) startTick() tea.Cmd {
+	if m.ticking || !m.needsAnim() {
+		return nil
+	}
+	m.ticking = true
+	return animTick()
+}
+
+// handleTick advances the animation by one frame and schedules the next
+// one while something still animates; otherwise the loop stops.
+func (m *Model) handleTick() tea.Cmd {
+	wasAnimating := m.animAllowed() && conversationAnimating(m.openConv().entries, m.renderOpts())
+	m.frame++
+	if m.splash && m.frame >= SplashFrames {
+		m.splash = false
+	}
+	for id, at := range m.newSince {
+		if m.frame-at >= fadeFrames {
+			delete(m.newSince, id)
+		}
+	}
+	if wasAnimating {
+		m.redrawAnimated()
+	}
+	if !m.needsAnim() {
+		m.ticking = false
+		return nil
+	}
+	return animTick()
+}
+
+// redrawAnimated re-renders only the entries of the open conversation that
+// still change with the frame, keeping the lines of the entries before them.
+func (m *Model) redrawAnimated() {
+	width := m.historyWidth()
+	if width <= 0 || m.renderedWidth != width {
+		m.refreshHistory()
+		return
+	}
+	entries := m.openConv().entries
+	opts := m.renderOpts()
+	from := firstAnimated(entries, opts)
+	if from != m.stableFrom || m.stableLines == nil {
+		m.stableFrom = from
+		m.stableLines = renderConversation(m.st, entries[:from], width, opts)
+	}
+	m.renderedLines = append(slices.Clone(m.stableLines), renderTail(m.st, entries, from, width, opts)...)
+	m.syncHistory()
 }
