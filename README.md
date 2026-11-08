@@ -46,11 +46,19 @@ Implemented (Phase 4, v0.4.0):
 - Verified join history for new members and out-of-sync detection
 - Relay fan-out with `SendMulti`: payload stored once, partial delivery reporting
 
+Implemented (Phase 7, unreleased, interface polish):
+
+- Five themes (`dusk`, `fjord`, `ember`, `contrast`, `paper`), chosen with `/theme <name>` and stored in the encrypted local database; QR codes stay dark on light in every theme
+- Markdown in messages (`/markdown on|off`, on by default): emphasis, code, lists and block quotes only. Links are shown as text with the address in brackets and are never clickable, images as `[image: alt]`, HTML as typed. Message text is sanitised before rendering and only color escape sequences reach the terminal
+- Local history search: `/search <text>` in the open conversation, `/search all <text>` everywhere. History is encrypted at rest without a plaintext index, so search decrypts and scans at most the 2000 most recent messages of each conversation
+- `/help` overlay listing every command by topic
+- No typing indicators, by design: they would tell the relay, in real time, when and to whom you are writing, which is exactly the metadata Phase 5 works to hide
+
 Planned:
 
 - Metadata protection: sealed sender, padding to size buckets, optional Tor onion service
 - Client installer builder with embedded server configuration
-- File transfer and themes
+- File transfer
 
 ## Architecture
 
@@ -80,7 +88,7 @@ Cryptographic building blocks (established libraries only): Go standard library 
 | 4 | Groups, including key rotation (v0.4.0) | Done |
 | 5 | Metadata protection: sealed sender, padding, Tor | Planned |
 | 6 | Client installer builder with embedded server config | Planned |
-| 7 | TUI polish, files, themes | Planned |
+| 7 | TUI polish, files, themes | In progress |
 | 8 | Tests, fuzzing, documentation, release pipeline | Planned |
 
 ## Build
