@@ -88,13 +88,46 @@ func colors(hexes ...string) []color.Color {
 	return out
 }
 
-// DefaultTheme returns "neon": electric magenta, violet and cyan on near
-// black.
+// DefaultTheme returns "phosphor": amber on warm black, in the style of an
+// old CRT terminal. Accents are shades of the same amber rather than a
+// multicolour gradient; only warnings and errors leave the palette.
 func DefaultTheme() Theme {
-	return neonTheme()
+	return phosphorTheme()
 }
 
-// neonTheme is the default theme: electric accents on a near-black ground.
+// phosphorTheme is the default theme: amber phosphor on warm black.
+func phosphorTheme() Theme {
+	return Theme{
+		Name:             "phosphor",
+		Description:      "amber phosphor on warm black",
+		Background:       lipgloss.Color("#0B0906"),
+		Text:             lipgloss.Color("#FFC24D"),
+		Muted:            lipgloss.Color("#C98A1A"),
+		Faint:            lipgloss.Color("#8A5E12"),
+		Border:           lipgloss.Color("#3A2A0E"),
+		Surface:          lipgloss.Color("#14100A"),
+		Highlight:        lipgloss.Color("#2A1E08"),
+		Accent:           lipgloss.Color("#FFB000"),
+		OnAccent:         lipgloss.Color("#0B0906"),
+		Success:          lipgloss.Color("#FFE08A"),
+		Warning:          lipgloss.Color("#FF8A00"),
+		Danger:           lipgloss.Color("#FF3B2F"),
+		CodeLight:        lipgloss.Color("#FFFFFF"),
+		CodeDark:         lipgloss.Color("#000000"),
+		Gradient:         colors("#8A5E12", "#FFB000", "#FFD27A"),
+		Glow:             lipgloss.Color("#FFD27A"),
+		PanelBorder:      lipgloss.Color("#4A3510"),
+		PanelBorderFocus: lipgloss.Color("#FFB000"),
+		BubbleOwn:        lipgloss.Color("#3D2A00"),
+		BubbleOwnText:    lipgloss.Color("#FFD58A"),
+		BubblePeer:       lipgloss.Color("#1C160C"),
+		BubblePeerText:   lipgloss.Color("#F2E3C6"),
+		AvatarPalette: colors("#FFB000", "#FFD27A", "#E07B00", "#C9A227", "#FF8A5C",
+			"#E6C68A", "#D4882B", "#FFE9B0", "#B8862B", "#F2A65A"),
+	}
+}
+
+// neonTheme uses electric magenta, violet and cyan on a near-black ground.
 func neonTheme() Theme {
 	return Theme{
 		Name:             "neon",
@@ -385,7 +418,7 @@ func paperTheme() Theme {
 // Themes returns every built-in theme, the default first.
 func Themes() []Theme {
 	return []Theme{
-		DefaultTheme(), synthwaveTheme(), matrixTheme(), iceTheme(),
+		DefaultTheme(), neonTheme(), synthwaveTheme(), matrixTheme(), iceTheme(),
 		duskTheme(), fjordTheme(), emberTheme(), contrastTheme(), paperTheme(),
 	}
 }

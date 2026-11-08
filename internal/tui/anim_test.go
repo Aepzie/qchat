@@ -212,16 +212,16 @@ func TestThemesHaveRedesignFields(t *testing.T) {
 			t.Errorf("%s: complete drops fields", th.Name)
 		}
 	}
-	for _, want := range []string{"neon", "synthwave", "matrix", "ice", "dusk", "fjord", "ember", "contrast", "paper"} {
+	for _, want := range []string{"phosphor", "neon", "synthwave", "matrix", "ice", "dusk", "fjord", "ember", "contrast", "paper"} {
 		if !names[want] {
 			t.Errorf("theme %s missing", want)
 		}
 	}
-	if DefaultTheme().Name != "neon" {
+	if DefaultTheme().Name != "phosphor" {
 		t.Errorf("default theme %q", DefaultTheme().Name)
 	}
 	zero := Theme{}.complete()
-	if zero.Name != "neon" || len(zero.Gradient) < 3 {
+	if zero.Name != "phosphor" || len(zero.Gradient) < 3 {
 		t.Errorf("zero theme completes to %q with %d stops", zero.Name, len(zero.Gradient))
 	}
 	partial := Theme{Name: "custom", Accent: lipgloss.Color("#FF0000")}.complete()
