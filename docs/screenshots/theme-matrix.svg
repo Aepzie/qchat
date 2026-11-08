@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="932" height="606" viewBox="0 0 932 606" role="img" aria-label="qchat · /theme matrix">
+<title>qchat · /theme matrix</title>
+<rect width="932" height="606" rx="10" fill="#020a04"/>
+<path d="M0 10 A10 10 0 0 1 10 0 H922 A10 10 0 0 1 932 10 V34 H0 Z" fill="#1b1b1f"/>
+<path d="M0 33.5 H932" stroke="#000000" stroke-opacity="0.6"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/>
+<circle cx="40" cy="17" r="6" fill="#febc2e"/>
+<circle cx="60" cy="17" r="6" fill="#28c840"/>
+<text x="466" y="21.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#a8a8b0">qchat · /theme matrix</text>
+<rect x="0.5" y="0.5" width="931" height="605" rx="9.5" fill="none" stroke="#ffffff" stroke-opacity="0.12"/>
+<g shape-rendering="crispEdges">
+<rect x="16" y="50" width="27" height="18" fill="#06170b"/>
+<rect x="97" y="50" width="819" height="18" fill="#06170b"/>
+<rect x="25" y="104" width="9" height="18" fill="#0d2c15"/>
+<rect x="70" y="104" width="189" height="18" fill="#0d2c15"/>
+<rect x="331" y="158" width="360" height="18" fill="#0b2613"/>
+<rect x="502" y="428" width="324" height="18" fill="#0f4d22"/>
+<rect x="826" y="428" width="54" height="18" fill="#0d2c15"/>
+<rect x="880" y="428" width="9" height="18" fill="#0f4d22"/>
+<rect x="502" y="446" width="387" height="18" fill="#0f4d22"/>
+<rect x="313" y="518" width="9" height="18" fill="#00ff41"/>
+<rect x="16" y="572" width="72" height="18" fill="#00ff41"/>
+<rect x="88" y="572" width="828" height="18" fill="#06170b"/>
+<path fill="#00b32c" d="M340 284h9v18h-9z"/>
+<path fill="#00b92e" d="M349 284h9v18h-9z"/>
+<path fill="#00be2f" d="M358 284h9v18h-9z"/>
+<path fill="#00c431" d="M367 284h9v18h-9z"/>
+<path fill="#00ca32" d="M376 284h9v18h-9z"/>
+<path fill="#00cf34" d="M385 284h9v18h-9z"/>
+<path fill="#00d535" d="M394 284h9v18h-9z"/>
+<path fill="#00da37" d="M403 284h9v18h-9z"/>
+<path fill="#00e038" d="M412 284h9v18h-9z"/>
+<path fill="#00e63a" d="M421 284h9v18h-9z"/>
+<path fill="#00eb3c" d="M430 284h9v18h-9z"/>
+<path fill="#00f13d" d="M439 284h9v18h-9z"/>
+<path fill="#00f73f" d="M448 284h9v18h-9z"/>
+<path fill="#00fc40" d="M457 284h9v18h-9z"/>
+<path fill="#00ff41" d="M25 104h4.5v18h-4.5z"/>
+<path fill="#06ff45" d="M466 284h9v18h-9z"/>
+<path fill="#12ff4e" d="M475 284h9v18h-9z"/>
+<path fill="#1fff57" d="M484 284h9v18h-9z"/>
+<path fill="#2bff60" d="M493 284h9v18h-9z"/>
+<path fill="#34924b" fill-opacity="0.25" d="M592 284h90v18h-90z"/>
+<path fill="#37ff69" d="M502 284h9v18h-9z"/>
+<path fill="#44ff71" d="M511 284h9v18h-9z"/>
+<path fill="#50ff7a" d="M520 284h9v18h-9z"/>
+<path fill="#5cff83" d="M529 284h9v18h-9z"/>
+<path fill="#69ff8c" d="M538 284h9v18h-9z"/>
+<path fill="#75ff95" d="M547 284h9v18h-9z"/>
+<path fill="#81ff9e" d="M556 284h9v18h-9z"/>
+<path fill="#8dffa6" d="M565 284h9v18h-9z"/>
+<path fill="#9affaf" fill-opacity="0.75" d="M574 284h9v18h-9z"/>
+<path fill="#a6ffb8" fill-opacity="0.5" d="M583 284h9v18h-9z"/>
+</g>
+<path fill="none" stroke="#00b32c" stroke-width="2" d="M106 77H115"/>
+<path fill="none" stroke="#00c130" stroke-width="2" d="M115 77H124"/>
+<path fill="none" stroke="#00cf34" stroke-width="2" d="M124 77H133"/>
+<path fill="none" stroke="#00dc37" stroke-width="2" d="M133 77H142"/>
+<path fill="none" stroke="#00ea3b" stroke-width="2" d="M142 77H151"/>
+<path fill="none" stroke="#00f83f" stroke-width="2" d="M151 77H160"/>
+<path fill="none" stroke="#00ff41" stroke-width="1" d="M277 95.5H286M358 95.5H907M272.5 104V554M911.5 104V554M286 509.5H295M439 509.5H898M281.5 518V536M902.5 518V536M286 545.5H898M277 563.5H907"/>
+<path fill="none" stroke="#0b2613" stroke-width="1" d="M331 149.5H691M326.5 158V176M695.5 158V176M331 185.5H691"/>
+<path fill="none" stroke="#0f4d22" stroke-width="1" d="M502 419.5H889M497.5 428V464M893.5 428V464M502 473.5H889"/>
+<path fill="none" stroke="#0fff4c" stroke-width="2" d="M160 77H169"/>
+<path fill="none" stroke="#123d1d" stroke-width="1" d="M331 239.5H736M326.5 248V302M740.5 248V302M331 311.5H736"/>
+<path fill="none" stroke="#1a5a2a" stroke-width="1" d="M16 77.5H106M214 77.5H916M25 95.5H34M97 95.5H259M20.5 104V554M263.5 104V554M25 563.5H259"/>
+<path fill="none" stroke="#2dff61" stroke-width="2" d="M169 77H178"/>
+<path fill="none" stroke="#4bff77" stroke-width="2" d="M178 77H187"/>
+<path fill="none" stroke="#6aff8d" stroke-width="2" d="M187 77H196"/>
+<path fill="none" stroke="#88ffa2" stroke-width="2" d="M196 77H205"/>
+<path fill="none" stroke="#a6ffb8" stroke-width="2" d="M205 77H214"/>
+<path fill="none" stroke="#00ff41" stroke-width="1" d="M277 95.5H277A4.5 4.5 0 0 0 272.5 100V104M907 95.5H907A4.5 4.5 0 0 1 911.5 100V104M286 509.5H286A4.5 4.5 0 0 0 281.5 514V518M898 509.5H898A4.5 4.5 0 0 1 902.5 514V518M286 545.5H286A4.5 4.5 0 0 1 281.5 541V536M898 545.5H898A4.5 4.5 0 0 0 902.5 541V536M277 563.5H277A4.5 4.5 0 0 1 272.5 559V554M907 563.5H907A4.5 4.5 0 0 0 911.5 559V554"/>
+<path fill="none" stroke="#0b2613" stroke-width="1" d="M331 149.5H331A4.5 4.5 0 0 0 326.5 154V158M691 149.5H691A4.5 4.5 0 0 1 695.5 154V158M331 185.5H331A4.5 4.5 0 0 1 326.5 181V176M691 185.5H691A4.5 4.5 0 0 0 695.5 181V176"/>
+<path fill="none" stroke="#0f4d22" stroke-width="1" d="M502 419.5H502A4.5 4.5 0 0 0 497.5 424V428M889 419.5H889A4.5 4.5 0 0 1 893.5 424V428M502 473.5H502A4.5 4.5 0 0 1 497.5 469V464M889 473.5H889A4.5 4.5 0 0 0 893.5 469V464"/>
+<path fill="none" stroke="#123d1d" stroke-width="1" d="M331 239.5H331A4.5 4.5 0 0 0 326.5 244V248M736 239.5H736A4.5 4.5 0 0 1 740.5 244V248M331 311.5H331A4.5 4.5 0 0 1 326.5 307V302M736 311.5H736A4.5 4.5 0 0 0 740.5 307V302"/>
+<path fill="none" stroke="#1a5a2a" stroke-width="1" d="M25 95.5H25A4.5 4.5 0 0 0 20.5 100V104M259 95.5H259A4.5 4.5 0 0 1 263.5 100V104M25 563.5H25A4.5 4.5 0 0 1 20.5 559V554M259 563.5H259A4.5 4.5 0 0 0 263.5 559V554"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#b8ffc4" xml:space="preserve" style="white-space:pre">
+<text y="63.5"><tspan x="25" fill="#00b32c" font-weight="bold">⚡</tspan><tspan x="52" fill="#00e63a">q</tspan><tspan x="61" fill="#00ff41">c</tspan><tspan x="70" fill="#37ff69">h</tspan><tspan x="79" fill="#6fff90">a</tspan><tspan x="88" fill="#a6ffb8">t</tspan><tspan x="115" textLength="90" fill="#00ff41" font-weight="bold">1 Chats ●5</tspan><tspan x="223" textLength="90" fill="#5fcf78">2 Requests</tspan><tspan x="322" textLength="18" fill="#00ff41" font-weight="bold">✦2</tspan><tspan x="358" textLength="72" fill="#5fcf78">3 Groups</tspan><tspan x="439" textLength="18" fill="#00ff41" font-weight="bold">●3</tspan><tspan x="475" textLength="90" fill="#5fcf78">4 Contacts</tspan><tspan x="574" textLength="18" fill="#ff5050" font-weight="bold">⚠1</tspan><tspan x="610" textLength="63" fill="#5fcf78">5 Files</tspan><tspan x="682" textLength="18" fill="#00ff41" font-weight="bold">⇄1</tspan><tspan x="718" textLength="72" fill="#5fcf78">6 System</tspan><tspan x="808" fill="#7cff7c">●</tspan><tspan x="826" textLength="81">connected</tspan></text>
+<text y="99.5"><tspan x="43" textLength="45" fill="#00ff41" font-weight="bold">CHATS</tspan><tspan x="295" fill="#00b32c" font-weight="bold">◆</tspan><tspan x="313" fill="#00f03d">C</tspan><tspan x="322" fill="#21ff59">H</tspan><tspan x="331" fill="#64ff88">A</tspan><tspan x="340" fill="#a6ffb8">T</tspan></text>
+<text y="117.5"><tspan x="34" textLength="27" fill="#4dffb8" font-weight="bold">(M)</tspan><tspan x="79" textLength="36" font-weight="bold">Mara</tspan><tspan x="250" fill="#7cff7c" font-weight="bold">✓</tspan><tspan x="286" textLength="27" fill="#4dffb8" font-weight="bold">(M)</tspan><tspan x="322" textLength="36" font-weight="bold">Mara</tspan><tspan x="376" textLength="162" fill="#34924b">qc1-7erg-lqsx-nzsg</tspan><tspan x="556" textLength="90" fill="#7cff7c">✓ verified</tspan></text>
+<text y="135.5"><tspan x="43" textLength="27" fill="#39d98a" font-weight="bold">(J)</tspan><tspan x="79" textLength="45" fill="#5fcf78">Jonas</tspan><tspan x="241" fill="#00ff41" font-weight="bold">2</tspan><tspan x="286" textLength="306" fill="#00ff41" font-weight="bold">✦ 2 new message requests — press 2</tspan></text>
+<text y="153.5"><tspan x="43" textLength="27" fill="#39d98a" font-weight="bold">(L)</tspan><tspan x="79" textLength="36" fill="#5fcf78">Lena</tspan><tspan x="124" fill="#ff5050">⚠</tspan></text>
+<text y="171.5"><tspan x="43" textLength="27" fill="#e6ff4d" font-weight="bold">(T)</tspan><tspan x="79" textLength="36" fill="#5fcf78">Theo</tspan><tspan x="124" fill="#7cff7c">✓</tspan><tspan x="286" textLength="27" fill="#d4ff8a" font-weight="bold">(M)</tspan><tspan x="340" textLength="270">Perfect. Here's the poster for</tspan><tspan x="619" textLength="54" font-weight="bold">Friday</tspan><tspan x="673">:</tspan></text>
+<text y="189.5"><tspan x="43" fill="#00ff41">#</tspan><tspan x="61" textLength="126" fill="#5fcf78">Team Nordlicht</tspan><tspan x="241" fill="#00ff41" font-weight="bold">3</tspan></text>
+<text y="207.5"><tspan x="43" fill="#00ff41">#</tspan><tspan x="61" textLength="153" fill="#5fcf78">Bouldering Sunday</tspan><tspan x="223" fill="#e6ff4d">?</tspan><tspan x="331" textLength="45" fill="#34924b">14:02</tspan></text>
+<text y="261.5"><tspan x="286" textLength="27" fill="#d4ff8a" font-weight="bold">(M)</tspan><tspan x="340" font-weight="bold">📄</tspan><tspan x="367" textLength="234" font-weight="bold">nordlicht-poster-final.pdf</tspan></text>
+<text y="279.5"><tspan x="340" textLength="306" fill="#5fcf78">file 1 · 2.4 MiB · receiving 37/52</tspan></text>
+<text y="297.5"><tspan x="700" textLength="27" fill="#5fcf78">71%</tspan></text>
+<text y="333.5"><tspan x="331" textLength="45" fill="#34924b">14:23</tspan></text>
+<text y="369.5"><tspan x="286" fill="#34924b">•</tspan><tspan x="304" textLength="585" fill="#5fcf78">Mara set disappearing messages to 1 day. New messages are deleted</tspan></text>
+<text y="387.5"><tspan x="304" textLength="378" fill="#5fcf78">that long after they are sent or received.</tspan></text>
+<text y="441.5"><tspan x="511" textLength="45">Looks</tspan><tspan x="565" textLength="45" font-weight="bold">great</tspan><tspan x="610" textLength="207">! Printing 40 copies on</tspan><tspan x="826" textLength="54" fill="#00ff41">Friday</tspan></text>
+<text y="459.5"><tspan x="511">🎉</tspan></text>
+<text y="495.5"><tspan x="763" textLength="45" fill="#34924b">14:32</tspan><tspan x="817" textLength="72" fill="#00ff41">✓ sealed</tspan></text>
+<text y="513.5"><tspan x="304" fill="#00ff41">✎</tspan><tspan x="322" textLength="108">message Mara</tspan></text>
+<text y="531.5"><tspan x="295" fill="#00ff41" font-weight="bold">›</tspan><tspan x="313" fill="#001a08">M</tspan><tspan x="322" textLength="171" fill="#34924b">essage Mara · /help</tspan></text>
+<text y="585.5"><tspan x="25" textLength="54" fill="#001a08" font-weight="bold">INSERT</tspan><tspan x="106" textLength="801" fill="#34924b">enter send · esc normal · alt+1-6 tabs · ctrl+n/p switch · tab comp… end-to-end encrypted</tspan></text>
+</g>
+</svg>

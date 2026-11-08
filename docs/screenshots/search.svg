@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="932" height="606" viewBox="0 0 932 606" role="img" aria-label="qchat · /search">
+<title>qchat · /search</title>
+<rect width="932" height="606" rx="10" fill="#0b0906"/>
+<path d="M0 10 A10 10 0 0 1 10 0 H922 A10 10 0 0 1 932 10 V34 H0 Z" fill="#1b1b1f"/>
+<path d="M0 33.5 H932" stroke="#000000" stroke-opacity="0.6"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/>
+<circle cx="40" cy="17" r="6" fill="#febc2e"/>
+<circle cx="60" cy="17" r="6" fill="#28c840"/>
+<text x="466" y="21.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#a8a8b0">qchat · /search</text>
+<rect x="0.5" y="0.5" width="931" height="605" rx="9.5" fill="none" stroke="#ffffff" stroke-opacity="0.12"/>
+<g shape-rendering="crispEdges">
+<rect x="16" y="50" width="27" height="18" fill="#14100a"/>
+<rect x="97" y="50" width="819" height="18" fill="#14100a"/>
+<rect x="52" y="158" width="54" height="18" fill="#ffb000"/>
+<rect x="142" y="212" width="54" height="18" fill="#ffb000"/>
+<rect x="232" y="266" width="54" height="18" fill="#ffb000"/>
+<rect x="331" y="320" width="54" height="18" fill="#ffb000"/>
+<rect x="16" y="572" width="72" height="18" fill="#ffb000"/>
+<rect x="88" y="572" width="828" height="18" fill="#14100a"/>
+<path fill="#ffb000" d="M34 140h4.5v18h-4.5zM34 158h4.5v18h-4.5z"/>
+</g>
+<path fill="none" stroke="#4a3510" stroke-width="1" d="M16 77.5H106M214 77.5H916"/>
+<path fill="none" stroke="#8a5e12" stroke-width="2" d="M106 77H115"/>
+<path fill="none" stroke="#9f6d0f" stroke-width="2" d="M115 77H124"/>
+<path fill="none" stroke="#b57c0b" stroke-width="2" d="M124 77H133"/>
+<path fill="none" stroke="#ca8b08" stroke-width="2" d="M133 77H142"/>
+<path fill="none" stroke="#df9a05" stroke-width="2" d="M142 77H151"/>
+<path fill="none" stroke="#f4a902" stroke-width="2" d="M151 77H160"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M25 95.5H907M20.5 104V554M911.5 104V554M25 563.5H907"/>
+<path fill="none" stroke="#ffb30b" stroke-width="2" d="M160 77H169"/>
+<path fill="none" stroke="#ffb921" stroke-width="2" d="M169 77H178"/>
+<path fill="none" stroke="#ffbf37" stroke-width="2" d="M178 77H187"/>
+<path fill="none" stroke="#ffc64e" stroke-width="2" d="M187 77H196"/>
+<path fill="none" stroke="#ffcc64" stroke-width="2" d="M196 77H205"/>
+<path fill="none" stroke="#ffd27a" stroke-width="2" d="M205 77H214"/>
+<path fill="none" stroke="#ffb000" stroke-width="1" d="M25 95.5H25A4.5 4.5 0 0 0 20.5 100V104M907 95.5H907A4.5 4.5 0 0 1 911.5 100V104M25 563.5H25A4.5 4.5 0 0 1 20.5 559V554M907 563.5H907A4.5 4.5 0 0 0 911.5 559V554"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#ffc24d" xml:space="preserve" style="white-space:pre">
+<text y="63.5"><tspan x="25" fill="#8a5e12" font-weight="bold">⚡</tspan><tspan x="52" fill="#d89506">q</tspan><tspan x="61" fill="#ffb000">c</tspan><tspan x="70" fill="#ffbb29">h</tspan><tspan x="79" fill="#ffc751">a</tspan><tspan x="88" fill="#ffd27a">t</tspan><tspan x="115" textLength="63" fill="#ffd27a" font-weight="bold">1 Chats</tspan><tspan x="187" textLength="18" fill="#ffb000" font-weight="bold">●5</tspan><tspan x="223" textLength="90" fill="#c98a1a">2 Requests</tspan><tspan x="322" textLength="18" fill="#ffd27a" font-weight="bold">✦1</tspan><tspan x="358" textLength="72" fill="#c98a1a">3 Groups</tspan><tspan x="439" textLength="18" fill="#ffb000" font-weight="bold">●3</tspan><tspan x="475" textLength="90" fill="#c98a1a">4 Contacts</tspan><tspan x="574" textLength="18" fill="#ff3b2f" font-weight="bold">⚠1</tspan><tspan x="610" textLength="63" fill="#c98a1a">5 Files</tspan><tspan x="682" textLength="18" fill="#ffb000" font-weight="bold">⇄1</tspan><tspan x="718" textLength="72" fill="#c98a1a">6 System</tspan><tspan x="808" fill="#ffe08a">●</tspan><tspan x="826" textLength="81">connected</tspan></text>
+<text y="117.5"><tspan x="34" textLength="135" font-weight="bold">Search “poster”</tspan><tspan x="178" textLength="288" fill="#8a5e12">in all conversations  4 messages</tspan></text>
+<text y="153.5"><tspan x="52" textLength="144" fill="#ffb000" font-weight="bold"># Team Nordlicht</tspan><tspan x="214" textLength="144" fill="#8a5e12">7 Nov 2026 14:28</tspan><tspan x="376" textLength="36" fill="#c98a1a">Mara</tspan></text>
+<text y="171.5"><tspan x="52" textLength="54" fill="#0b0906">Poster</tspan><tspan x="115" textLength="450" fill="#c98a1a">draft is in our chat with Robin, comments welcome.</tspan></text>
+<text y="207.5"><tspan x="52" textLength="36" font-weight="bold">Mara</tspan><tspan x="106" textLength="144" fill="#8a5e12">7 Nov 2026 14:23</tspan></text>
+<text y="225.5"><tspan x="52" textLength="90" fill="#c98a1a">nordlicht-</tspan><tspan x="142" textLength="54" fill="#0b0906">poster</tspan><tspan x="196" textLength="90" fill="#c98a1a">-final.pdf</tspan></text>
+<text y="261.5"><tspan x="52" textLength="36" font-weight="bold">Mara</tspan><tspan x="106" textLength="144" fill="#8a5e12">7 Nov 2026 14:02</tspan></text>
+<text y="279.5"><tspan x="52" textLength="171" fill="#c98a1a">Perfect. Here's the</tspan><tspan x="232" textLength="54" fill="#0b0906">poster</tspan><tspan x="295" textLength="135" fill="#c98a1a">for **Friday**:</tspan></text>
+<text y="315.5"><tspan x="52" textLength="144" font-weight="bold"># Team Nordlicht</tspan><tspan x="214" textLength="144" fill="#8a5e12">7 Nov 2026 13:42</tspan><tspan x="376" textLength="27" fill="#c98a1a">you</tspan></text>
+<text y="333.5"><tspan x="52" textLength="270" fill="#c98a1a">…: 1. demo of the new relay 2.</tspan><tspan x="331" textLength="54" fill="#0b0906">poster</tspan><tspan x="394" textLength="135" fill="#c98a1a">review 3. pizza</tspan></text>
+<text y="585.5"><tspan x="25" textLength="54" fill="#0b0906" font-weight="bold">INSERT</tspan><tspan x="106" textLength="432" fill="#8a5e12">↑/↓ select · enter open conversation · esc close</tspan><tspan x="727" textLength="180" fill="#8a5e12">end-to-end encrypted</tspan></text>
+</g>
+</svg>
