@@ -61,8 +61,9 @@ compatibility).
 Limits: `e2e.MaxPaddedPlaintextSize` = `BucketFor(MaxPlaintextSize)` =
 128 KiB, `MaxCiphertextSize` = 128 KiB + 16, and `MaxEnvelopeSize` =
 `MaxInitSize` (23,181) + `MaxHeaderSize` (4,096) + `MaxCiphertextSize`
-(131,088) + 64 = 158,429 bytes, below the relay's default
-`max_message_size` of 256 KiB (262,144).
+(131,088) + 64 = 158,429 bytes. Sealed, it is padded to the 256 KiB sealed
+bucket (see "Sealed payload"), which is why the relay's default
+`max_message_size` is 264 KiB (270,336).
 
 **Group messages (`internal/senderkey`, group envelope version 5).**
 `Sender.Encrypt` pads the plaintext before sealing it with the message
@@ -97,15 +98,15 @@ envelopes.
   (1 to 5 bytes each), which only repeat values the relay can read anyway.
   The header (about 2.4 KB) still dominates the size of short messages.
   Header protection is a separate Phase 5 item.
-- Whether an Init is attached. A pairwise envelope carrying the handshake
-  Init (the initiator's messages until the first reply) is several KB
-  larger, and the Init field is visible in the unencrypted envelope
-  structure. Envelopes with an Init are therefore deliberately **not**
-  padded to a fixed size: as long as the field itself is readable, size
-  padding would add bandwidth without hiding anything. Once the envelope
-  is wrapped in an encrypted outer layer (sealed sender), that layer should
-  pad its whole content to a bucket, which then also blurs the Init
-  difference for small messages.
+- Whether an Init is attached, for identified sends. A pairwise envelope
+  carrying the handshake Init (the initiator's messages until the first
+  reply) is about 13 KB larger, and the Init field is visible in the
+  unencrypted envelope structure, so identified envelopes are deliberately
+  **not** padded to a fixed size: as long as the field itself is readable,
+  size padding would add bandwidth without hiding anything. Sealed sends
+  hide it: the sealed layer pads its whole content with a 32 KiB floor
+  (see "Sealed payload"), so a typical first message and a later one have
+  the same size.
 - Anything visible to the peers themselves; padding is only against the relay
   and network observers.
 
@@ -183,6 +184,26 @@ directly. Because all onion connections arrive from `127.0.0.1`,
 Step-by-step instructions are in
 [deploy/tor/README.md](../../deploy/tor/README.md).
 
+Every per-IP limit becomes a global limit behind an onion service, since
+all clients share `127.0.0.1`. For an onion relay:
+
+- Raise `limits.sealed_recipients_per_minute_per_ip` (default 6000) and
+  `limits.anonymous_lookups_per_hour_per_ip` (default 1200) to the total
+  the relay should accept from all clients together, for example 10 to 50
+  times the defaults for a few hundred users. Only entries and lookups
+  whose access proof the relay accepts spend these budgets; refused ones
+  spend only their own connection's refusal budget (256 at once, then 256
+  per minute), so clients without valid access keys cannot exhaust the
+  shared budget for everybody. Clients that hold a valid key still can,
+  up to the per-connection limits per connection; the defences below
+  bound how many connections they open.
+- In `torrc`, enable `HiddenServicePoWDefensesEnabled 1` (Tor 0.4.8 or
+  later) so that introduction floods cost the client proof-of-work, and
+  set `HiddenServiceMaxStreams` (for example 64, with
+  `HiddenServiceMaxStreamsCloseCircuit 1`) so that one circuit cannot open
+  an unbounded number of streams. Together they replace the per-IP
+  connection limit the relay can no longer apply.
+
 ### Security notes
 
 - TLS pinning stays mandatory over Tor. A stolen onion service key lets an
@@ -227,11 +248,15 @@ Verifier  = HMAC-SHA256(AccessKey, "qchat/v1/access-verifier")   // 32 bytes
 - `AllowUnidentified` lets anyone send sealed messages to the user without a
   valid proof. It is off by default.
 - A sender proves access with `AccessProof = Verifier` of the recipient. The
-  relay compares it in constant time with the stored verifier. The proof is
-  a bearer token: the relay, and anyone who reads its database, can use it
-  to send sealed messages to that user. That gives the relay nothing it
-  could not do anyway, since it can inject any queue row; the access key
-  itself never reaches the relay.
+  relay stores only `SHA-256(Verifier)` (serverdb schema version 5, column
+  `verifier_hash`; the migration hashed existing rows in place) and
+  compares `SHA-256(AccessProof)` with it in constant time. The proof is a
+  bearer token: the live relay sees it on every sealed send and can use it,
+  which gives it nothing it could not do anyway, since it can inject any
+  queue row. A copy of the database alone, however, no longer holds working
+  proofs. The access key itself never reaches the relay.
+- An all-zero verifier is rejected (`SetAccessKey` is malformed, and
+  `serverdb.SetAccessKey` refuses it); migration 5 deleted stored ones.
 
 ### Frames (wire version 1, new types 24 to 27)
 
@@ -244,7 +269,24 @@ C→S  SealedSendMulti{1: Entries [{1: To, 2: AccessProof}] (1..256, distinct To
                      2: Payload (at most MaxSealedMultiPayloadSize)}
 S→C  SendMultiResult{Accepted, Failed, Reasons}   (NotFound / QueueFull per entry)
 S→C  Deliver{From = 32 zero bytes, Payload, QueueID}
+C→S  KeyRequest{1: ID [32], 2: AccessProof [32]}          anonymous only
+S→C  KeyResponse{Bundle}    or Error NotFound / RateLimited
+C→S  PrekeyRequest{1: ID [32], 2: AccessProof [32]}       anonymous only
+S→C  PrekeyResponse{Bundle, SignedPrekey, OneTimePrekey}  or Error NotFound / RateLimited
 ```
+
+`AccessProof` in `KeyRequest` and `PrekeyRequest` is an optional field
+(omitted when absent, so the encoding of identified requests is
+unchanged). With it, the request is an **anonymous lookup**: it locks an
+undecided connection into anonymous mode like a sealed send, is a fatal
+BadRequest on a connection that registered or began authentication, and
+is answered only if the proof grants access to `ID` exactly as for a
+`SealedSend`; an unknown ID, a refused proof and (for prekeys) an ID
+without a signed prekey all answer NotFound. Without it the request needs
+an authenticated connection as before. A sealed sender can therefore fetch
+a contact's bundle and prekeys without the relay learning who asked, which
+the identified lookup used to reveal right before the first sealed
+message.
 
 - **Anonymous connection.** Sealed frames are accepted only on a connection
   that has completed Hello/Welcome and has never sent `Register`,
@@ -252,9 +294,10 @@ S→C  Deliver{From = 32 zero bytes, Payload, QueueID}
   into anonymous mode; from then on `Register` and `AuthBegin` close it with
   a fatal BadRequest, and a sealed frame on a connection that registered or
   started authentication is closed the same way. The relay therefore never
-  sees a sealed message and an identity on the same connection. Key,
-  prekey, `Ack`, `SetAccessKey` and the other authenticated requests keep
-  answering Unauthorized on an anonymous connection.
+  sees a sealed message and an identity on the same connection. Key and
+  prekey requests without a proof, `Ack`, `SetAccessKey` and the other
+  authenticated requests keep answering Unauthorized on an anonymous
+  connection.
 - **No oracle.** An unknown recipient, a recipient without a verifier and a
   wrong proof all answer NotFound. The relay looks the recipient up and runs
   the same constant-time comparison (against a fixed dummy verifier when
@@ -268,25 +311,67 @@ S→C  Deliver{From = 32 zero bytes, Payload, QueueID}
   the payload.
 - **Queue rows.** Schema version 4 makes `queue.sender` nullable; sealed rows
   store NULL. A sealed row is pushed after authentication exactly like an
-  identified one, with the zero `From`.
+  identified one, with the zero `From`. The stored expiry of every row,
+  sealed or identified, is `undelivered_ttl` after storage rounded up to
+  the next full hour, so a copy of the database dates a message only to
+  the hour and does not tell the two kinds apart by their expiry.
+- **Sealed queue share.** Sealed rows count toward `max_queued_messages`
+  and `max_queued_bytes` like any other, and in addition are capped per
+  recipient at `limits.max_queued_sealed_messages` (default 500) and half
+  of `max_queued_bytes`. Anyone who holds a recipient's access key (every
+  contact and group member) can send sealed junk; the cap keeps that junk
+  from filling the queue identified senders need, and QueueFull for sealed
+  sends says nothing about identified traffic.
 
 ### Sealed payload (package `internal/sealed`)
 
 ```
-SealedEnvelope = {1: Version = 1, 2: Box}
+SealedEnvelope = {1: Version = 2, 2: Box}
 Box            = sealbox.Seal(recipient KEM key,
                               info = "qchat/v1/sealed" || RecipientID,
-                              {1: SenderID [32], 2: Inner})
+                              Pad({1: SenderID [32], 2: Inner}))
+Pad            = padding scheme of internal/padding (0x80, zeros) to the
+                 smallest of 32, 64, 128, 256 KiB that holds the content
 Seal(sender identity.ID, recipient *identity.Bundle, inner) -> envelope
 Open(recipient (ID + OpenBox), envelope) -> (ClaimedSender, Inner)
-IsEnvelope(b) // prefix a2 01 01 02, distinct from e2e and group envelopes
+IsEnvelope(b) // prefix a2 01 02 02, distinct from e2e and group envelopes
 ```
+
+- **Padding.** Version 1 sealed the CBOR content unpadded, so the relay
+  saw the inner envelope's exact length: whether it carried a session Init
+  (about 13 KB for a typical bundle, at most 23,181 bytes) and the CBOR
+  widths of the ratchet header counters and of the one-time prekey ID in
+  the Init. Version 2 pads the content inside the HPKE box, with a floor
+  of 32 KiB (`sealed.MinPaddedSize`) chosen to hold Init + header + a
+  small padded body, and `Open` unpads strictly: the plaintext must be
+  exactly one of the four buckets and end in valid padding, otherwise
+  `ErrMalformed`. Version 1 envelopes are rejected with
+  `ErrUnsupportedVersion`. A sealed envelope is exactly one of four sizes:
+  32 KiB + 1,143, or 64, 128 or 256 KiB + 1,145 (`sealed.MaxOverhead` =
+  HPKE overhead 1,136 + 9 bytes of CBOR framing; the 32 KiB box has a
+  two-byte shorter length header). Every typical text message, with or
+  without Init, is the 32 KiB size.
+- **Size limits.** `sealed.MaxInnerSize` = 256 KiB - 43 = 262,101 bytes
+  and `sealed.MaxEnvelopeSize` = 256 KiB + 1,145 = 263,289 bytes, below
+  `protocol.MaxPayloadSize`. The largest pairwise envelope (158,429 bytes)
+  lands in the 256 KiB bucket, so the default `limits.max_message_size`
+  was raised from 256 KiB to 264 KiB (270,336); relays configured below
+  263,289 refuse the largest sealed messages with TooLarge.
+- **One-time prekey IDs.** The relay knows which one-time prekey it handed
+  to which lookup. The ID returned in an Init travels only inside the
+  sealed, padded box, so neither its value nor its CBOR width reaches the
+  relay; with anonymous lookups the relay also does not learn which
+  identity fetched the prekey.
+- **Cost.** Every sealed pairwise message costs at least about 33 KiB on
+  the wire and in the queue, against about 3 KiB identified. This is the
+  price of hiding the Init; it is also why sealed rows have their own
+  share of the queue byte limit.
 
 - **Pairwise:** the sender wraps each pairwise `e2e` envelope with
   `sealed.Seal` to the recipient and sends it with `SealedSend`. The HPKE
   box hides the sender ID from the relay and binds the envelope to the
   recipient ID.
-- **Groups:** group envelopes (senderkey v4) already carry the sender ID
+- **Groups:** group envelopes (senderkey v5) already carry the sender ID
   only inside the encrypted header, so the one ciphertext is sent with
   `SealedSendMulti` without an outer layer, keeping store-once fan-out. An
   outer seal per member would need one payload per member.
@@ -298,37 +383,64 @@ IsEnvelope(b) // prefix a2 01 01 02, distinct from e2e and group envelopes
   state and treats any failure as a drop that changes no state. It never
   shows or acts on the claimed ID before the inner layer has verified it.
 - Strict canonical CBOR; unknown version: `ErrUnsupportedVersion`; any
-  decryption failure: `ErrDecrypt`; the zero sender ID is rejected. The
-  outer layer adds at most `sealed.MaxOverhead` (1187) bytes.
+  decryption failure: `ErrDecrypt`; bad padding and the zero sender ID:
+  `ErrMalformed`.
 
 ### Anti-abuse
 
-- On an anonymous connection, sealed recipients (one per `SealedSend`, one
-  per entry of `SealedSendMulti`) spend tokens from a per-connection bucket
-  of `limits.sealed_recipients_per_minute` (default 3000, burst 512) and a
-  per-IP bucket of `limits.sealed_recipients_per_minute_per_ip` (default
-  6000, burst 1024; IPv6 by /64). A request waits briefly for tokens like
-  `SendMulti`; otherwise it is rejected with RateLimited and nothing is
-  stored. The per-IP buckets live in memory only, are dropped once full
-  again, are capped in number and are never logged. Behind a Tor onion
-  service every client arrives from 127.0.0.1, so operators raise the
-  per-IP limit as they do `max_connections_per_ip`.
+- On an anonymous connection, every sealed recipient (one per `SealedSend`,
+  one per entry of `SealedSendMulti`) first spends a token from a
+  per-connection bucket of `limits.sealed_recipients_per_minute` (default
+  3000, burst 512), whatever its proof.
+- The proofs are then checked, and the outcome is charged: each **granted**
+  entry spends a token from the per-IP bucket of
+  `limits.sealed_recipients_per_minute_per_ip` (default 6000, burst 1024;
+  IPv6 by /64), each **refused** entry a token from a cheap per-connection
+  refusal budget (burst 256, 256 per minute, not configurable). Before
+  this change refused entries spent the per-IP bucket too, so behind an
+  onion service, where the per-IP bucket is global, anyone could exhaust
+  sealed sending for every user with junk proofs. A request that cannot
+  get its tokens after a short wait is rejected with RateLimited and
+  nothing is stored. RateLimited after the check reveals nothing a NotFound
+  or an acceptance would not.
+- Anonymous lookups spend one token of the connection's
+  `limits.prekey_requests_per_hour` bucket, then, after the proof check,
+  either a token of the per-IP lookup bucket
+  `limits.anonymous_lookups_per_hour_per_ip` (default 1200, burst 120) if
+  granted, or a token of the same refusal budget if refused. Holders of a
+  valid access key can drain a contact's one-time prekeys anonymously,
+  bounded by these buckets; the client then falls back to the signed
+  prekey alone.
+- The per-IP buckets live in memory only, are dropped once full again, are
+  capped in number and are never logged. See "Server: onion service" for
+  onion deployments.
 - The frame rate limit, `max_message_size`, the 64 MiB fan-out cap and the
-  recipient's queue limits apply as for identified sends.
+  recipient's queue limits (including the sealed share) apply as for
+  identified sends.
 
 ### Client (`internal/client`)
 
 - `Options.Anonymous` opens connections that neither register nor
-  authenticate; `Request` then allows only `SealedSend` and
-  `SealedSendMulti`, and an authenticated session refuses them
-  (`ErrWrongSession`). Helpers: `SetAccessKey`, `SealedSend`,
-  `SealedSendMulti`.
+  authenticate; `Request` then allows only `SealedSend`, `SealedSendMulti`
+  and `KeyRequest` / `PrekeyRequest` carrying an access proof, and an
+  authenticated session refuses those (`ErrWrongSession`). Helpers:
+  `SetAccessKey`, `SealedSend`, `SealedSendMulti`,
+  `AnonKeyRequest(ctx, id, proof) ([]byte, error)` and
+  `AnonPrekeyRequest(ctx, id, proof) (protocol.PrekeyResponse, error)`;
+  the caller verifies what they return exactly as for identified lookups.
 - A Deliver on an anonymous connection is a protocol violation.
 - **Tor:** each Session must use its own circuit, or the shared circuit
   links the anonymous connection to the authenticated one. The anonymous
   session's dialer is built with a fresh isolation token
-  (`client.NewIsolationToken()` passed to `transport.SOCKS5Dialer`), kept
-  for that session's reconnects.
+  (`client.NewIsolationToken()` passed to `transport.SOCKS5Dialer`).
+- **No automatic reconnect.** A Session reuses its dialer, and so its
+  isolation token, for every reconnect, which would put the new anonymous
+  connection on the old one's circuit and link the two. An anonymous
+  Session therefore does not reconnect: when its connection fails or
+  ends, `Run` emits `StateChanged{Failed}` with an error wrapping
+  `client.ErrAnonymousSessionEnded` and returns it. The application
+  starts a new Session with a fresh token. `Options.AnonymousReconnect`
+  restores the old behaviour for callers that accept the linkage.
 
 ### What it hides and what it does not
 
@@ -339,6 +451,52 @@ IsEnvelope(b) // prefix a2 01 01 02, distinct from e2e and group envelopes
   (or over a shared circuit) the relay links the anonymous and the
   authenticated connection by address. All sealed messages sent over one
   anonymous connection are linkable to each other, so clients should
-  reconnect it from time to time. Timing correlation (a sealed message
-  arriving while the sender's authenticated connection is active, replies)
-  remains possible. Group fan-out reveals the recipient list.
+  replace it (a new Session with a new token) from time to time.
+
+#### What sealed sender does NOT hide
+
+An honest list of what the relay, or someone with its database and
+traffic, can still learn:
+
+- **Group fan-out complement.** A `SealedSendMulti` names every recipient.
+  If the sender left itself out, the one group member missing from the
+  list would be the sender. Mitigation (application rule): the sender
+  includes itself in the recipient list of its own group messages, so the
+  list is the whole membership for every sender. The membership itself
+  remains visible.
+- **Access-key redistribution bursts.** When a user rotates its access key
+  it sends the new key to all its contacts at once. That burst of messages
+  from one client, shortly after a `SetAccessKey`, outlines its contact
+  list (by recipient) even when every message is sealed.
+- **Control traffic size.** Sealed pairwise messages all share the 32 KiB
+  floor, but identified small messages and control messages are in the
+  512 B to 4 KiB buckets of the inner padding. Traffic not sent sealed
+  remains distinguishable by size; only the sealed floor makes sealed
+  control and text messages look alike.
+- **Recipient-set fingerprint per anonymous connection.** Everything sent
+  over one anonymous connection is linkable, so the set of recipients it
+  addresses (plus its lookups) is a fingerprint that often identifies the
+  sender. Replacing the anonymous Session regularly limits it; the client
+  no longer reconnects with the same token on its own.
+- **Connection timing without Tor.** Without Tor the relay sees the same
+  address on the authenticated and the anonymous connection, and even
+  with separate addresses it can correlate a sealed message with activity
+  (or a reply) on an authenticated connection by timing.
+- **Onion operator stream linking.** Over an onion service, streams that
+  share one Tor circuit arrive together; a relay operator who also runs
+  the onion service can tell which streams came over the same circuit.
+  Separate isolation tokens per Session, and a fresh token for each new
+  anonymous Session, keep the anonymous and authenticated streams on
+  different circuits; nothing hides streams that share one.
+- **First contact is identified** unless the recipient set
+  `AllowUnidentified`: before a sender has received the recipient's access
+  key it has no proof, so its first message (typically the one carrying
+  the Init) goes over the authenticated connection, naming the sender.
+- **No automatic fallback rule.** The protocol does not say when a client
+  should fall back from sealed to identified sending (for example after a
+  NotFound caused by a rotated key). Every fallback reveals the sender for
+  that message, and a relay that answers NotFound on purpose can force it;
+  the decision is left to the application and should be visible to the
+  user.
+- Payload size bucket, timing, frequency, recipient IDs and online
+  patterns, as for identified traffic.
