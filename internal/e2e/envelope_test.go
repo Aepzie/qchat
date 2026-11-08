@@ -151,7 +151,7 @@ func TestPlaintextRejectsInvalid(t *testing.T) {
 			t.Errorf("%s: NewPlaintext = %v", name, err)
 		}
 	}
-	if _, err := NewPlaintext(Kind(5), []byte("x"), testNow); !errors.Is(err, ErrInvalidMessage) {
+	if _, err := NewPlaintext(Kind(9), []byte("x"), testNow); !errors.Is(err, ErrInvalidMessage) {
 		t.Errorf("unknown kind: %v", err)
 	}
 	if _, err := MarshalPlaintext(Plaintext{Kind: KindText}); !errors.Is(err, ErrInvalidMessage) {
@@ -172,7 +172,7 @@ func TestPlaintextRejectsInvalid(t *testing.T) {
 	}
 	for name, b := range map[string][]byte{
 		"short ID":      encode(wire{1: id[:15], 2: 5, 3: 1, 4: []byte("x")}),
-		"unknown kind":  encode(wire{1: id, 2: 5, 3: 5, 4: []byte("x")}),
+		"unknown kind":  encode(wire{1: id, 2: 5, 3: 9, 4: []byte("x")}),
 		"zero kind":     encode(wire{1: id, 2: 5, 3: 0, 4: []byte("x")}),
 		"group utf8":    encode(wire{1: id, 2: 5, 3: 4, 4: []byte{0xff}}),
 		"empty body":    encode(wire{1: id, 2: 5, 3: 1, 4: []byte{}}),
@@ -232,7 +232,7 @@ func TestAccessKeyKind(t *testing.T) {
 	if err != nil || got.Kind != KindAccessKey || !bytes.Equal(got.Body, key) || got.Kind.IsText() {
 		t.Fatalf("access key round trip: %+v, %v", got, err)
 	}
-	for _, reserved := range []Kind{0, 5, 6, 7, 9, 255} {
+	for _, reserved := range []Kind{0, 9, 10, 255} {
 		if _, err := NewPlaintext(reserved, key, testNow); !errors.Is(err, ErrInvalidMessage) {
 			t.Errorf("NewPlaintext(kind %d) = %v, want ErrInvalidMessage", reserved, err)
 		}

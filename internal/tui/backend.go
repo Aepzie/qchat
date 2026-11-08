@@ -290,6 +290,9 @@ type MessageInfo struct {
 	From string
 	// Route says how an outgoing message was sent.
 	Route SendRoute
+	// File is set for a message that offers a file; Text is then the file
+	// name.
+	File *FileInfo
 }
 
 // VerificationInfo is what the user compares to verify a contact.
@@ -307,7 +310,8 @@ type VerificationInfo struct {
 // ChatEvent is pushed by the application layer on Config.ChatEvents. The
 // concrete types are IncomingMessage, MessageStatusChanged,
 // ContactKeyChanged, ContactsChanged, GroupChanged and
-// SealedSenderChanged.
+// SealedSenderChanged, and FileChanged, MessagesExpired and
+// ConversationNotice (filesapi.go).
 type ChatEvent interface {
 	chatEvent()
 }

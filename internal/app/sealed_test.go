@@ -3,13 +3,16 @@ package app
 import (
 	"bytes"
 	"context"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/craguS/qchat/internal/client"
 	"github.com/craguS/qchat/internal/crypto/vault"
 	"github.com/craguS/qchat/internal/e2e"
+	"github.com/craguS/qchat/internal/filexfer"
 	"github.com/craguS/qchat/internal/identity"
 	"github.com/craguS/qchat/internal/profile"
 	"github.com/craguS/qchat/internal/protocol"
@@ -585,5 +588,66 @@ func TestSealedSenderThroughRelay(t *testing.T) {
 	}
 	if alice.droppedCount()+bob.droppedCount() != 0 {
 		t.Fatalf("dropped %d and %d deliveries", alice.droppedCount(), bob.droppedCount())
+	}
+}
+
+func TestFilesAndTimersGoSealed(t *testing.T) {
+	r := newFakeRelay()
+	alice, bob := newSealedUser(t, r, "Alice"), newSealedUser(t, r, "Bob")
+	sealedFriends(t, alice, bob)
+	ctx := context.Background()
+
+	path, content := writeFile(t, "notes.bin", filexfer.ChunkSize+10)
+	sent := alice.sendFile(bob.cid(), path)
+	if sent.Status != tui.StatusSent || sent.Route != tui.RouteSealed || sent.File == nil {
+		t.Fatalf("file offer: status %v, route %v, file %+v (%s)", sent.Status, sent.Route, sent.File, sent.Error)
+	}
+	if err := alice.app.SetTimer(ctx, bob.cid(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rows := r.queued(bob.id)
+	if len(rows) != 4 {
+		t.Fatalf("%d rows, want an offer, 2 chunks and a timer", len(rows))
+	}
+	for i, row := range rows {
+		if row.From != protocol.SealedFrom || !sealed.IsEnvelope(row.Payload) || bytes.Contains(row.Payload, alice.id[:]) {
+			t.Fatalf("row %d is not sealed", i)
+		}
+	}
+	events := bob.deliver(r.take(bob.id))
+	if got := lastFileState(t, events); got != tui.FileComplete {
+		t.Fatalf("final state %v", got)
+	}
+	if notices := eventsOf[tui.ConversationNotice](events); len(notices) != 1 {
+		t.Fatalf("timer notices %+v", notices)
+	}
+	if d, err := bob.app.Timer(alice.cid()); err != nil || d != time.Hour {
+		t.Fatalf("bob's timer %v, %v", d, err)
+	}
+	hist, err := bob.app.History(alice.cid(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := bob.app.SaveFile(ctx, alice.cid(), hist[len(hist)-1].ID, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(saved); err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("saved content differs (%v)", err)
+	}
+	if bob.dropped() != 0 {
+		t.Fatalf("bob dropped %d deliveries", bob.dropped())
+	}
+
+	old := bob.app.ownAccessKey()
+	if err := bob.app.RemoveContact(alice.cid()); err != nil {
+		t.Fatal(err)
+	}
+	bob.app.bg.Wait()
+	if bob.app.ownAccessKey() == old {
+		t.Fatal("removing a contact did not rotate the access key")
+	}
+	if len(bob.transfers()) != 0 {
+		t.Fatal("the removed contact's file is still stored")
 	}
 }

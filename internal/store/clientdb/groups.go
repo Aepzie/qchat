@@ -44,6 +44,8 @@ type GroupMessage struct {
 	Body     string
 	Status   uint8
 	Flags    uint8
+	// Expires is when a disappearing message is deleted; zero keeps it.
+	Expires time.Time
 	// Seq is the local sequence number assigned when the message was
 	// appended. It is ignored by AppendGroupMessage and is the cursor to pass
 	// as "before" to GroupMessages for the previous page. Group and 1:1
@@ -85,6 +87,7 @@ type groupMessageRecord struct {
 	Body     string `cbor:"7,keyasint"`
 	Status   uint8  `cbor:"8,keyasint"`
 	Flags    uint8  `cbor:"9,keyasint"`
+	Expires  int64  `cbor:"10,keyasint,omitempty"`
 }
 
 func (g *Group) validate() error {
@@ -113,7 +116,7 @@ func (r *groupRecord) group() (Group, error) {
 }
 
 func (m *GroupMessage) validate() error {
-	plain := Message{Dir: m.Dir, Status: m.Status, Body: m.Body, Sent: m.Sent, Received: m.Received}
+	plain := Message{Dir: m.Dir, Status: m.Status, Body: m.Body, Sent: m.Sent, Received: m.Received, Expires: m.Expires}
 	return plain.validate()
 }
 
@@ -128,6 +131,7 @@ func (m *GroupMessage) record() groupMessageRecord {
 		Body:     m.Body,
 		Status:   m.Status,
 		Flags:    m.Flags,
+		Expires:  timeToNanos(m.Expires),
 	}
 }
 
@@ -145,6 +149,7 @@ func (r *groupMessageRecord) message(seq int64) (GroupMessage, error) {
 	m.Body = r.Body
 	m.Status = r.Status
 	m.Flags = r.Flags
+	m.Expires = nanosToTime(r.Expires)
 	m.Seq = seq
 	return m, nil
 }
@@ -674,7 +679,7 @@ func (d *DB) appendGroupMessageTx(ctx context.Context, tx *sql.Tx, m GroupMessag
 		}
 		return fmt.Errorf("clientdb: append group message: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO messages (peer, lookup, value) VALUES (?, ?, x'')`, groupLookup, lookup)
+	res, err := insertMessageRow(ctx, tx, groupLookup, lookup, m.Expires)
 	if isUniqueViolation(err) {
 		return ErrDuplicate
 	}

@@ -17,8 +17,8 @@ type Kind uint8
 // Message kinds. Kinds 1 to 3 and 8 travel over pairwise ratchet sessions
 // inside an [Envelope]; kind 4 is only ever encrypted with a group sender
 // key (package senderkey) and must be rejected when it arrives pairwise,
-// just as the pairwise kinds must be rejected inside a group envelope.
-// Kinds 5 to 7 are reserved and rejected.
+// just as the pairwise-only kinds must be rejected inside a group envelope.
+// Kinds 5 to 7 are defined in kinds.go and travel both ways.
 const (
 	// KindText is a UTF-8 text message.
 	KindText Kind = 1
@@ -40,7 +40,7 @@ const (
 
 // known reports whether k is a kind this package encodes and parses.
 func (k Kind) known() bool {
-	return (k >= KindText && k <= KindGroupText) || k == KindAccessKey
+	return k >= KindText && k <= lastKind
 }
 
 // IsText reports whether k is a kind whose body is UTF-8 text shown to the

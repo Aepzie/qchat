@@ -49,6 +49,9 @@ const (
 	// FlagClockSkew marks a message whose sender timestamp differs too much
 	// from the local clock.
 	FlagClockSkew uint8 = 1 << 0
+	// FlagFile marks the offer of a file transfer: the body is the file
+	// name and the transfer itself is a FileTransfer.
+	FlagFile uint8 = 1 << 1
 )
 
 // Contact is a known peer identity.
@@ -73,6 +76,9 @@ type Message struct {
 	Body     string
 	Status   uint8
 	Flags    uint8
+	// Expires is when a disappearing message is deleted (see
+	// DeleteExpiredMessages); zero keeps it.
+	Expires time.Time
 	// Seq is the local sequence number assigned when the message was
 	// appended. It is ignored by AppendMessage and is the cursor to pass as
 	// "before" to Messages for the previous page.
@@ -101,6 +107,7 @@ type messageRecord struct {
 	Body     string `cbor:"6,keyasint"`
 	Status   uint8  `cbor:"7,keyasint"`
 	Flags    uint8  `cbor:"8,keyasint"`
+	Expires  int64  `cbor:"9,keyasint,omitempty"`
 }
 
 // settingRecord is the encrypted form of a setting.
@@ -275,6 +282,9 @@ func (m *Message) validate() error {
 	if err := checkTime("Sent", m.Sent); err != nil {
 		return err
 	}
+	if err := checkTime("Expires", m.Expires); err != nil {
+		return err
+	}
 	return checkTime("Received", m.Received)
 }
 
@@ -288,6 +298,7 @@ func (m *Message) record() messageRecord {
 		Body:     m.Body,
 		Status:   m.Status,
 		Flags:    m.Flags,
+		Expires:  timeToNanos(m.Expires),
 	}
 }
 
@@ -304,6 +315,7 @@ func (r *messageRecord) message(seq int64) (Message, error) {
 	m.Body = r.Body
 	m.Status = r.Status
 	m.Flags = r.Flags
+	m.Expires = nanosToTime(r.Expires)
 	m.Seq = seq
 	return m, nil
 }

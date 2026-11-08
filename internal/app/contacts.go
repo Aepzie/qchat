@@ -241,6 +241,7 @@ func (a *App) RemoveContact(contactID string) error {
 	}
 	delete(a.unread, id)
 	a.revokeAccessKey()
+	a.dropConversationFiles(context.Background(), id, false)
 	return nil
 }
 

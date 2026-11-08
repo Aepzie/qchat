@@ -6,10 +6,12 @@
 //	Envelope  {1: Version=3, 2: Init (optional), 3: Header, 4: Ciphertext}
 //	Plaintext {1: MsgID (16), 2: Sent int64 (Unix ms), 3: Kind uint8, 4: Body}
 //
-// Kinds (docs/design/phase-4-groups.md, docs/design/phase-5-metadata.md):
-// 1 text, 2 group control, 3 sender key distribution and 8 sealed sender
-// access key, all carried pairwise; 4 group text, carried only inside a
-// group envelope of package senderkey. Kinds 5 to 7 are reserved.
+// Kinds (docs/design/phase-4-groups.md, docs/design/phase-5-metadata.md,
+// docs/design/phase-7-files.md): 1 text, 2 group control, 3 sender key
+// distribution and 8 sealed sender access key, all carried only pairwise;
+// 4 group text, carried only inside a group envelope of package senderkey;
+// 5 file offer, 6 file chunk and 7 disappearing message timer, carried both
+// pairwise and in group envelopes.
 //
 // Init is the signed session start of package handshake, attached by the
 // initiator until it has received a message on the session. Header and

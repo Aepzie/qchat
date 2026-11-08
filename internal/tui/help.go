@@ -19,7 +19,7 @@ var helpCommandGroups = []struct {
 	title string
 	names []string
 }{
-	{"Conversations", []string{"/search", "/clear"}},
+	{"Conversations", []string{"/search", "/send", "/file", "/save", "/timer", "/clear"}},
 	{"Contacts", []string{"/add", "/verify", "/rename", "/remove", "/whoami"}},
 	{"Appearance", []string{"/theme", "/markdown"}},
 	{"Connection", []string{"/status", "/fingerprint"}},
@@ -63,6 +63,8 @@ func helpSections() []helpSection {
 		helpSection{"Privacy", []row{
 			{"encryption", "Messages to contacts and # groups are end-to-end encrypted. The relay sees who talks to whom (for groups, every recipient), when, and sizes."},
 			{"local", "Notes in System, settings and search stay on this device. History is stored encrypted."},
+			{"files", "Files are encrypted end to end and stored encrypted here; /save writes a plain copy where you choose. The relay sees their size."},
+			{"timers", "Disappearing messages are deleted on both devices after the timer. The other side can still copy or photograph them."},
 			{"typing", "qchat sends no typing indicators or read receipts."},
 		}},
 	)

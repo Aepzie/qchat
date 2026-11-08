@@ -592,7 +592,7 @@ func (m *Model) addTo(key string, e entry) {
 		}
 		return
 	}
-	if trimmed {
+	if trimmed || e.file != nil {
 		m.renderedWidth = 0
 	}
 	if m.renderedWidth > 0 {
