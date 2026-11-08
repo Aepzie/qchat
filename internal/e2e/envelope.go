@@ -16,7 +16,8 @@ type Kind uint8
 // Message kinds. Kinds 1 to 3 travel over pairwise ratchet sessions inside
 // an [Envelope]; kind 4 is only ever encrypted with a group sender key
 // (package senderkey) and must be rejected when it arrives pairwise, just as
-// kinds 1 to 3 must be rejected inside a group envelope.
+// kinds 1 to 3 must be rejected inside a group envelope. Kinds 5 to 7 are
+// defined in kinds.go.
 const (
 	// KindText is a UTF-8 text message.
 	KindText Kind = 1
@@ -176,7 +177,7 @@ type plaintextWire struct {
 
 // checkContent enforces the kind and body rules.
 func checkContent(kind Kind, body []byte) error {
-	if kind < KindText || kind > KindGroupText {
+	if kind < KindText || kind > lastKind {
 		return fmt.Errorf("unknown kind %d", kind)
 	}
 	if len(body) == 0 || len(body) > MaxBodySize {

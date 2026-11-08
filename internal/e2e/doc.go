@@ -8,7 +8,9 @@
 //
 // Kinds (docs/design/phase-4-groups.md): 1 text, 2 group control, 3 sender
 // key distribution, all carried pairwise; 4 group text, carried only inside
-// a group envelope of package senderkey.
+// a group envelope of package senderkey. Phase 7
+// (docs/design/phase-7-files.md) adds 5 file offer, 6 file chunk and 7
+// disappearing message timer, carried both pairwise and in group envelopes.
 //
 // Init is the signed session start of package handshake, attached by the
 // initiator until it has received a message on the session. Header and

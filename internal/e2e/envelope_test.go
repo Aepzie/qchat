@@ -151,7 +151,7 @@ func TestPlaintextRejectsInvalid(t *testing.T) {
 			t.Errorf("%s: NewPlaintext = %v", name, err)
 		}
 	}
-	if _, err := NewPlaintext(Kind(5), []byte("x"), testNow); !errors.Is(err, ErrInvalidMessage) {
+	if _, err := NewPlaintext(Kind(8), []byte("x"), testNow); !errors.Is(err, ErrInvalidMessage) {
 		t.Errorf("unknown kind: %v", err)
 	}
 	if _, err := MarshalPlaintext(Plaintext{Kind: KindText}); !errors.Is(err, ErrInvalidMessage) {
@@ -172,7 +172,7 @@ func TestPlaintextRejectsInvalid(t *testing.T) {
 	}
 	for name, b := range map[string][]byte{
 		"short ID":      encode(wire{1: id[:15], 2: 5, 3: 1, 4: []byte("x")}),
-		"unknown kind":  encode(wire{1: id, 2: 5, 3: 5, 4: []byte("x")}),
+		"unknown kind":  encode(wire{1: id, 2: 5, 3: 8, 4: []byte("x")}),
 		"zero kind":     encode(wire{1: id, 2: 5, 3: 0, 4: []byte("x")}),
 		"group utf8":    encode(wire{1: id, 2: 5, 3: 4, 4: []byte{0xff}}),
 		"empty body":    encode(wire{1: id, 2: 5, 3: 1, 4: []byte{}}),
