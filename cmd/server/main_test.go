@@ -225,7 +225,7 @@ func TestVersionHelpAndUnknown(t *testing.T) {
 	}
 	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"frobnicate"}, {"build-client"}} {
 		code, stdout, stderr := runCLI(t, args...)
-		if code != 2 || stdout != "" || !strings.Contains(stderr, "Usage: qchat-server") || !strings.Contains(stderr, "Planned") {
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "Usage: qchat-server") || !strings.Contains(stderr, "build-client") {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, stdout, stderr)
 		}
 	}

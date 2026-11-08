@@ -8,6 +8,7 @@
 //	qchat-server invite create [--config FILE] [--uses N] [--ttl DURATION]
 //	qchat-server invite list [--config FILE]
 //	qchat-server invite prune [--config FILE]
+//	qchat-server build-client --config FILE [--server HOST:PORT] [--out DIR] [--targets OS/ARCH,...] [--source DIR] [--version V]
 //	qchat-server version
 //
 // "init" creates a data directory holding a fresh server identity
@@ -17,7 +18,9 @@
 // deploy/windows/README.md). "fingerprint" prints the public key
 // fingerprint that clients pin. "invite" creates, lists and prunes the
 // invite codes that registering a new identity requires when
-// registration = "invite".
+// registration = "invite". "build-client" compiles clients locked to this
+// server's address and fingerprint (see package buildcfg) from a qchat
+// source tree.
 package main
 
 import (
@@ -47,11 +50,9 @@ Commands:
   run           run the server
   fingerprint   print the server public key fingerprint that clients pin
   invite        create, list or prune invite codes for new users
+  build-client  build clients with this server's address and fingerprint embedded
   version       print the version
   help          show this help
-
-Planned (not available yet):
-  build-client  build a client with this server's address and fingerprint embedded
 
 Run "qchat-server <command> -h" for the flags of a command.
 `
@@ -77,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdFingerprint(rest, stdout, stderr)
 	case "invite":
 		err = cmdInvite(rest, stdout, stderr)
+	case "build-client":
+		err = cmdBuildClient(rest, stdout, stderr)
 	case "version":
 		err = cmdVersion(rest, stdout, stderr)
 	case "help", "-h", "-help", "--help":
