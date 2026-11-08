@@ -140,6 +140,9 @@ func cmdBuildClient(args []string, stdout, stderr io.Writer) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
+	if err := checkOutDir(out); err != nil {
+		return err
+	}
 
 	settings, err := goEnvSettings(goTool, source, os.Environ())
 	if err != nil {
@@ -150,10 +153,22 @@ func cmdBuildClient(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "Building qchat %s locked to %s\n", build.version, build.addr)
 	printFingerprint(stdout, build.pin)
 
+	// Build, hash and write SHA256SUMS in a fresh directory of mode 0700
+	// inside out, then rename the results into place. Renaming replaces an
+	// existing file or symbolic link of the same name instead of writing
+	// through it, and nobody else can change a file between hashing and
+	// publishing it.
+	staging, err := os.MkdirTemp(out, ".build-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+
+	names := make([]string, 0, len(targets)+1)
 	sums := make(map[string]string, len(targets))
 	for _, target := range targets {
 		name := clientFileName(build.version, target)
-		path := filepath.Join(out, name)
+		path := filepath.Join(staging, name)
 		cmd := exec.Command(goTool, goBuildArgs(build, path)...)
 		cmd.Dir = source
 		cmd.Env = goBuildEnv(os.Environ(), settings, target)
@@ -167,14 +182,20 @@ func cmdBuildClient(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		sums[name] = sum
-		fmt.Fprintf(stdout, "  %s\n", path)
+		names = append(names, name)
 	}
-
-	sumsPath := filepath.Join(out, checksumFileName)
-	if err := os.WriteFile(sumsPath, formatChecksums(sums), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(staging, checksumFileName), formatChecksums(sums), 0o644); err != nil {
 		return fmt.Errorf("write checksums: %w", err)
 	}
-	fmt.Fprintf(stdout, "  %s\n", sumsPath)
+	names = append(names, checksumFileName)
+
+	for _, name := range names {
+		path := filepath.Join(out, name)
+		if err := os.Rename(filepath.Join(staging, name), path); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "  %s\n", path)
+	}
 	return nil
 }
 

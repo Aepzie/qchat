@@ -46,6 +46,11 @@ qchat-server build-client --config /etc/qchat/server.toml \
 - `--targets` limits the platforms, for example `--targets windows/amd64,darwin/arm64`.
   The default is `linux`, `windows` and `darwin` on `amd64` and `arm64`.
 - `--version` goes into `qchat --version` and the file names.
+- `--out` must not be a symbolic link or junction; on Unix it must also be
+  owned by you and not writable by group or others. The binaries are built
+  and hashed in a private `.build-*` directory inside it and then renamed
+  into place, together with `SHA256SUMS`, so nobody can swap a file between
+  hashing and publishing it.
 
 The result is `qchat_<version>_<os>_<arch>[.exe]` for each platform and a
 `SHA256SUMS` file in the format of `sha256sum`. The binaries embed only the

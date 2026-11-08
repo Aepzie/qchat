@@ -367,6 +367,53 @@ func TestBuildClientNeverReadsKey(t *testing.T) {
 	}
 }
 
+func TestCheckOutDirRefusesLinksAndFiles(t *testing.T) {
+	base := t.TempDir()
+	if err := checkOutDir(base); err != nil {
+		t.Fatalf("plain directory: %v", err)
+	}
+	file := filepath.Join(base, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkOutDir(file); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("regular file: err = %v", err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(base, link); err != nil {
+		t.Skipf("cannot create symbolic link: %v", err)
+	}
+	if err := checkOutDir(link); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Errorf("symbolic link: err = %v", err)
+	}
+}
+
+// TestBuildClientRefusesSymlinkedOut checks that build-client stops before
+// building anything when --out is a symbolic link.
+func TestBuildClientRefusesSymlinkedOut(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not in PATH")
+	}
+	source, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "out")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create symbolic link: %v", err)
+	}
+	dir, _ := initDataDir(t, "--host", "chat.example.org")
+	code, _, stderr := runCLI(t, "build-client", "--config", filepath.Join(dir, configFileName),
+		"--source", source, "--out", link, "--targets", "linux/amd64")
+	if code != 1 || !strings.Contains(stderr, "symbolic link") {
+		t.Fatalf("exit %d, stderr %q; want a symbolic link error", code, stderr)
+	}
+	if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
+		t.Fatalf("link target holds %v (%v), want nothing", entries, err)
+	}
+}
+
 // TestBuildClientReproducible builds the client for the host platform from
 // this repository twice and checks that both builds are byte-identical, that
 // SHA256SUMS matches, that the binary carries the address and fingerprint
@@ -387,13 +434,36 @@ func TestBuildClientReproducible(t *testing.T) {
 	const testVersion = "v0.0.0-test"
 	name := clientFileName(testVersion, host)
 
+	decoy := filepath.Join(t.TempDir(), "decoy")
+	if err := os.WriteFile(decoy, []byte("decoy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	var binaries [][]byte
 	for range 2 {
 		out := t.TempDir()
+		linked := len(binaries) == 0 && os.Symlink(decoy, filepath.Join(out, checksumFileName)) == nil
 		code, stdout, stderr := runCLI(t, "build-client", "--config", config, "--out", out,
 			"--targets", host.String(), "--version", testVersion)
 		if code != 0 {
 			t.Fatalf("build-client exit %d:\n%s\n%s", code, stdout, stderr)
+		}
+		entries, err := os.ReadDir(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".build-") {
+				t.Errorf("staging directory %s left behind", entry.Name())
+			}
+		}
+		if linked {
+			if content, err := os.ReadFile(decoy); err != nil || string(content) != "decoy" {
+				t.Errorf("%s written through a symbolic link: %q, %v", checksumFileName, content, err)
+			}
+			if info, err := os.Lstat(filepath.Join(out, checksumFileName)); err != nil || !info.Mode().IsRegular() {
+				t.Errorf("%s is not a regular file after build-client: %v", checksumFileName, err)
+			}
 		}
 		if !strings.Contains(stdout, pin) {
 			t.Errorf("build-client did not print the fingerprint:\n%s", stdout)
