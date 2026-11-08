@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/craguS/qchat/internal/handshake"
+	"github.com/craguS/qchat/internal/padding"
 )
 
 // Kind is the content type of a message.
@@ -37,8 +38,10 @@ func (k Kind) IsText() bool { return k == KindText || k == KindGroupText }
 
 // Format parameters and limits.
 const (
-	// Version is the envelope format version.
-	Version = 2
+	// Version is the envelope format version. Version 3 differs from
+	// version 2 only in that the ciphertext seals a padded plaintext
+	// ([MarshalPaddedPlaintext]); envelopes of other versions are rejected.
+	Version = 3
 
 	// MsgIDSize is the length of a message ID.
 	MsgIDSize = 16
@@ -50,9 +53,13 @@ const (
 	// generous room for the message ID, time, kind and CBOR framing.
 	MaxPlaintextSize = MaxBodySize + 64
 
+	// MaxPaddedPlaintextSize is the padded size of a maximal encoded
+	// Plaintext: the padding bucket of MaxPlaintextSize bytes, 128 KiB.
+	MaxPaddedPlaintextSize = 128 << 10
+
 	// MaxCiphertextSize bounds Envelope.Ciphertext: an encrypted maximal
-	// Plaintext with its 16-byte authentication tag.
-	MaxCiphertextSize = MaxPlaintextSize + 16
+	// padded Plaintext with its 16-byte authentication tag.
+	MaxCiphertextSize = MaxPaddedPlaintextSize + 16
 
 	// MaxHeaderSize bounds Envelope.Header, the encoded ratchet header
 	// (ratchet public key, KEM ciphertext, target and counters). It equals
@@ -64,8 +71,8 @@ const (
 
 	// MaxEnvelopeSize is the largest relay payload [ParseEnvelope] accepts:
 	// every field at its maximum plus room for the CBOR framing. Anything
-	// larger is rejected before it is decoded. It is well below the
-	// relay's default max_message_size.
+	// larger is rejected before it is decoded. It is below the relay's
+	// default max_message_size of 256 KiB.
 	MaxEnvelopeSize = MaxInitSize + MaxHeaderSize + MaxCiphertextSize + 64
 
 	// ClockSkewTolerance is how far a sender timestamp may differ from the
@@ -131,7 +138,7 @@ func MarshalEnvelope(e Envelope) ([]byte, error) {
 }
 
 // ParseEnvelope decodes a relay payload. It accepts only the canonical
-// encoding of a version 2 envelope whose fields are within their limits,
+// encoding of a version [Version] envelope whose fields are within their limits,
 // and returns [ErrMalformed] otherwise. The returned slices do not alias b.
 func ParseEnvelope(b []byte) (Envelope, error) {
 	if len(b) > MaxEnvelopeSize {
@@ -237,6 +244,42 @@ func ParsePlaintext(b []byte) (Plaintext, error) {
 		return Plaintext{}, fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
 	return Plaintext{MsgID: [MsgIDSize]byte(w.MsgID), Sent: time.UnixMilli(w.Sent), Kind: Kind(w.Kind), Body: w.Body}, nil
+}
+
+// MarshalPaddedPlaintext returns the canonical encoding of p padded with
+// [padding.Pad] to its size bucket. This is what the ratchet encrypts: the
+// padding sits inside the AEAD, so the ciphertext length reveals only the
+// bucket. It returns [ErrInvalidMessage] for content NewPlaintext would
+// refuse. The result contains the message body; the caller should clear it
+// after encryption.
+func MarshalPaddedPlaintext(p Plaintext) ([]byte, error) {
+	b, err := MarshalPlaintext(p)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(b)
+	padded, err := padding.Pad(b)
+	if err != nil {
+		return nil, fmt.Errorf("e2e: padding plaintext: %w", err)
+	}
+	return padded, nil
+}
+
+// ParsePaddedPlaintext strips the padding of a decrypted plaintext with
+// [padding.Unpad], which accepts only a bucket-sized input ending in the
+// padding marker and zero bytes, and then decodes the rest like
+// [ParsePlaintext]. It returns [ErrMalformed] for input above
+// [MaxPaddedPlaintextSize], for invalid padding and for an invalid
+// plaintext. The returned body does not alias b.
+func ParsePaddedPlaintext(b []byte) (Plaintext, error) {
+	if len(b) > MaxPaddedPlaintextSize {
+		return Plaintext{}, fmt.Errorf("%w: padded plaintext of %d bytes exceeds %d", ErrMalformed, len(b), MaxPaddedPlaintextSize)
+	}
+	unpadded, err := padding.Unpad(b)
+	if err != nil {
+		return Plaintext{}, fmt.Errorf("%w: %w", ErrMalformed, err)
+	}
+	return ParsePlaintext(unpadded)
 }
 
 // ClockSkewed reports whether a sender's claimed send time differs from

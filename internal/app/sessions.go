@@ -467,14 +467,15 @@ func (a *App) keepShadow(peer identity.ID, sh shadowSession) {
 	a.shadows[peer] = sh
 }
 
-// decryptPlaintext decrypts and parses an envelope's ciphertext.
+// decryptPlaintext decrypts an envelope's ciphertext, strips its padding and
+// parses it. Invalid padding fails like a failed decryption.
 func decryptPlaintext(st *ratchet.State, env e2e.Envelope) (e2e.Plaintext, error) {
 	raw, err := st.Decrypt(env.Header, env.Ciphertext)
 	if err != nil {
 		return e2e.Plaintext{}, err
 	}
 	defer clear(raw)
-	return e2e.ParsePlaintext(raw)
+	return e2e.ParsePaddedPlaintext(raw)
 }
 
 // advanced returns cur with the state of st, as it must be stored after st
@@ -694,7 +695,7 @@ func (a *App) sealOutgoing(ctx context.Context, c clientdb.Contact, pt e2e.Plain
 		return nil, "", err
 	}
 	defer st.Destroy()
-	plain, err := e2e.MarshalPlaintext(pt)
+	plain, err := e2e.MarshalPaddedPlaintext(pt)
 	if err != nil {
 		return nil, "", err
 	}

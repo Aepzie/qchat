@@ -79,7 +79,7 @@ func TestParseEnvelopeRejectsMalformed(t *testing.T) {
 		"empty":            nil,
 		"not a map":        {0x80},
 		"version 1":        encode(wire{1: 1, 3: []byte("h"), 4: []byte("c")}),
-		"version 3":        encode(wire{1: 3, 3: []byte("h"), 4: []byte("c")}),
+		"version 2":        encode(wire{1: 2, 3: []byte("h"), 4: []byte("c")}),
 		"missing header":   encode(wire{1: Version, 4: []byte("c")}),
 		"missing cipher":   encode(wire{1: Version, 3: []byte("h")}),
 		"empty header":     encode(wire{1: Version, 3: []byte{}, 4: []byte("c")}),

@@ -8,6 +8,7 @@ import (
 
 	"github.com/craguS/qchat/internal/crypto/hybridsig"
 	"github.com/craguS/qchat/internal/identity"
+	"github.com/craguS/qchat/internal/padding"
 )
 
 // testEpoch and testBinding are the group state helpers encrypt claims.
@@ -118,8 +119,20 @@ func advanceSender(s *Sender, n int) {
 // forge builds an envelope for header h whose message key comes from chain
 // (the chain key at h.iteration), with the header sealed under headerKey and
 // the envelope signed by signer. A zero h.commitment is replaced by the
-// commitment to the message key; a non-zero one is used as given.
+// commitment to the message key; a non-zero one is used as given. The
+// plaintext is padded as Encrypt pads it.
 func forge(t testing.TB, h header, chain [keySize]byte, headerKey [HeaderKeySize]byte, signer *hybridsig.PrivateKey, plaintext []byte) []byte {
+	t.Helper()
+	padded, err := padding.Pad(plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return forgeSealed(t, h, chain, headerKey, signer, padded)
+}
+
+// forgeSealed is forge without padding: plaintext is encrypted exactly as
+// given.
+func forgeSealed(t testing.TB, h header, chain [keySize]byte, headerKey [HeaderKeySize]byte, signer *hybridsig.PrivateKey, plaintext []byte) []byte {
 	t.Helper()
 	mk, _ := chainStep(chain)
 	if h.commitment == ([commitmentSize]byte{}) {

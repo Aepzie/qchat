@@ -3,7 +3,7 @@
 // the envelope that travels as the opaque relay payload, and the plaintext
 // that the ratchet encrypts.
 //
-//	Envelope  {1: Version=2, 2: Init (optional), 3: Header, 4: Ciphertext}
+//	Envelope  {1: Version=3, 2: Init (optional), 3: Header, 4: Ciphertext}
 //	Plaintext {1: MsgID (16), 2: Sent int64 (Unix ms), 3: Kind uint8, 4: Body}
 //
 // Kinds (docs/design/phase-4-groups.md): 1 text, 2 group control, 3 sender
@@ -13,7 +13,9 @@
 // Init is the signed session start of package handshake, attached by the
 // initiator until it has received a message on the session. Header and
 // Ciphertext are the output of ratchet.State.Encrypt for the encoded
-// Plaintext. This package only fixes and checks the encodings; it performs
+// Plaintext padded to its size bucket with package padding
+// ([MarshalPaddedPlaintext], [ParsePaddedPlaintext]; see
+// docs/design/phase-5-metadata.md, section "Padding"). This package only fixes and checks the encodings; it performs
 // no cryptography. Session handling (which Init to accept, which ratchet
 // state decrypts a message, persistence) is the caller's job.
 //
@@ -24,15 +26,15 @@
 // encoding other than the canonical one are rejected, so every value has
 // exactly one accepted byte representation. Every field has a size bound
 // ([MaxInitSize], [MaxHeaderSize], [MaxCiphertextSize], [MaxBodySize]) and
-// input above [MaxEnvelopeSize] or [MaxPlaintextSize] is rejected before it
-// is decoded.
+// input above [MaxEnvelopeSize], [MaxPaddedPlaintextSize] or
+// [MaxPlaintextSize] is rejected before it is decoded.
 //
 // # What the formats do not protect
 //
 //   - The envelope is not encrypted: the relay sees whether an Init is
-//     attached, the ratchet header (epochs, counters, ratchet public keys)
-//     and the ciphertext size. Header encryption and padding are later
-//     phases.
+//     attached and the ratchet header (epochs, counters, ratchet public
+//     keys). The ciphertext size reveals only the padding bucket of the
+//     plaintext, not its length. Header encryption is a later phase.
 //   - Plaintext.Sent is claimed by the sender; [ClockSkewed] only flags
 //     values far from the local clock.
 //   - Plaintext.MsgID is chosen by the sender. The ratchet rejects replayed

@@ -29,15 +29,17 @@
 //	Version=2 || GroupID || Sender || Generation || Iteration ||
 //	GroupEpoch || StateBinding || Salt || Commitment
 //
-// The message is sealed with ChaCha20-Poly1305 under AD = header. The header
-// is sealed with XChaCha20-Poly1305 under the generation's header key, a
-// random 24-byte nonce and AD = "qchat/v1/group-header". The envelope is
+// The message is padded to its size bucket (package padding) and sealed
+// with ChaCha20-Poly1305 under AD = header; the receiver unpads strictly
+// after opening. The header is sealed with XChaCha20-Poly1305 under the
+// generation's header key, a random 24-byte nonce and
+// AD = "qchat/v1/group-header". The envelope is
 // signed with the generation's signing key under the context
 // "qchat/v1/group-message" over
 //
 //	Version || HeaderNonce || EncHeader || Ciphertext || header
 //
-// and encoded as {1: Version=4, 2: HeaderNonce, 3: EncHeader, 4: Ciphertext,
+// and encoded as {1: Version=5, 2: HeaderNonce, 3: EncHeader, 4: Ciphertext,
 // 5: Sig}. It is sent to all members at once.
 //
 // # Routing by trial decryption
@@ -45,8 +47,9 @@
 // The relay sees no group ID, sender ID, generation, iteration or epoch:
 // every group envelope starts with the same bytes ([IsGroupEnvelope] tells
 // only that it is a group message), and its size depends only on the
-// plaintext length. A member finds the generation an envelope belongs to by
-// trying the header keys it holds ([OpenHeader], [HeaderKeyring]); each try
+// padding bucket of the plaintext. A member finds the generation an
+// envelope belongs to by trying the header keys it holds ([OpenHeader],
+// [HeaderKeyring]); each try
 // costs one XChaCha20-Poly1305 authentication over the short header, and a
 // member holds at most a small multiple of groups x 256 header keys.
 //
@@ -113,5 +116,5 @@
 //   - Every member of a group can read every header of the generations it
 //     holds. The relay still sees the sender of each envelope (it relays it
 //     on an authenticated connection), the recipients and the plaintext
-//     length.
+//     padding bucket.
 package senderkey
