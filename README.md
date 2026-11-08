@@ -49,7 +49,6 @@ Implemented (Phase 4, v0.4.0):
 Planned:
 
 - Metadata protection: sealed sender, padding to size buckets, optional Tor onion service
-- Client installer builder with embedded server configuration
 - File transfer and themes
 
 ## Architecture
@@ -79,7 +78,7 @@ Cryptographic building blocks (established libraries only): Go standard library 
 | 3 | Forward secrecy (ratchet), prekeys, offline delivery (v0.3.0) | Done |
 | 4 | Groups, including key rotation (v0.4.0) | Done |
 | 5 | Metadata protection: sealed sender, padding, Tor | Planned |
-| 6 | Client installer builder with embedded server config | Planned |
+| 6 | Client installer builder with embedded server config | Done (unreleased) |
 | 7 | TUI polish, files, themes | Planned |
 | 8 | Tests, fuzzing, documentation, release pipeline | Planned |
 
@@ -124,15 +123,19 @@ Messages to offline contacts are stored by the relay as ciphertext until the rec
 
 Deployment guides: [`deploy/systemd`](deploy/systemd/README.md) (Linux) and [`deploy/windows`](deploy/windows/README.md) (Windows service). A hardened systemd unit is provided in [`deploy/systemd/qchat-server.service`](deploy/systemd/qchat-server.service).
 
-## Building pinned client installers (Phase 6)
+## Building pinned client installers
 
-The `server build-client` command and the installers are not implemented yet. The client already honours a build-time lock, so an operator can produce a locked client manually:
+A server operator builds clients that carry the server address and the fingerprint of the server's public key. A pinned client connects only to that server and rejects `--server`/`--pin` values that differ from the embedded ones, so users cannot be talked into pointing it at an impostor. Run this in a qchat source tree of the version to ship, with the Go toolchain from `go.mod`:
 
 ```sh
-go build -o qchat -ldflags "-X github.com/craguS/qchat/internal/buildcfg.ServerAddr=chat.example.org:7443 -X github.com/craguS/qchat/internal/buildcfg.ServerPin=sha256:<hex>" ./cmd/client
+qchat-server build-client --config /etc/qchat/server.toml --server chat.example.org:7443 --version v0.5.0 --out ./qchat-clients
 ```
 
-A locked client refuses `--server`/`--pin` values that differ from the embedded ones.
+It writes `qchat_<version>_<os>_<arch>[.exe]` for Linux, Windows and macOS on amd64 and arm64 (narrow with `--targets windows/amd64,darwin/arm64`) and a `SHA256SUMS` file. Without `--server`, the first host name of the certificate and the listen port are used; `--source DIR` points to a source tree other than the current module. `build-client` reads only `server.toml` and the certificate, never the private key, and embeds only the address, the public fingerprint and the version. `qchat --version` on a pinned client prints `(locked to <address>)`.
+
+Builds are reproducible: `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false` and `-ldflags "-s -w -buildid= ..."` make the binaries depend only on the source tree, the Go version and the embedded values, so anyone can rebuild them and compare `SHA256SUMS`.
+
+[`packaging/README.md`](packaging/README.md) turns the binaries into installers: an Inno Setup installer for Windows ([`packaging/windows/qchat.iss`](packaging/windows/qchat.iss)), `.deb`/`.rpm` packages with nfpm, and a signed and notarized `.pkg` for macOS. It also explains Authenticode and Developer ID signing, without which SmartScreen and Gatekeeper warn users or block the client, and how to verify release checksums and cosign signatures. Tagged releases are built by GoReleaser ([`.goreleaser.yaml`](.goreleaser.yaml)), including server `.deb`/`.rpm` packages and a keyless cosign signature of the checksum file.
 
 ## Screenshots (coming)
 
