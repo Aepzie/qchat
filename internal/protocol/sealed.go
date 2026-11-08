@@ -1,6 +1,9 @@
 package protocol
 
-import "fmt"
+import (
+	"crypto/subtle"
+	"fmt"
+)
 
 // Sizes and limits of the sealed sender bodies.
 const (
@@ -28,8 +31,9 @@ var SealedFrom = [IDSize]byte{}
 // key, and answers with [AccessKeySet] or an [ErrorBody].
 type SetAccessKey struct {
 	// Verifier is HMAC-SHA256(AccessKey, "qchat/v1/access-verifier"),
-	// exactly AccessVerifierSize bytes. Sealed senders present the same
-	// value as their access proof.
+	// exactly AccessVerifierSize bytes and not all zero. Sealed senders
+	// present the same value as their access proof. The relay stores only
+	// its SHA-256 hash.
 	Verifier []byte `cbor:"1,keyasint"`
 	// AllowUnidentified lets anyone send sealed messages to the identity
 	// without a matching access proof. False is encoded by omitting the
@@ -40,7 +44,13 @@ type SetAccessKey struct {
 func (SetAccessKey) frameType() FrameType { return TypeSetAccessKey }
 
 func (s SetAccessKey) validate() error {
-	return checkFixed("access verifier", s.Verifier, AccessVerifierSize)
+	if err := checkFixed("access verifier", s.Verifier, AccessVerifierSize); err != nil {
+		return err
+	}
+	if subtle.ConstantTimeCompare(s.Verifier, make([]byte, AccessVerifierSize)) == 1 {
+		return fmt.Errorf("%w: access verifier is zero", ErrMalformed)
+	}
+	return nil
 }
 
 // AccessKeySet confirms that the verifier of a [SetAccessKey] is stored.

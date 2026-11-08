@@ -88,6 +88,7 @@ func relaySeedFrames(f *testing.F) []Frame {
 		mustFrame(f, TypeAuthProof, 3, AuthProof{Sig: []byte("signature")}),
 		mustFrame(f, TypeAuthOK, 3, AuthOK{}),
 		mustFrame(f, TypeKeyRequest, 4, KeyRequest{ID: id}),
+		mustFrame(f, TypeKeyRequest, 4, KeyRequest{ID: id, AccessProof: bytes.Repeat([]byte{0x44}, AccessVerifierSize)}),
 		mustFrame(f, TypeKeyResponse, 4, KeyResponse{Bundle: []byte("bundle")}),
 		mustFrame(f, TypeSend, 5, Send{To: id, Payload: []byte("ciphertext")}),
 		mustFrame(f, TypeSendResult, 5, SendResult{Status: SendDelivered}),
@@ -98,6 +99,7 @@ func relaySeedFrames(f *testing.F) []Frame {
 		mustFrame(f, TypePrekeyUpload, 8, PrekeyUpload{SignedPrekey: []byte("spk"), OneTimePrekeys: [][]byte{{1}, {2, 3}}}),
 		mustFrame(f, TypePrekeyStatus, 8, PrekeyStatus{OneTimeRemaining: 50, SignedPrekeyExpires: 1700000000}),
 		mustFrame(f, TypePrekeyRequest, 9, PrekeyRequest{ID: id}),
+		mustFrame(f, TypePrekeyRequest, 9, PrekeyRequest{ID: id, AccessProof: bytes.Repeat([]byte{0x44}, AccessVerifierSize)}),
 		mustFrame(f, TypePrekeyResponse, 9, PrekeyResponse{Bundle: []byte("b"), SignedPrekey: []byte("s")}),
 		mustFrame(f, TypePrekeyResponse, 9, PrekeyResponse{Bundle: []byte("b"), SignedPrekey: []byte("s"), OneTimePrekey: []byte("o")}),
 		mustFrame(f, TypeAck, 0, Ack{QueueID: 1 << 40}),
@@ -159,6 +161,9 @@ func FuzzDecodeBody(f *testing.F) {
 	f.Add(uint8(TypeSendMultiResult), mustHex(f, "a3 01 03 02 81 58 20"+strings.Repeat("11", IDSize)+" 03 82 07 0a"))
 	f.Add(uint8(TypeSendMultiResult), mustHex(f, "a1 01 01"))
 	f.Add(uint8(TypeSetAccessKey), mustHex(f, "a2 01 58 20"+strings.Repeat("44", AccessVerifierSize)+" 02 f4"))
+	f.Add(uint8(TypeSetAccessKey), mustHex(f, "a1 01 58 20"+strings.Repeat("00", AccessVerifierSize)))
+	f.Add(uint8(TypeKeyRequest), mustHex(f, "a2 01 58 20"+strings.Repeat("11", IDSize)+" 02 40"))
+	f.Add(uint8(TypePrekeyRequest), mustHex(f, "a2 01 58 20"+strings.Repeat("11", IDSize)+" 02 58 1f"+strings.Repeat("44", AccessVerifierSize-1)))
 	f.Add(uint8(TypeSealedSend), mustHex(f, "a3 01 58 20"+strings.Repeat("11", IDSize)+" 02 41 01 03 41 01"))
 	f.Add(uint8(TypeSealedSendMulti), mustHex(f, "a2 01 82 a2 01 58 20"+strings.Repeat("11", IDSize)+" 02 58 20"+strings.Repeat("44", AccessVerifierSize)+
 		" a2 01 58 20"+strings.Repeat("11", IDSize)+" 02 58 20"+strings.Repeat("44", AccessVerifierSize)+" 02 41 01"))

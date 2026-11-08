@@ -101,14 +101,39 @@ func (AuthOK) validate() error { return nil }
 
 // KeyRequest asks the relay for the identity bundle registered for ID. The
 // relay answers with a [KeyResponse] or an [ErrorBody].
+//
+// On an authenticated connection AccessProof must be absent. On an
+// anonymous connection it is required: the relay answers only if it
+// grants access to ID exactly as for a [SealedSend], and with
+// ErrCodeNotFound otherwise, so a sealed sender can fetch its contact's
+// bundle without identifying itself. A request with a proof commits an
+// undecided connection to being anonymous.
 type KeyRequest struct {
 	// ID is the identity to look up, exactly IDSize bytes.
 	ID []byte `cbor:"1,keyasint"`
+	// AccessProof is the access verifier of ID, exactly
+	// AccessVerifierSize bytes, or absent. An absent proof is encoded by
+	// omitting the field; an explicitly encoded empty byte string is not
+	// canonical and is rejected.
+	AccessProof []byte `cbor:"2,keyasint,omitempty"`
 }
 
 func (KeyRequest) frameType() FrameType { return TypeKeyRequest }
 
-func (k KeyRequest) validate() error { return checkFixed("ID", k.ID, IDSize) }
+func (k KeyRequest) validate() error {
+	if err := checkFixed("ID", k.ID, IDSize); err != nil {
+		return err
+	}
+	return checkOptionalProof(k.AccessProof)
+}
+
+// checkOptionalProof validates an access proof that may be absent.
+func checkOptionalProof(proof []byte) error {
+	if proof == nil {
+		return nil
+	}
+	return checkFixed("access proof", proof, AccessVerifierSize)
+}
 
 // KeyResponse returns the identity bundle requested by a [KeyRequest]. The
 // receiver must verify the bundle and check that its ID equals the requested

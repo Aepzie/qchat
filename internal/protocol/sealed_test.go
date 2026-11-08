@@ -31,6 +31,56 @@ func TestSealedRoundTrip(t *testing.T) {
 	roundTrip(t, TypeSealedSendMulti, 5, SealedSendMulti{Entries: sealedEntries(MaxMultiRecipients), Payload: []byte{9}})
 }
 
+func TestAnonymousLookupBodies(t *testing.T) {
+	id, proof := filled(IDSize, 1), filled(AccessVerifierSize, 0x40)
+	roundTrip(t, TypeKeyRequest, 1, KeyRequest{ID: id, AccessProof: proof})
+	roundTrip(t, TypePrekeyRequest, 2, PrekeyRequest{ID: id, AccessProof: proof})
+	if got := mustFrame(t, TypeKeyRequest, 1, KeyRequest{ID: id}).Body; !bytes.Equal(got, append([]byte{0xa1, 0x01, 0x58, 0x20}, id...)) {
+		t.Fatalf("KeyRequest without proof changed its encoding: %x", got)
+	}
+	want := append(append([]byte{0xa2, 0x01, 0x58, 0x20}, id...), append([]byte{0x02, 0x58, 0x20}, proof...)...)
+	if got := mustFrame(t, TypePrekeyRequest, 1, PrekeyRequest{ID: id, AccessProof: proof}).Body; !bytes.Equal(got, want) {
+		t.Fatalf("PrekeyRequest with proof = %x, want %x", got, want)
+	}
+	type explicit struct {
+		ID          []byte `cbor:"1,keyasint"`
+		AccessProof []byte `cbor:"2,keyasint"`
+	}
+	for name, tc := range map[string]struct {
+		typ  FrameType
+		body []byte
+	}{
+		"KeyShortProof":    {TypeKeyRequest, encodeLoose(t, KeyRequest{ID: id, AccessProof: proof[:31]})},
+		"KeyLongProof":     {TypeKeyRequest, encodeLoose(t, KeyRequest{ID: id, AccessProof: append(bytes.Clone(proof), 0)})},
+		"KeyEmptyProof":    {TypeKeyRequest, encodeLoose(t, explicit{ID: id, AccessProof: []byte{}})},
+		"PrekeyShortProof": {TypePrekeyRequest, encodeLoose(t, PrekeyRequest{ID: id, AccessProof: proof[:1]})},
+		"PrekeyEmptyProof": {TypePrekeyRequest, encodeLoose(t, explicit{ID: id, AccessProof: []byte{}})},
+	} {
+		var err error
+		if tc.typ == TypeKeyRequest {
+			_, err = DecodeBody[KeyRequest](rawFrame(tc.typ, tc.body), tc.typ)
+		} else {
+			_, err = DecodeBody[PrekeyRequest](rawFrame(tc.typ, tc.body), tc.typ)
+		}
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: %v, want ErrMalformed", name, err)
+		}
+	}
+}
+
+func TestSetAccessKeyRejectsZeroVerifier(t *testing.T) {
+	if _, err := NewFrame(TypeSetAccessKey, 1, SetAccessKey{Verifier: make([]byte, AccessVerifierSize)}); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("NewFrame with a zero verifier = %v, want ErrMalformed", err)
+	}
+	body := encodeLoose(t, SetAccessKey{Verifier: make([]byte, AccessVerifierSize)})
+	if _, err := DecodeBody[SetAccessKey](rawFrame(TypeSetAccessKey, body), TypeSetAccessKey); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("DecodeBody with a zero verifier = %v, want ErrMalformed", err)
+	}
+	almost := make([]byte, AccessVerifierSize)
+	almost[AccessVerifierSize-1] = 1
+	roundTrip(t, TypeSetAccessKey, 1, SetAccessKey{Verifier: almost})
+}
+
 // TestSealedMaxFits proves that the largest sealed requests, with the
 // largest frame ID, fit within MaxFrameSize.
 func TestSealedMaxFits(t *testing.T) {

@@ -70,14 +70,17 @@
 //	  C→S  AuthProof{Sig}            signature binding the relay, nonce and ID
 //	  S→C  AuthOK{}                  or Error Unauthorized
 //
-//	Key lookup (requires authentication)
-//	  C→S  KeyRequest{ID}
+//	Key lookup (requires authentication, or an access proof)
+//	  C→S  KeyRequest{ID, AccessProof}
+//	                                 AccessProof absent when authenticated,
+//	                                 required on an anonymous connection
 //	  S→C  KeyResponse{Bundle}       or Error NotFound
 //
-//	Prekeys (requires authentication)
+//	Prekeys (upload requires authentication)
 //	  C→S  PrekeyUpload{SignedPrekey, OneTimePrekeys}   both optional
 //	  S→C  PrekeyStatus{OneTimeRemaining, SignedPrekeyExpires}
-//	  C→S  PrekeyRequest{ID}
+//	  C→S  PrekeyRequest{ID, AccessProof}
+//	                                 AccessProof as for KeyRequest
 //	  S→C  PrekeyResponse{Bundle, SignedPrekey, OneTimePrekey}
 //	                                 or Error NotFound / RateLimited
 //
@@ -145,6 +148,15 @@
 // From is [SealedFrom]; the end-to-end payload names and authenticates the
 // sender (see package sealed). These frame types were added within wire
 // version 1 like the others above.
+//
+// A sealed sender also fetches its recipient's keys anonymously: a
+// [KeyRequest] or [PrekeyRequest] carrying an AccessProof is an anonymous
+// request, checked like a sealed send and answered NotFound when the proof
+// does not grant access, so the relay does not learn who looked up whom.
+// Such a request locks an undecided connection into anonymous mode; on a
+// connection that registered or began authentication it is a fatal
+// BadRequest. The optional field was added within wire version 1: older
+// relays reject it as an unknown field.
 //
 // # Relay model
 //
