@@ -46,6 +46,8 @@ const (
 	tablePrekeys    = "prekeys"
 	tableGroups     = "chat_groups"
 	tableSenderKeys = "sender_keys"
+	tableFiles      = "files"
+	tableTimers     = "timers"
 	// tableGroupMessages is the associated data domain of group message rows,
 	// which live in the messages table. It differs from tableMessages so
 	// that a group message row can never be opened as a 1:1 message.
@@ -106,6 +108,18 @@ var migrations = []string{
 		value  BLOB NOT NULL
 	) STRICT;
 	CREATE INDEX IF NOT EXISTS sender_keys_grp_member ON sender_keys (grp, member);`,
+	`ALTER TABLE messages ADD COLUMN expires INTEGER NOT NULL DEFAULT 0;
+	CREATE INDEX messages_expires ON messages (expires) WHERE expires > 0;
+	CREATE TABLE files (
+		lookup BLOB PRIMARY KEY,
+		msg    BLOB NOT NULL,
+		value  BLOB NOT NULL
+	) STRICT;
+	CREATE INDEX files_msg ON files (msg);
+	CREATE TABLE timers (
+		lookup BLOB PRIMARY KEY,
+		value  BLOB NOT NULL
+	) STRICT, WITHOUT ROWID;`,
 }
 
 // DB is an open client database. It is safe for concurrent use.

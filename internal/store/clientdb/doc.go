@@ -55,6 +55,12 @@
 //     the expiry of each entry in Unix seconds; when every entry uses its
 //     signed prekey's RetireAt, as recommended, the expiries only reveal how
 //     many sessions each signed prekey started;
+//   - for a disappearing message, when it expires, in whole Unix seconds
+//     (the expires column the sweeper queries), and with it roughly when
+//     it was sent or received;
+//   - the number of file transfers (each row holds an encrypted record with
+//     the file key) and of conversations with a disappearing message
+//     timer, and which file transfer rows share an offer message lookup;
 //   - the schema version.
 //
 // The file does not reveal contact IDs, display names, identity bundles,
@@ -100,8 +106,9 @@
 // gone from the files, not just unreachable: someone who later learns the
 // database key could otherwise decrypt an old copy of the row. Therefore
 // DeletePrekeySecret, PruneRetiredPrekeys, DeleteSession, a CommitReceive
-// that consumes a one-time prekey, DeleteGroup and the sender key deletions
-// (DeleteMemberSenderKey, DeleteMemberSenderKeys, DeleteGroupSenderKeys) run
+// that consumes a one-time prekey, DeleteGroup, the sender key deletions
+// (DeleteMemberSenderKey, DeleteMemberSenderKeys, DeleteGroupSenderKeys),
+// DeleteFileTransfer and a DeleteExpiredMessages that deleted something run
 // PRAGMA wal_checkpoint(TRUNCATE) after committing. It copies every WAL
 // frame into the main file, syncs it and truncates the -wal file to zero
 // bytes, which removes the old page images; the main file then holds only
