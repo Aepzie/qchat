@@ -95,9 +95,12 @@ Source: "{#SourcePath}..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt";
 
 [Icons]
 ; cmd /k keeps the window open after qchat exits, so error messages stay
-; readable.
-Name: "{autoprograms}\{#AppName}"; Filename: "{sys}\cmd.exe"; Parameters: "/k ""{app}\qchat.exe"""; WorkingDir: "{%USERPROFILE}"; IconFilename: "{app}\qchat.exe"; Comment: "Open a terminal with qchat"
-Name: "{autodesktop}\{#AppName}"; Filename: "{sys}\cmd.exe"; Parameters: "/k ""{app}\qchat.exe"""; WorkingDir: "{%USERPROFILE}"; IconFilename: "{app}\qchat.exe"; Comment: "Open a terminal with qchat"; Tasks: desktopicon
+; readable. There is deliberately no WorkingDir: a constant such as
+; {%USERPROFILE} is expanded at install time, which for an elevated install
+; is the profile of the administrator, not of the user who later opens the
+; shortcut.
+Name: "{autoprograms}\{#AppName}"; Filename: "{sys}\cmd.exe"; Parameters: "/k ""{app}\qchat.exe"""; IconFilename: "{app}\qchat.exe"; Comment: "Open a terminal with qchat"
+Name: "{autodesktop}\{#AppName}"; Filename: "{sys}\cmd.exe"; Parameters: "/k ""{app}\qchat.exe"""; IconFilename: "{app}\qchat.exe"; Comment: "Open a terminal with qchat"; Tasks: desktopicon
 
 [Run]
-Filename: "{sys}\cmd.exe"; Parameters: "/k ""{app}\qchat.exe"""; WorkingDir: "{%USERPROFILE}"; Description: "Start {#AppName} now"; Flags: postinstall nowait skipifsilent unchecked
+Filename: "{sys}\cmd.exe"; Parameters: "/k ""{app}\qchat.exe"""; Description: "Start {#AppName} now"; Flags: postinstall nowait skipifsilent unchecked
