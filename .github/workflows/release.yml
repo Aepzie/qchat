@@ -10,9 +10,33 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Every action is pinned to a full commit SHA (the version is in the
+# trailing comment), so a re-pointed tag cannot change what runs here.
+# Update a pin with: git ls-remote https://github.com/OWNER/REPO refs/tags/TAG
+# (use the "^{}" line for annotated tags).
 jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    # The tests run without write access and without an OIDC token: code
+    # executed here can neither publish a release nor obtain a signature.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test -short ./...
+
   release:
     name: goreleaser
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       # Create the GitHub release and upload its assets.
@@ -20,32 +44,44 @@ jobs:
       # Request the OIDC token that cosign exchanges for a short-lived
       # Sigstore signing certificate (keyless signing).
       id-token: write
-    # Actions and tools are pinned to exact versions. Moving them to full
-    # commit SHAs (with the version as a trailing comment) protects against
-    # a re-pointed tag; Dependabot keeps either form up to date.
+    # Only pinned actions and tools whose downloads are verified run in this
+    # job, because anything running here could request a signature.
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@v5.5.0
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
           # No build cache in the release job: a poisoned cache from another
           # workflow must not end up in a signed release.
           cache: false
 
-      - name: Test
-        run: go test -short ./...
-
-      - uses: sigstore/cosign-installer@v3.8.1
+      - uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
         with:
           cosign-release: v2.4.3
 
-      - uses: anchore/sbom-action/download-syft@v0.18.0
+      # syft (for the SBOMs) comes from a fixed release archive whose SHA-256
+      # is checked before it is unpacked, instead of an install script
+      # fetched from a branch. Take SYFT_SHA256 from the release's
+      # syft_<version>_checksums.txt when updating SYFT_VERSION.
+      - name: Install syft
+        env:
+          SYFT_VERSION: 1.56.0
+          SYFT_SHA256: 1c2493cfcf52d3367d6cb25780d9190c111c2219c34c820574c43e8bae15c528
+        run: |
+          set -euo pipefail
+          archive="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --proto '=https' -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/${archive}"
+          echo "${SYFT_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/syft"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/syft" syft
+          echo "$RUNNER_TEMP/syft" >> "$GITHUB_PATH"
 
-      - uses: goreleaser/goreleaser-action@v6.3.0
+      - uses: goreleaser/goreleaser-action@9c156ee8a17a598857849441385a2041ef570552 # v6.3.0
         with:
           distribution: goreleaser
           version: v2.8.2
