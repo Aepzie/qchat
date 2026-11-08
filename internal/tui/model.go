@@ -185,7 +185,7 @@ func (m Model) Quitting() bool { return m.quitting }
 
 // Init starts listening for events and loads the identity and contacts.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.listen(), m.listenChat(), m.loadSelf(), m.loadContacts(), m.loadGroups())
+	return tea.Batch(m.listen(), m.listenChat(), m.loadSettings(), m.loadSelf(), m.loadContacts(), m.loadGroups())
 }
 
 // listen waits for the next session event.

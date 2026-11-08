@@ -27,13 +27,27 @@ var commands = []command{
 	{"/status", "connection details"},
 	{"/fingerprint", "pinned server key"},
 	{"/group", "groups: create <name> [ids], add, remove, members…"},
+	{"/theme", "change colors: /theme <name>"},
 	{"/clear", "clear this view"},
 	{"/quit", "exit qchat"},
 }
 
+// subCommands returns the palette entries for the argument of a command,
+// such as the /group subcommands or the theme names, or nil when the
+// command's argument is free text.
+func subCommands(name string) []command {
+	switch strings.ToLower(name) {
+	case "/group":
+		return groupCommands
+	case "/theme":
+		return themeCommands()
+	}
+	return nil
+}
+
 // paletteQuery returns the command prefix being typed, or false if the input
-// is not a command in progress. "/group " followed by one partial word is a
-// query for the /group subcommands.
+// is not a command in progress. A command with subcommands followed by one
+// partial word is a query for its subcommands.
 func paletteQuery(input string) (string, bool) {
 	if !strings.HasPrefix(input, "/") || strings.ContainsAny(input, "\t\n") {
 		return "", false
@@ -42,18 +56,19 @@ func paletteQuery(input string) (string, bool) {
 	if !spaced {
 		return input, true
 	}
-	if strings.ToLower(name) != "/group" || strings.Contains(sub, " ") {
+	if subCommands(name) == nil || strings.Contains(sub, " ") {
 		return "", false
 	}
 	return input, true
 }
 
 // matchCommands returns the commands whose name starts with prefix: the
-// /group subcommands when prefix holds a space, the commands otherwise.
+// subcommands of the command when prefix holds a space, the commands
+// otherwise.
 func matchCommands(prefix string) []command {
 	list := commands
-	if strings.Contains(prefix, " ") {
-		list = groupCommands
+	if name, _, spaced := strings.Cut(prefix, " "); spaced {
+		list = subCommands(name)
 	}
 	var out []command
 	for _, c := range list {
@@ -108,6 +123,8 @@ func (m *Model) runCommand(input string) tea.Cmd {
 		return m.cmdAdd(fields[1:])
 	case "/group":
 		return m.cmdGroup(fields[1:])
+	case "/theme":
+		return m.cmdTheme(fields[1:])
 	case "/rename":
 		return m.cmdRename(rest)
 	case "/remove":

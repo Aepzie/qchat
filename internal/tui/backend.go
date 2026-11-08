@@ -63,6 +63,28 @@ type Backend interface {
 	ChangeGroup(ctx context.Context, groupID string, change GroupChange) (GroupInfo, error)
 }
 
+// Names of the interface settings kept through SettingsBackend.
+const (
+	// SettingTheme holds the name of the theme chosen with /theme.
+	SettingTheme = "ui.theme"
+	// SettingMarkdown is "on" or "off", as chosen with /markdown.
+	SettingMarkdown = "ui.markdown"
+)
+
+// SettingsBackend is implemented by a Backend that can persist interface
+// preferences, such as the theme. The interface type-asserts its Backend
+// for it; without it, preferences last until the client exits.
+//
+// Names are the Setting constants of this package. Values are short
+// strings and are validated again when they are read back.
+type SettingsBackend interface {
+	// GetSetting returns the stored value, or "" and no error when the
+	// setting was never stored.
+	GetSetting(name string) (string, error)
+	// SetSetting stores a value.
+	SetSetting(name, value string) error
+}
+
 // GroupInfo describes one group.
 type GroupInfo struct {
 	// ID is the group ID, "grp-" and 64 hex digits.

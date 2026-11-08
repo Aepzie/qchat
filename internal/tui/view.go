@@ -92,6 +92,7 @@ func (m Model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "qchat"
+	v.BackgroundColor = m.st.theme.Background
 	return v
 }
 
