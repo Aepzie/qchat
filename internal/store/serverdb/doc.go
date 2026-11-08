@@ -28,10 +28,12 @@
 //     one-time prekeys per identity. TakePrekeys deletes the one it hands
 //     out in the same transaction, so each is handed out exactly once.
 //   - queue(qid, recipient, sender, pid, size, expires): messages waiting
-//     for their recipient. The sender ID is stored in the clear because the
-//     recipient needs it to pick the session that decrypts the message;
-//     this is metadata the relay learns anyway from the authenticated
-//     connection, and hiding it (sealed sender) is left to a later phase.
+//     for their recipient. For a message sent on an authenticated
+//     connection the sender ID is stored in the clear, since the relay
+//     learns it from the connection anyway and the recipient needs it to
+//     pick the session that decrypts the message. For a sealed message
+//     (EnqueueSealed, EnqueueSealedMulti) sender is NULL: the relay does
+//     not know it, and the recipient finds it inside the payload.
 //     size is the full size of the payload, which counts toward the
 //     recipient's limits even when the payload is shared. A row is deleted
 //     when its recipient acknowledges it or when it expires (PruneQueue);
@@ -42,12 +44,18 @@
 //     queue rows referring to the payload; a trigger on queue decrements it
 //     whenever a row is deleted, by acknowledgement, expiry or a deleted
 //     identity, and deletes the payload with its last reference.
+//   - access_keys(id, verifier, allow_unidentified): per identity, the
+//     verifier of its sealed sender access key (an HMAC output, never the
+//     key itself) and whether it accepts sealed messages from anyone. A new
+//     setting replaces the old one.
 //
 // Schema version 3 moved the payloads of existing queue rows into
 // queue_payloads, one payload per row, keeping their queue IDs and the
-// queue ID sequence.
+// queue ID sequence. Schema version 4 rebuilt queue with a nullable sender
+// column, keeping every row, its queue ID and the sequence, and added
+// access_keys.
 //
-// Prekeys and queued messages reference the identity they belong to, by
+// Prekeys, queued messages and access keys reference the identity they belong to, by
 // foreign key with ON DELETE CASCADE.
 //
 // # Trust boundary

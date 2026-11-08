@@ -73,6 +73,34 @@ var migrations = []string{
 		DELETE FROM queue_payloads WHERE pid = OLD.pid AND refs = 1;
 		UPDATE queue_payloads SET refs = refs - 1 WHERE pid = OLD.pid;
 	END;`,
+	`DROP TRIGGER queue_release_payload;
+	CREATE TABLE queue_v4 (
+		qid       INTEGER PRIMARY KEY AUTOINCREMENT,
+		recipient BLOB    NOT NULL REFERENCES identities (id) ON DELETE CASCADE,
+		sender    BLOB    CHECK (sender IS NULL OR length(sender) = 32),
+		pid       INTEGER NOT NULL REFERENCES queue_payloads (pid),
+		size      INTEGER NOT NULL CHECK (size > 0),
+		expires   INTEGER NOT NULL
+	) STRICT;
+	INSERT INTO queue_v4 (qid, recipient, sender, pid, size, expires)
+		SELECT qid, recipient, sender, pid, size, expires FROM queue;
+	DELETE FROM sqlite_sequence WHERE name = 'queue_v4';
+	INSERT INTO sqlite_sequence (name, seq)
+		SELECT 'queue_v4', seq FROM sqlite_sequence WHERE name = 'queue';
+	DROP TABLE queue;
+	ALTER TABLE queue_v4 RENAME TO queue;
+	CREATE INDEX queue_recipient_qid ON queue (recipient, qid);
+	CREATE INDEX queue_expires ON queue (expires);
+	CREATE INDEX queue_pid ON queue (pid);
+	CREATE TRIGGER queue_release_payload AFTER DELETE ON queue BEGIN
+		DELETE FROM queue_payloads WHERE pid = OLD.pid AND refs = 1;
+		UPDATE queue_payloads SET refs = refs - 1 WHERE pid = OLD.pid;
+	END;
+	CREATE TABLE access_keys (
+		id                 BLOB    NOT NULL PRIMARY KEY REFERENCES identities (id) ON DELETE CASCADE,
+		verifier           BLOB    NOT NULL CHECK (length(verifier) = 32),
+		allow_unidentified INTEGER NOT NULL CHECK (allow_unidentified IN (0, 1))
+	) STRICT, WITHOUT ROWID;`,
 }
 
 // migrate applies the missing migrations in one write transaction, so
