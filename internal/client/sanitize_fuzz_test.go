@@ -5,7 +5,7 @@ import "testing"
 func FuzzSanitizeASCII(f *testing.F) {
 	f.Add("ok \x1b[31mred\x07", 0)
 	f.Add("abcdef", 3)
-	f.Add("\xff\xfe‮", 2)
+	f.Add("\xff\xfe\u202e", 2)
 	f.Add("", -1)
 	f.Fuzz(func(t *testing.T, input string, maxLen int) {
 		out := SanitizeASCII(input, maxLen)
