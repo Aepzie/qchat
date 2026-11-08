@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tui.SearchBackend`, implemented by decrypting and scanning at most the
   2000 most recent messages of each conversation.
 - `/help` opens a scrollable overlay with every command grouped by topic.
+- End-to-end encrypted file transfer to contacts and groups
+  (docs/design/phase-7-files.md): `/send <path>` (or `/file`), progress in
+  the conversation, `/save` to list and `/save <n> [dir]` to save. Files of
+  up to 64 MiB are sealed in 48 KiB chunks with XChaCha20-Poly1305 under a
+  random per-file key, sent as new message kinds 5 (offer) and 6 (chunk)
+  inside the existing sessions and sender keys, verified per chunk and by
+  SHA-256, and kept encrypted in the profile's `files` directory until
+  saved. Saving never overwrites a file; sender file names are sanitised.
+  Incomplete transfers expire after 24 hours. Files from identities that
+  are not contacts are dropped.
+- Disappearing messages per conversation with `/timer off|30s|5m|1h|1d|1w`,
+  agreed in-band with message kind 7 (the latest setting wins). A sweeper
+  deletes expired messages and their files from the database and the view.
+- Package `filexfer`; optional `tui.FileBackend` and `tui.TimerBackend`.
+- Client database schema 6: an `expires` column on messages and the `files`
+  and `timers` tables.
 
 ### Decided against
 
