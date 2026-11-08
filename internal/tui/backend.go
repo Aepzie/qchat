@@ -271,6 +271,9 @@ type MessageInfo struct {
 	// From is the sender's identity ID for an incoming group message, and
 	// empty otherwise.
 	From string
+	// File is set for a message that offers a file; Text is then the file
+	// name.
+	File *FileInfo
 }
 
 // VerificationInfo is what the user compares to verify a contact.
@@ -287,7 +290,8 @@ type VerificationInfo struct {
 
 // ChatEvent is pushed by the application layer on Config.ChatEvents. The
 // concrete types are IncomingMessage, MessageStatusChanged,
-// ContactKeyChanged, ContactsChanged and GroupChanged.
+// ContactKeyChanged, ContactsChanged and GroupChanged, and FileChanged,
+// MessagesExpired and ConversationNotice (filesapi.go).
 type ChatEvent interface {
 	chatEvent()
 }

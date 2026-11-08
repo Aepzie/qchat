@@ -100,9 +100,13 @@ func TestChunkingAndOutOfOrderReassembly(t *testing.T) {
 	if err := st.Begin(id); err != nil {
 		t.Fatal(err)
 	}
-	for _, i := range []uint32{3, 1, 1, 0} {
-		if err := st.Put(id, &o, chunkOf(t, o, i, chunks[i])); err != nil {
+	for n, i := range []uint32{3, 1, 1, 0} {
+		fresh, err := st.Put(id, &o, chunkOf(t, o, i, chunks[i]))
+		if err != nil {
 			t.Fatalf("Put(%d): %v", i, err)
+		}
+		if fresh != (n != 2) {
+			t.Errorf("Put(%d) #%d reported fresh = %v", i, n, fresh)
 		}
 	}
 	if n, err := st.Received(id, &o); err != nil || n != 3 {
@@ -111,7 +115,7 @@ func TestChunkingAndOutOfOrderReassembly(t *testing.T) {
 	if err := st.Finish(id, &o); !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("Finish with a chunk missing: %v", err)
 	}
-	if err := st.Put(id, &o, chunkOf(t, o, 2, chunks[2])); err != nil {
+	if _, err := st.Put(id, &o, chunkOf(t, o, 2, chunks[2])); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Finish(id, &o); err != nil {
@@ -158,7 +162,7 @@ func TestTamperedChunkRejected(t *testing.T) {
 		"truncated":      {FileID: o.FileID, Index: 0, Total: o.Chunks, Sealed: chunks[0][:len(chunks[0])-1]},
 	}
 	for name, c := range cases {
-		if err := st.Put(id, &o, c); !errors.Is(err, ErrAuth) {
+		if _, err := st.Put(id, &o, c); !errors.Is(err, ErrAuth) {
 			t.Errorf("%s: Put = %v, want ErrAuth", name, err)
 		}
 	}
@@ -184,7 +188,7 @@ func TestTamperedAtRestRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, sealed := range chunks {
-		if err := st.Put(id, &o, chunkOf(t, o, uint32(i), sealed)); err != nil {
+		if _, err := st.Put(id, &o, chunkOf(t, o, uint32(i), sealed)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -220,7 +224,7 @@ func TestWrongTotalHashRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, sealed := range chunks {
-		if err := st.Put(id, &o, chunkOf(t, o, uint32(i), sealed)); err != nil {
+		if _, err := st.Put(id, &o, chunkOf(t, o, uint32(i), sealed)); err != nil {
 			t.Fatal(err)
 		}
 	}

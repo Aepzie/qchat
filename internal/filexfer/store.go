@@ -119,36 +119,43 @@ func (s *Store) Begin(id LocalID) error {
 }
 
 // Put authenticates a received chunk of the file o and writes it to its
-// slot. Writing a chunk again is harmless. It returns [ErrAuth] for a chunk
-// that does not belong to o, and an error wrapping fs.ErrNotExist when the
-// transfer was never begun or has been removed.
-func (s *Store) Put(id LocalID, o *Offer, c Chunk) error {
+// slot, and reports whether the slot was empty before. Writing a chunk
+// again is harmless. It returns [ErrAuth] for a chunk that does not belong
+// to o, and an error wrapping fs.ErrNotExist when the transfer was never
+// begun or has been removed.
+func (s *Store) Put(id LocalID, o *Offer, c Chunk) (bool, error) {
 	if c.FileID != o.FileID || c.Total != o.Chunks {
-		return ErrAuth
+		return false, ErrAuth
 	}
 	plain, err := OpenChunk(o, c.Index, c.Sealed)
 	if err != nil {
-		return err
+		return false, err
 	}
 	clear(plain)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f, err := openRegular(s.partPath(id), os.O_WRONLY)
+	f, err := openRegular(s.partPath(id), os.O_RDWR)
 	if err != nil {
-		return fmt.Errorf("filexfer: %w", err)
+		return false, fmt.Errorf("filexfer: %w", err)
+	}
+	offset := int64(c.Index) * slotSize
+	marker := make([]byte, 1)
+	if _, err := f.ReadAt(marker, offset); err != nil && !errors.Is(err, io.EOF) {
+		f.Close()
+		return false, fmt.Errorf("filexfer: %w", err)
 	}
 	slot := make([]byte, 1+len(c.Sealed))
 	slot[0] = slotPresent
 	copy(slot[1:], c.Sealed)
-	if _, err := f.WriteAt(slot, int64(c.Index)*slotSize); err != nil {
+	if _, err := f.WriteAt(slot, offset); err != nil {
 		f.Close()
-		return fmt.Errorf("filexfer: %w", err)
+		return false, fmt.Errorf("filexfer: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		return fmt.Errorf("filexfer: %w", err)
+		return false, fmt.Errorf("filexfer: %w", err)
 	}
-	return f.Close()
+	return marker[0] != slotPresent, f.Close()
 }
 
 // Received returns how many chunks of the file o the transfer file holds.
